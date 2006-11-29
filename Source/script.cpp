@@ -947,6 +947,7 @@ LineNumberType Script::LoadFromFile()
 
 bool IsFunction(char *aBuf, bool *aPendingFunctionHasBrace = NULL)
 // Helper function for LoadIncludedFile().
+// Caller passes in an aBuf containing a candidate line such as "function(x, y)"
 // Caller has ensured that aBuf is rtrim'd.
 // Caller should pass NULL for aPendingFunctionHasBrace to indicate that function definitions (open-brace
 // on same line as function) are not allowed.  When non-NULL *and* aBuf is a function call/def,
@@ -986,7 +987,7 @@ bool IsFunction(char *aBuf, bool *aPendingFunctionHasBrace = NULL)
 	return *aBuf_last_char == ')'; // This last check avoids detecting a label such as "Label(x):" as a function.
 	// Also, it seems best never to allow if(...) to be a function call, even if it's blank inside such as if().
 	// In addition, it seems best not to allow if(...) to ever be a function definition since such a function
-	// could never be called as ACT_FUNCTIONCALL since it would be seen as an IF-stmt instead.
+	// could never be called as ACT_EXPRESSION since it would be seen as an IF-stmt instead.
 }
 
 
@@ -1118,7 +1119,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 	Hotkey *hk;
 	LineNumberType pending_function_line_number, saved_line_number;
 	HookActionType hook_action;
-	bool is_label, suffix_has_tilde, in_comment_section;
+	bool is_label, suffix_has_tilde, in_comment_section, hotstring_options_all_valid;
 
 	// For the remap mechanism, e.g. a::b
 	int remap_stage;
@@ -1254,63 +1255,139 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 						// and any continuation section/line that might come after the end of the
 						// comment/blank lines:
 						continue;
-					// Since above didn't break/continue, buffer is non-blank.
+					// SINCE ABOVE DIDN'T BREAK/CONTINUE, NEXT_BUF IS NON-BLANK.
+					if (next_buf[next_buf_length - 1] == ':' && *next_buf != ',')
+						// With the exception of lines starting with a comma, the last character of any
+						// legitimate continuation line can't be a colon because expressions can't end
+						// in a colon. The only exception is the ternary operator's colon, but that is
+						// very rare because it requires the line after it also be a continuation line
+						// or section, which is unusual to say the least -- so much so that it might be
+						// too obscure to even document as a known limitation.  Anyway, by excluding lines
+						// that end with a colon from consideration ambiguity with normal labels
+						// and non-single-line hotkeys and hotstrings is eliminated.
+						break;
+
 					is_continuation_line = false; // Set default.
-					switch(*next_buf)
+					switch(toupper(*next_buf)) // Above has ensured *next_buf != '\0' (toupper might have problems with '\0').
 					{
-					case ',':
-						// Since normal (single-colon) labels can't contain commas, and since hotstrings
-						// begin with a colon not a comma, only hotkeys remain as a source of ambiguity.
-						// Ensure this isn't a hotkey:
-						cp = omit_leading_whitespace(next_buf + 1);
-						is_continuation_line = (strncmp(cp, HOTKEY_FLAG, HOTKEY_FLAG_LENGTH) // Exclude ",::" (comma as hotkey).
-							&& (strncmp(cp - 1, COMPOSITE_DELIMITER, COMPOSITE_DELIMITER_LENGTH)
-								|| !strstr(next_buf, HOTKEY_FLAG))); // Exclude ", & x::" (comma as prefix key).
-						break;
-					case '.': // Added for v1.0.35.06.
-						// Normal (single-colon) labels CAN contain commas, so those and hotkey labels
-						// are sources of ambiguity.  Ensure this isn't a hotkey or label:
-						cp = omit_leading_whitespace(next_buf + 1);
-						is_continuation_line = (next_buf[next_buf_length - 1] != ':' // Last char must not be a colon (since that would be a label).
-							&& IS_SPACE_OR_TAB_OR_NBSP(next_buf[1]) // The "." operator requires a space or tab after it to be legitimate (this is also done in case period is ever a legal character in var names).
-							&& strncmp(cp, HOTKEY_FLAG, HOTKEY_FLAG_LENGTH) // Exclude ".::" (period as hotkey).
-							&& (strncmp(cp - 1, COMPOSITE_DELIMITER, COMPOSITE_DELIMITER_LENGTH)
-								|| !strstr(next_buf, HOTKEY_FLAG))); // Exclude ". & x::" (period as prefix key).
-						break;
-					case '&':
-					case '|':
-						// Since && and || are always used in expressions, there should be no danger of
-						// any line of an expression legitimately ending in a colon (single, double or otherwise).
-						is_continuation_line = (next_buf[1] == next_buf[0] && next_buf[next_buf_length - 1] != ':');
-						break;
-					case 'A':
-					case 'a':
-						// Since && and || are always used in expressions, there should be no danger of
-						// any line of an expression legitimately ending in a colon (single, double or otherwise).
-						if (next_buf[next_buf_length - 1] != ':' && IS_SPACE_OR_TAB_OR_NBSP(next_buf[3])
-							&& !strnicmp(next_buf, "and", 3))
+					case 'A': // "AND".
+						// See comments in the default section further below.
+						if (!strnicmp(next_buf, "and", 3) && IS_SPACE_OR_TAB_OR_NBSP(next_buf[3])) // Relies on short-circuit boolean order.
 						{
 							cp = omit_leading_whitespace(next_buf + 3);
 							// v1.0.38.06: The following was fixed to use EXPR_CORE vs. EXPR_OPERAND_TERMINATORS
 							// to properly detect a continuation line whose first char after AND/OR is "!~*&-+()":
-							if (!strchr(EXPR_CORE, *cp)) // Exclude "and:=x", "and = 1", "and += 1". This should be ok because AND/OR should always be followed immediately by a legtimate operand, not an operator.
-								is_continuation_line = true;
+							if (!strchr(EXPR_CORE, *cp))
+								// This check recognizes the following examples as NON-continuation lines by checking
+								// that AND/OR aren't followed immediately by something that's obviously an operator:
+								//    and := x, and = 2 (but not and += 2 since the an operand can have a unary plus/minus).
+								// This is done for backward compatibility.  Also, it's documented that
+								// AND/OR/NOT are supported as variable names inside expressions.
+								is_continuation_line = true; // Override the default set earlier.
 						}
 						break;
-					case 'O':
-					case 'o':
-						// See comments above.
-						if (next_buf[next_buf_length - 1] != ':' && IS_SPACE_OR_TAB_OR_NBSP(next_buf[2])
-							&& toupper(next_buf[1]) == 'R')
+					case 'O': // "OR".
+						// See comments in the default section further below.
+						if (toupper(next_buf[1]) == 'R' && IS_SPACE_OR_TAB_OR_NBSP(next_buf[2])) // Relies on short-circuit boolean order.
 						{
 							cp = omit_leading_whitespace(next_buf + 2);
 							// v1.0.38.06: The following was fixed to use EXPR_CORE vs. EXPR_OPERAND_TERMINATORS
 							// to properly detect a continuation line whose first char after AND/OR is "!~*&-+()":
-							if (!strchr(EXPR_CORE, *cp)) // Exclude "and:=x", "and = 1", "and += 1". This should be ok because AND/OR should always be followed immediately by a legtimate operand, not an operator.
-								is_continuation_line = true;
+							if (!strchr(EXPR_CORE, *cp)) // See comment in the "AND" case above.
+								is_continuation_line = true; // Override the default set earlier.
 						}
 						break;
-					}
+					default:
+						// Desired line continuation operators:
+						// Pretty much everything, namely:
+						// +, -, *, /, //, **, <<, >>, &, |, ^, <, >, <=, >=, =, ==, <>, !=, :=, +=, -=, /=, *=, ?, :
+						// And also the following remaining unaries (i.e. those that aren't also binaries): !, ~
+						// The first line below checks for ::, ++, and --.  Those can't be continuation lines because:
+						// "::" isn't a valid operator (this also helps performance if there are many hotstrings).
+						// ++ and -- are ambiguous with an isolated line containing ++Var or --Var (and besides,
+						// wanting to use ++ to continue an expression seems extremely rare, though if there's ever
+						// demand for it, might be able to look at what lies to the right of the operator's operand
+						// -- though that would produce inconsisent continuation behavior since ++Var itself still
+						// could never be a continuation line due to ambiguity).
+						if ((*next_buf == ':' || *next_buf == '+' || *next_buf == '-') && next_buf[1] == *next_buf // See above.
+							|| (*next_buf == '.' || *next_buf == '?') && !IS_SPACE_OR_TAB_OR_NBSP(next_buf[1]) // The "." and "?" operators require a space or tab after them to be legitimate.  For ".", this is done in case period is ever a legal character in var names, such as struct support.  For "?", it's done for backward compatibility since variable names can contain question marks (though "?" by itself is not considered a variable in v1.0.46).
+								&& next_buf[1] != '=' // But allow ".=" (and "?=" too for code simplicity), since ".=" is to concat-assign operator.
+							|| !strchr(CONTINUATION_LINE_SYMBOLS, *next_buf)) // Line doesn't start with a continuation char.
+							break;
+						// Some of the above checks must be done before the next ones.
+						if (   !(hotkey_flag = strstr(next_buf, HOTKEY_FLAG))   ) // Without any "::", it can't be a hotkey or hotstring.
+						{
+							is_continuation_line = true; // Override the default set earlier.
+							break;
+						}
+						if (*next_buf == ':') // First char is ':', so it's more likely a hotstring than a hotkey.
+						{
+							// Remember that hotstrings can contain what *appear* to be quoted literal strings,
+							// so detecting whether a "::" is in a quoted/literal string in this case would
+							// be more complicated.  That's one reason this other method is used.
+							for (hotstring_options_all_valid = true, cp = next_buf + 1; *cp && *cp != ':'; ++cp)
+								if (!IS_HOTSTRING_OPTION(*cp)) // Not a perfect test, but eliminates most of what little remaining ambiguity exists between ':' as a continuation character vs. ':' as the start of a hotstring.  It especially eliminates the ":=" operator.
+								{
+									hotstring_options_all_valid = false;
+									break;
+								}
+							if (hotstring_options_all_valid && *cp == ':') // It's almost certainly a hotstring.
+								break; // So don't treat it as a continuation line.
+							//else it's not a hotstring but it might still be a hotkey such as ": & x::".
+							// So continue checking below.
+						}
+						// Since above didn't "break", this line isn't a hotstring but it is probably a hotkey
+						// because above already discovered that it contains "::" somewhere. So try to find out
+						// if there's anything that disqualifies this from being a hotkey, such as some
+						// expression line that contains a quoted/literal "::" (or a line starting with
+						// a comma that contains an unquoted-but-literal "::" such as for FileAppend).
+						if (*next_buf == ',')
+						{
+							cp = omit_leading_whitespace(next_buf + 1);
+							// The above has set cp to the position of the non-whitespace item to the right of
+							// this comma.  Normal (single-colon) labels can't contain commas, so only hotkey
+							// labels are sources of ambiguity.  In addition, normal labels and hotstrings have
+							// already been checked for, higher above.
+							if (   strncmp(cp, HOTKEY_FLAG, HOTKEY_FLAG_LENGTH) // It's not a hotkey such as ",::action".
+								&& strncmp(cp - 1, COMPOSITE_DELIMITER, COMPOSITE_DELIMITER_LENGTH)   ) // ...and it's not a hotkey such as ", & y::action".
+								is_continuation_line = true; // Override the default set earlier.
+						}
+						else // First symbol in line isn't a comma but some other operator symbol.
+						{
+							// Check if the "::" found earlier appears to be inside a quoted/literal string.
+							// This check is NOT done for a line beginning with a comma since such lines
+							// can contain an unquoted-but-literal "::".  In addition, this check is done this
+							// way to detect hotkeys such as the following:
+							//   +keyname:: (and other hotkey modifier symbols such as ! and ^)
+							//   +keyname1 & keyname2::
+							//   +^:: (i.e. a modifier symbol followed by something that is a hotkey modifer and/or a hotkey suffix and/or an expression operator).
+							//   <:: and &:: (i.e. hotkeys that are also expression-continuation symbols)
+							// By contrast, expressions that qualify as continuation lines can look like:
+							//   . "xxx::yyy"
+							//   + x . "xxx::yyy"
+							// In addition, hotkeys like the following should continue to be supported regardless
+							// of how things are done here:
+							//   ^"::
+							//   . & "::
+							// Finally, keep in mind that an expression-continuation line can start with two
+							// consecutive unary operators like !! or !*. It can also start with a double-symbol
+							// operator such as <=, <>, !=, &&, ||, //, **.
+							for (cp = next_buf; cp < hotkey_flag && *cp != '"'; ++cp);
+							if (cp == hotkey_flag) // No '"' found to left of "::", so this "::" appears to be a real hotkey flag rather than part of a literal string.
+								break; // Treat this line as a normal line vs. continuation line.
+							for (cp = hotkey_flag + HOTKEY_FLAG_LENGTH; *cp && *cp != '"'; ++cp);
+							if (*cp)
+							{
+								// Closing quote was found so "::" is probably inside a literal string of an
+								// expression (further checking seems unnecessary given the fairly extreme
+								// rarity of using '"' as a key in a hotkey definition).
+								is_continuation_line = true; // Override the default set earlier.
+							}
+							//else no closing '"' found, so this "::" probably belongs to something like +":: or
+							// . & "::.  Treat this line as a normal line vs. continuation line.
+						}
+					} // switch(toupper(*next_buf))
+
 					if (is_continuation_line)
 					{
 						if (buf_length + next_buf_length >= LINE_SIZE - 1) // -1 to account for the extra space added below.
@@ -1318,7 +1395,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 							ScriptError(ERR_CONTINUATION_SECTION_TOO_LONG, next_buf);
 							return CloseAndReturn(fp, script_buf, FAIL);
 						}
-						if (*next_buf != ',') // Insert space before and/or/./&&/|| so that built/combined expression works correctly and also for readability of ListLines.
+						if (*next_buf != ',') // Insert space before expression operators so that built/combined expression works correctly (some operators like 'and', 'or', '.', and '?' currently require spaces on either side) and also for readability of ListLines.
 							buf[buf_length++] = ' ';
 						memcpy(buf + buf_length, next_buf, next_buf_length + 1); // Append this line to prev. and include the zero terminator.
 						buf_length += next_buf_length;
@@ -1330,7 +1407,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 				} // if (!in_continuation_section)
 
 				// OTHERWISE in_continuation_section != 0, so the above has found the first line of a new
-				// continuation seciton.
+				// continuation section.
 				// "has_continuation_section" indicates whether the line we're about to construct is partially
 				// composed of continuation lines beneath it.  It's separate from continuation_line_count
 				// in case there is another continuation section immediately after/adjacent to the first one,
@@ -1571,7 +1648,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			}
 			else // It's a function call on a line by itself, such as fn(x). It can't be if(..) because another section checked that.
 			{
-				if (!ParseAndAddLine(pending_function, ACT_FUNCTIONCALL))
+				if (!ParseAndAddLine(pending_function, ACT_EXPRESSION))
 					return CloseAndReturn(fp, script_buf, FAIL);
 				mCurrLine = NULL; // Prevents showing misleading vicinity lines if the line after a function call is a syntax error.
 			}
@@ -1580,7 +1657,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			// Now fall through to the below so that *this* line (the one after it) will be processed.
 			// Note that this line might be a pre-processor directive, label, etc. that won't actually
 			// become a runtime line per se.
-		}
+		} // if (*pending_function)
 
 		// By doing the following section prior to checking for hotkey and hotstring labels, double colons do
 		// not need to be escaped inside naked function calls and function definitions such as the following:
@@ -1612,27 +1689,29 @@ examine_line:
 		// ": & somekey" is not valid (since colon is a shifted key) and colon itself
 		// should instead be defined as "+;::".  It also relies on short-circuit boolean:
 		hotstring_start = NULL;
-		hotstring_options = NULL;
+		hotstring_options = NULL; // Set default as "no options were specified for this hotstring".
 		hotkey_flag = NULL;
 		if (buf[0] == ':' && buf[1])
 		{
 			if (buf[1] != ':')
 			{
 				hotstring_options = buf + 1; // Point it to the hotstring's option letters.
-				// Relies on the fact that options should never contain a literal colon:
+				// The following relies on the fact that options should never contain a literal colon.
+				// ALSO, the following doesn't use IS_HOTSTRING_OPTION() for backward compatibility,
+				// performance, and because it seems seldom if ever necessary at this late a stage.
 				if (   !(hotstring_start = strchr(hotstring_options, ':'))   )
 					hotstring_start = NULL; // Indicate that this isn't a hotstring after all.
 				else
 					++hotstring_start; // Points to the hotstring itself.
 			}
-			else // Double-colon, so it's a hotstring if there's more after this (but no options are present).
+			else // Double-colon, so it's a hotstring if there's more after this (but this means no options are present).
 				if (buf[2])
-					hotstring_start = buf + 2;
-				//else it's just a naked "::", which is considered to be a mundane label whose name is colon.
+					hotstring_start = buf + 2; // And leave hotstring_options at its default of NULL to indicate no options.
+				//else it's just a naked "::", which is considered to be an ordinary label whose name is colon.
 		}
 		if (hotstring_start)
 		{
-			// Find the hotstring's final double-colon by consider escape sequences from left to right.
+			// Find the hotstring's final double-colon by considering escape sequences from left to right.
 			// This is necessary for to handles cases such as the following:
 			// ::abc```::::Replacement String
 			// The above hotstring translates literally into "abc`::".
@@ -1683,11 +1762,13 @@ examine_line:
 			if (!hotkey_flag)
 				hotstring_start = NULL;  // Indicate that this isn't a hotstring after all.
 		}
-		else // Not a hotstring
+		if (!hotstring_start) // Not a hotstring (hotstring_start is checked *again* in case above block changed it; otherwise hotkeys like ": & x" aren't recognized).
 		{
 			// Note that there may be an action following the HOTKEY_FLAG (on the same line).
 			if (hotkey_flag = strstr(buf, HOTKEY_FLAG)) // Find the first one from the left, in case there's more than 1.
 			{
+				if (hotkey_flag == buf && hotkey_flag[2] == ':') // v1.0.46: Support ":::" to mean "colon is a hotkey".
+					++hotkey_flag;
 				// v1.0.40: It appears to be a hotkey, but validate it as such before committing to processing
 				// it as a hotkey.  If it fails validation as a hotkey, treat it as a command that just happens
 				// to contain a double-colon somewhere.  This avoids the need to escape double colons in scripts.
@@ -1847,7 +1928,7 @@ examine_line:
 					// But do put in the Return regardless, in case this label is ever jumped to
 					// via Goto/Gosub:
 					if (   !(hook_action = Hotkey::ConvertAltTab(hotkey_flag, false))   )
-						if (!ParseAndAddLine(hotkey_flag, IsFunction(hotkey_flag) ? ACT_FUNCTIONCALL : ACT_INVALID)) // It can't be a function definition vs. call since it's a single-line hotkey.
+						if (!ParseAndAddLine(hotkey_flag, IsFunction(hotkey_flag) ? ACT_EXPRESSION : ACT_INVALID)) // It can't be a function definition vs. call since it's a single-line hotkey.
 							return CloseAndReturn(fp, script_buf, FAIL);
 				// Also add a Return that's implicit for a single-line hotkey.  This is also
 				// done for auto-replace hotstrings in case gosub/goto is ever used to jump
@@ -2008,8 +2089,8 @@ examine_line:
 		// incorrectly detected as an Else command:
 		if (strlicmp(buf, "Else", (UINT)(action_end - buf))) // "Else" is used vs. g_act[ACT_ELSE].Name for performance.
 		{
-			// It's not an ELSE.  Also, it can't be ACT_FUNCTIONCALL at this stage because it would have
-			// been already handled higher above.
+			// It's not an ELSE.  Also, at this stage it can't be ACT_EXPRESSION (such as an isolated function call)
+			// because it would have been already handled higher above.
 			// v1.0.41.01: Check if there is a command/action on the same line as the '{'.  This is apparently
 			// a style that some people use, and it also supports "{}" as a shorthand way of writing an empty block.
 			if (*buf == '{')
@@ -2019,7 +2100,7 @@ examine_line:
 				if (   *(action_end = omit_leading_whitespace(buf + 1))   )  // There is an action to the right of the '{'.
 				{
 					mCurrLine = NULL;  // To signify that we're in transition, trying to load a new one.
-					if (!ParseAndAddLine(action_end, IsFunction(action_end) ? ACT_FUNCTIONCALL : ACT_INVALID)) // If it's a function, it must be a call vs. a definition because a function can't be defined on the same line as an open-brace.
+					if (!ParseAndAddLine(action_end, IsFunction(action_end) ? ACT_EXPRESSION : ACT_INVALID)) // If it's a function, it must be a call vs. a definition because a function can't be defined on the same line as an open-brace.
 						return CloseAndReturn(fp, script_buf, FAIL);
 				}
 				// Otherwise, there was either no same-line action or the same-line action was successfully added,
@@ -2041,7 +2122,7 @@ examine_line:
 			action_end = omit_leading_whitespace(action_end); // Now action_end is the word after the ELSE.
 			if (*action_end == g_delimiter) // Allow "else, action"
 				action_end = omit_leading_whitespace(action_end + 1);
-			if (*action_end && !ParseAndAddLine(action_end, IsFunction(action_end) ? ACT_FUNCTIONCALL : ACT_INVALID)) // If it's a function, it must be a call vs. a definition because a function can't be defined on the same line as an Else.
+			if (*action_end && !ParseAndAddLine(action_end, IsFunction(action_end) ? ACT_EXPRESSION : ACT_INVALID)) // If it's a function, it must be a call vs. a definition because a function can't be defined on the same line as an Else.
 				return CloseAndReturn(fp, script_buf, FAIL);
 			// Otherwise, there was either no same-line action or the same-line action was successfully added,
 			// so do nothing.
@@ -2159,7 +2240,7 @@ continue_main_loop: // This method is used in lieu of "continue" for performance
 		// alternatives due to the use of "continue" in some places above.
 		saved_line_number = mCombinedLineNumber;
 		mCombinedLineNumber = pending_function_line_number; // Done so that any syntax errors that occur during the calls below will report the correct line number.
-		if (!ParseAndAddLine(pending_function, ACT_FUNCTIONCALL)) // Must be function call vs. definition since otherwise the above would have detected the opening brace beneath it and already cleared pending_function.
+		if (!ParseAndAddLine(pending_function, ACT_EXPRESSION)) // Must be function call vs. definition since otherwise the above would have detected the opening brace beneath it and already cleared pending_function.
 			return CloseAndReturn(fp, script_buf, FAIL);
 		mCombinedLineNumber = saved_line_number;
 	}
@@ -2904,19 +2985,17 @@ ResultType Script::AddLabel(char *aLabelName, bool aAllowDupe)
 ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, ActionTypeType aOldActionType
 	, char *aActionName, char *aEndMarker, char *aLiteralMap, size_t aLiteralMapLength)
 // Returns OK or FAIL.
-// aLineText needs to be a string whose contents are modifiable (this
-// helps performance by allowing the string to be split into sections
-// without having to make temporary copies).
+// aLineText needs to be a string whose contents are modifiable (though the string won't be made any
+// longer than it is now, so it doesn't have to be of size LINE_SIZE). This helps performance by
+// allowing the string to be split into sections without having to make temporary copies.
 {
 #ifdef _DEBUG
 	if (!aLineText || !*aLineText)
 		return ScriptError("DEBUG: ParseAndAddLine() called incorrectly.");
 #endif
 
-	// The characters below are ordered with most-often used ones first, for performance:
-	#define DEFINE_END_FLAGS \
-		char end_flags[] = {' ', g_delimiter, '(', '\t', '<', '>', ':', '=', '+', '-', '*', '/', '!', '~', '&', '|', '^', '\0'}; // '\0' must be last.
-	DEFINE_END_FLAGS
+	bool in_quotes;
+	int open_parens;
 
 	char action_name[MAX_VAR_NAME_LENGTH + 1], *end_marker;
 	if (aActionName) // i.e. this function was called recursively with explicit values for the optional params.
@@ -2924,12 +3003,12 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 		strcpy(action_name, aActionName);
 		end_marker = aEndMarker;
 	}
-	else if (aActionType == ACT_FUNCTIONCALL)
+	else if (aActionType == ACT_EXPRESSION)
 	{
 		*action_name = '\0';
 		end_marker = NULL; // Indicate that there is no action to mark the end of.
 	}
-	else // We weren't called recursively from self, nor is it ACT_FUNCTIONCALL, so set action_name and end_marker the normal way.
+	else // We weren't called recursively from self, nor is it ACT_EXPRESSION, so set action_name and end_marker the normal way.
 	{
 		for (;;) // A loop with only one iteration so that "break" can be used instead of a lot of nested if's.
 		{
@@ -3034,25 +3113,30 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 			// local, inversion is necessary only if the current mode isn't LOCAL:
 			bool is_already_exception, is_exception = (declare_type != VAR_DECLARE_STATIC
 				|| g.CurrentFunc->mDefaultVarType == VAR_ASSUME_GLOBAL); // Above has ensured that NONE can't be in effect by the time we reach the first static.
+			VarSizeType var_name_length;
+
 			for (char *item = cp; *item;)
 			{
-				char *item_end = StrChrAny(item, ", \t");  // Comma, space or tab.
-				if (!item_end)
+				char *item_end = StrChrAny(item, ", \t=:");  // Comma, space or tab, equal-sign, colon.
+				if (!item_end) // This is probably the last/only variable in the list; e.g. the "x" in "local x"
 					item_end = item + strlen(item);
+				var_name_length = (VarSizeType)(item_end - item);
+
 				int always_use;
 				if (is_exception)
 					always_use = g.CurrentFunc->mDefaultVarType == VAR_ASSUME_GLOBAL ? ALWAYS_USE_LOCAL : ALWAYS_USE_GLOBAL;
 				else
 					always_use = ALWAYS_USE_DEFAULT;
+
 				Var *var;
-				if (   !(var = FindOrAddVar(item, item_end - item, always_use, &is_already_exception))   )
+				if (   !(var = FindOrAddVar(item, var_name_length, always_use, &is_already_exception))   )
 					return FAIL; // It already displayed the error.
 				if (is_already_exception) // It was already in the exception list (previously declared).
 					return ScriptError("Duplicate declaration.", item);
-				if (var->Type() != VAR_NORMAL || !strlicmp(item, "ErrorLevel", (UINT)(item_end - item))) // Shouldn't be declared either way (global or local).
+				if (var->Type() != VAR_NORMAL || !strlicmp(item, "ErrorLevel", var_name_length)) // Shouldn't be declared either way (global or local).
 					return ScriptError("Built-in variables must not be declared.", item);
 				for (int i = 0; i < g.CurrentFunc->mParamCount; ++i) // Search by name to find both global and local declarations.
-					if (!strlicmp(item, g.CurrentFunc->mParam[i].var->mName, (UINT)(item_end - item)))
+					if (!strlicmp(item, g.CurrentFunc->mParam[i].var->mName, var_name_length))
 						return ScriptError("Parameters must not be declared.", item);
 				if (is_exception)
 				{
@@ -3062,10 +3146,144 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 				}
 				if (declare_type == VAR_DECLARE_STATIC)
 					var->OverwriteAttrib(VAR_ATTRIB_STATIC);
-				item = omit_leading_whitespace(item_end);
-				if (*item == ',')
-					item = omit_leading_whitespace(item + 1);
-			}
+
+				item_end = omit_leading_whitespace(item_end); // Move up to the next comma, assignment-op, or '\0'.
+
+				bool convert_the_operator;
+				switch(*item_end)
+				{
+				case ',':  // No initializer is present for this variable, so move on to the next one.
+					item = omit_leading_whitespace(item_end + 1); // Set "item" for use by the next iteration.
+					continue; // No further processing needed below.
+				case '\0': // No initializer is present for this variable, so move on to the next one.
+					item = item_end; // Set "item" for use by the next iteration.
+					continue;
+				case ':':
+					if (item_end[1] != '=') // Colon with no following '='.
+						return ScriptError(ERR_UNRECOGNIZED_ACTION, item); // Vague error since so rare.
+					item_end += 2; // Point to the character after the ":=".
+					convert_the_operator = false;
+					break;
+				case '=': // Here '=' is clearly an assignment not a comparison, so further below it will be converted to :=
+					++item_end; // Point to the character after the "=".
+					convert_the_operator = true;
+					break;
+				}
+				char *right_side_of_operator = item_end; // Save for use by VAR_DECLARE_STATIC below.
+
+				// Since above didn't "continue", this declared variable also has an initializer.
+				// Add that initializer as a separate line to be executed at runtime. Separate lines
+				// might actually perform better at runtime because most initializers tend to be simple
+				// literals or variables that are simplified into non-expressions at runtime. In addition,
+				// items without an initializer are omitted, further improving runtime performance.
+				// However, the following must be done ONLY after having done the FindOrAddVar()
+				// above, since that may have changed this variable to a non-default type (local or global).
+				// But what about something like "global x, y=x"? Even that should work as long as x
+				// appears in the list prior to initializers that use it.
+				// Now, find the comma (or terminator) that marks the end of this sub-statement.
+				// The search must exclude commas that are inside quoted/literal strings and those that
+				// are inside parentheses (chiefly those of function-calls, but possibly others).
+
+				for (in_quotes = false, open_parens = 0; *item_end; ++item_end) // FIND THE NEXT "REAL" COMMA.
+				{
+					if (*item_end == ',') // This is outside the switch() further below so that its "break" can get out of the loop.
+					{
+						if (!in_quotes && open_parens < 1) // A delimiting comma other than one in a sub-statement or function. Shouldn't need to worry about unquoted escaped commas since they don't make sense in a declaration list.
+							break;
+						// Otherwise, its a quoted/literal comma or one in parentheses (such as function-call).
+						continue; // Continue past it to look for the correct comma.
+					}
+					switch (*item_end)
+					{
+					case '"': // There are sections similar this one later below; so see them for comments.
+						in_quotes = !in_quotes;
+						break;
+					case '(':
+						if (!in_quotes) // Literal parentheses inside a quoted string should not be counted for this purpose.
+							++open_parens;
+						break;
+					case ')':
+						if (!in_quotes)
+						{
+							if (!open_parens)
+								return ScriptError(ERR_MISSING_OPEN_PAREN, item);
+							--open_parens;
+						}
+						break;
+					//default: some other character; just have the loop skip over it.
+					}
+				} // for() to look for the ending comma or terminator of this sub-statement.
+				if (open_parens) // At least one '(' is never closed.
+					return ScriptError(ERR_MISSING_CLOSE_PAREN, item); // Use "item" because the problem is probably somewhere after that point in the declaration list.
+				if (in_quotes)
+					return ScriptError(ERR_MISSING_CLOSE_QUOTE, item);
+
+				// Above has now found the final comma of this sub-statement (or the terminator if there is no comma).
+				char orig_char = *item_end;
+				*item_end = '\0'; // Temporarily terminate (it might already be the terminator, but that's harmless).
+
+				if (declare_type == VAR_DECLARE_STATIC) // v1.0.46: Support simple initializers for static variables.
+				{
+					// The following is similar to the code used to support default values for function parameters.
+					// So maybe maintain them together.
+					right_side_of_operator = omit_leading_whitespace(right_side_of_operator);
+					if (!stricmp(right_side_of_operator, "false"))
+						var->Assign("0");
+					else if (!stricmp(right_side_of_operator, "true"))
+						var->Assign("1");
+					else // The only other supported initializers are "string", integers, and floats.
+					{
+						// Vars could be supported here via FindVar(), but only globals ABOVE this point in
+						// the script would be supported (since other globals don't exist yet; in fact, even
+						// those that do exist don't have any contents yet, so it would be pointless). So it
+						// seems best to wait until full/comprehesive support for expressions is
+						// studied/designed for both statics and parameter-default-values.
+						if (*right_side_of_operator == '"' && item_end[-1] == '"') // Quoted/literal string.
+						{
+							++right_side_of_operator; // Omit the opening-quote from further consideration.
+							item_end[-1] = '\0'; // Remove the close-quote from further consideration.
+							ConvertEscapeSequences(right_side_of_operator, g_EscapeChar, false); // Raw escape sequences like `n haven't been converted yet, so do it now.
+							// Convert all pairs of quotes into single literal quotes:
+							StrReplace(right_side_of_operator, "\"\"", "\"", SCS_SENSITIVE);
+						}
+						else // It's not a quoted string (nor the empty string); or it has a missing ending quote (rare).
+						{
+							if (!IsPureNumeric(right_side_of_operator, true, false, true)) // It's not a number, and since we're here it's not a quoted/literal string either.
+								return ScriptError("Unsupported static initializer.", right_side_of_operator);
+							//else it's an int or float, so just assign the numeric string itself (there
+							// doesn't seem to be any need to convert it to float/int first, though that would
+							// make things more consistent such as storing .1 as 0.1).
+						}
+						if (*right_side_of_operator) // It can be "" in cases such as "" being specified literally in the script, in which case nothing needs to be done because all variables start off as "".
+							var->Assign(right_side_of_operator);
+					}
+				}
+				else // A non-static initializer, so a line of code must be produced that will executed at runtime every time the function is called.
+				{
+					char *line_to_add;
+					if (convert_the_operator) // Convert first '=' in item to be ":=".
+					{
+						// Prevent any chance of overflow by using new_buf (overflow might otherwise occur in cases
+						// such as this sub-statement being the very last one in the declaration list, and being
+						// at the limit of the buffer's capacity).
+						char new_buf[LINE_SIZE]; // Using so much stack space here and in caller seems unlikely to affect performance, so _alloca seems unlikely to help.
+						StrReplace(strcpy(new_buf, item), "=", ":=", SCS_SENSITIVE, 1); // Can't overflow because there's only one replacement and we know item's length can't be that close to the capacity limit.
+						line_to_add = new_buf;
+					}
+					else
+						line_to_add = item;
+					// Call Parse() vs. AddLine() because it detects and optimizes simple assignments into
+					// non-exprssions for faster runtime execution.
+					if (!ParseAndAddLine(line_to_add)) // For simplicity and maintainability, call self rather than trying to set things up properly to stay in self.
+						return FAIL; // Above already displayed the error.
+				}
+
+				*item_end = orig_char; // Undo the temporary termination.
+				// Set "item" for use by the next iteration:
+				item = (*item_end == ',') // i.e. it's not the terminator and thus not the final item in the list.
+					? omit_leading_whitespace(item_end + 1)
+					: item_end; // It's the terminator, so let the loop detect that to finish.
+			} // for() each item in the declaration list.
 			return OK;
 		} // single-iteration for-loop
 
@@ -3078,122 +3296,41 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 	// or NULL if there is no action name.
 	// Find the arguments (not to be confused with exec_params) of this action, if it has any:
 	char *action_args = end_marker ? omit_leading_whitespace(end_marker + 1) : aLineText;
-
-	// Now action_args is either the first delimiter or the first parameter (if it optional first
+	// Now action_args is either the first delimiter or the first parameter (if the optional first
 	// delimiter was omitted).
+	bool add_openbrace_afterward = false; // v1.0.41: Set default for use in supporting brace in "if (expr) {" and "Loop {".
 
-	bool is_var_and_operator = false; // Set default.
 	if (*action_args == g_delimiter)
 	{
-		// Since there's a comma, leave is_var_and_operator should as false, e.g. "something, += 4" is invalid.
+		// Since there's a comma, don't change aActionType because if it's ACT_INVALID, it should stay that way
+		// so that "something, += 4" is not a valid assignment or other operator, but should still be checked
+		// against the list of commands to see if it's something like "MsgBox, += 4" (in this case, a script may
+		// use the comma to avoid ambiguity).
 		// Find the start of the next token (or its ending delimiter if the token is blank such as ", ,"):
 		for (++action_args; IS_SPACE_OR_TAB(*action_args); ++action_args);
 	}
-	else if (!aActionType)
+	else if (!aActionType && !aOldActionType) // i.e. the caller hasn't yet determined this line's action type.
 	{
-		// The next line is used to help avoid ambiguity of a line such as the following:
-		// Input = test  ; Would otherwise be confused with the Input command.
-		// But there may be times when a line like this would be used:
-		// MsgBox =  ; i.e. the equals is intended to be the first parameter, not an operator.
-		// In the above case, the user can provide the optional comma to avoid the ambiguity:
-		// MsgBox, =
-		switch(*action_args)
+		if (!stricmp(action_name, "IF")) // It's an IF-statement.
 		{
-		case '=':  // i.e. var=value  (with no spaces around operator)
-			is_var_and_operator = true;
-			break;
-		case ':':  // i.e. var:=value (with no spaces around operator)
-			is_var_and_operator = (action_args[1] == '='); // v1.0.40: Allow things like "MsgBox :: test" to be valid.
-			break;
-		case '(':  // i.e. "if(expr)" (with no space between the if and the open-parenthesis).
-			is_var_and_operator = !stricmp(action_name, "IF"); // Fixed for v1.0.31.01.
-			break;
-		case '*':
-		case '/':
-		case '-':
-		case '+':
-			// Insist that the next symbol be equals to form a complete operator.  This allows
-			// a line such as the following, which omits the first optional comma, to still
-			// be recognized as a command rather than a variable-with-operator:
-			// SetBatchLines -1
-			is_var_and_operator = *(action_args + 1) == '=';
-			break;
-		// Otherwise (default): Leave is_var_and_operator set to false.
-		}
-	}
-	//else aActionType is not ACT_INVALID, so leave is_var_and_operator set to false.
-
-	// Now the above has ensured that action_args is the first parameter itself, or empty-string if none.
-	// If action_args now starts with a delimiter, it means that the first param is blank/empty.
-
-	///////////////////////////////////////////////
-	// Check if this line contains a valid command.
-	///////////////////////////////////////////////
-	// Check for macro commands first because these commands can *include* normal executable programs
-	// and documents.  In other words, don't look for .EXE and such yet, because might find them
-	// somewhere later in the string where they belong to some sub-action that we're not supposed
-	// to handle:
-
-	// It might perform a little worse on avg. to check for old cmds prior to checking for
-	// the "special handling for ACT_ASSIGN" etc., but it makes things more understandable.
-	// OLDER comment:
-	// Check if it's an old command.  It's not necessary to do this before checking for the
-	// special actions, above, because all the old commands shouldn't allow special chars
-	// such as < > = (used above) to be used at the beginning of their first params.
-	// e.g. IfEqual, varname, value ... SetEnv, varname, value ... EnvAdd, varname, value
-	// And it helps avg. performance to check for old commands only after all checks for
-	// new commands have been completed.
-	ActionTypeType action_type = aActionType;
-	ActionTypeType old_action_type = aOldActionType;
-	if (action_type == ACT_INVALID && old_action_type == OLD_INVALID && !is_var_and_operator)
-		if (   (action_type = ConvertActionType(action_name)) == ACT_INVALID   )
-			old_action_type = ConvertOldActionType(action_name);
-	bool add_openbrace_afterward = false; // v1.0.41: Set default for use in supporting brace in "if (expr) {".
-
-	/////////////////////////////////////////////////////////////////////////////
-	// Special handling for ACT_ASSIGN/ADD/SUB/MULT/DIV and IFEQUAL/GREATER/LESS.
-	/////////////////////////////////////////////////////////////////////////////
-	if (action_type == ACT_INVALID && old_action_type == OLD_INVALID)
-	{
-		// No match found, but is it a special type of action?
-		// Support for ++i and --i.  In these cases, action_name must be either "+" or "-"
-		// and the first character of action_args must match it.
-		if (   !*(action_name + 1) && ((*action_name == '+' && *action_args == '+')  // e.g. index++
-			|| (*action_name == '-' && *action_args == '-'))   )                     // e.g. index--
-		{
-			action_type = *action_name == '+' ? ACT_ADD : ACT_SUB;
-			// Set action_args to be the word that occurs after the ++ or --:
-			++action_args;
-			action_args = omit_leading_whitespace(action_args); // Though there really shouldn't be any.
-			// Set up aLineText and action_args to be parsed later on as a list of two parameters:
-			// The variable name followed by the amount to be added or subtracted (e.g. "ScriptVar, 1").
-			// We're not changing the length of aLineText by doing this, so it should be large enough:
-			size_t new_length = strlen(action_args);
-			// Since action_args is just a pointer into the aLineText buffer (which caller has ensured
-			// is modifiable), use memmove() so that overlapping source & dest are properly handled:
-			memmove(aLineText, action_args, new_length + 1); // +1 to include the zero terminator.
-			// Append the second param, which is just "1" since the ++ and -- only inc/dec by 1:
-			aLineText[new_length++] = g_delimiter;
-			aLineText[new_length++] = '1';
-			aLineText[new_length] = '\0';
-			action_args = aLineText;
-		}
-		else if (!stricmp(action_name, "IF"))
-		{
-			if (*action_args == '(') // This is "if (expr)"
+			/////////////////////////////////////
+			// Detect all types of IF-statements.
+			/////////////////////////////////////
+			char *operation, *next_word;
+			if (*action_args == '(') // i.e. if (expression)
 			{
-				action_type = ACT_IFEXPR;
 				// To support things like the following, the outermost enclosing parentheses are not removed:
 				// if (x < 3) or (x > 6)
-				// Also note that although the expr. must normally start with an open-paren to be
-				// recognized as ACT_IFEXPR, it need not end in a close-paren, e.g. if (x = 1) or !done.
+				// Also note that although the expression must normally start with an open-parenthesis to be
+				// recognized as ACT_IFEXPR, it need not end in a close-paren; e.g. if (x = 1) or !done.
 				// If these or any other parentheses are unbalanced, it will caught further below.
+				aActionType = ACT_IFEXPR; // Fixed for v1.0.31.01.
 			}
-			else 
+			else // Generic or indeterminate IF-statement, so find out what type it is.
 			{
+				DEFINE_END_FLAGS
 				// Skip over the variable name so that the "is" and "is not" operators are properly supported:
-				char *operation = StrChrAny(action_args, end_flags);
-				if (!operation)
+				if (   !(operation = StrChrAny(action_args, end_flags))   )
 					operation = action_args + strlen(action_args); // Point it to the NULL terminator instead.
 				else
 					operation = omit_leading_whitespace(operation);
@@ -3204,51 +3341,50 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 				// If not BetweenXXX
 				// If not ContainsXXX
 				bool first_word_is_not = !strnicmp(action_args, "Not", 3) && strchr(end_flags, action_args[3]);
-				char *next_word;
 
 				switch (*operation)
 				{
 				case '=': // But don't allow == to be "Equals" since the 2nd '=' might be literal.
-					action_type = ACT_IFEQUAL;
+					aActionType = ACT_IFEQUAL;
 					break;
 				case '<':
 					// Note: User can use whitespace to differentiate a literal symbol from
 					// part of an operator, e.g. if var1 < =  <--- char is literal
 					switch(operation[1])
 					{
-					case '=': action_type = ACT_IFLESSOREQUAL; operation[1] = ' '; break;
-					case '>': action_type = ACT_IFNOTEQUAL; operation[1] = ' '; break;
-					default: action_type = ACT_IFLESS;  // i.e. some other symbol follows '<'
+					case '=': aActionType = ACT_IFLESSOREQUAL; operation[1] = ' '; break;
+					case '>': aActionType = ACT_IFNOTEQUAL; operation[1] = ' '; break;
+					default:  aActionType = ACT_IFLESS;  // i.e. some other symbol follows '<'
 					}
 					break;
 				case '>': // Don't allow >< to be NotEqual since the '<' might be intended as a literal part of an arg.
 					if (operation[1] == '=')
 					{
-						action_type = ACT_IFGREATEROREQUAL;
+						aActionType = ACT_IFGREATEROREQUAL;
 						operation[1] = ' '; // Remove it from so that it won't be considered by later parsing.
 					}
 					else
-						action_type = ACT_IFGREATER;
+						aActionType = ACT_IFGREATER;
 					break;
 				case '!':
 					if (operation[1] == '=')
 					{
-						action_type = ACT_IFNOTEQUAL;
+						aActionType = ACT_IFNOTEQUAL;
 						operation[1] = ' '; // Remove it from so that it won't be considered by later parsing.
 					}
 					else
 						// To minimize the times where expressions must have an outer set of parentheses,
 						// assume all unknown operators are expressions, e.g. "if !var"
-						action_type = ACT_IFEXPR;
+						aActionType = ACT_IFEXPR;
 					break;
 				case 'b': // "Between"
 				case 'B':
 					// Must fall back to ACT_IFEXPR, otherwise "if not var_name_beginning_with_b" is a syntax error.
 					if (first_word_is_not || strnicmp(operation, "between", 7))
-						action_type = ACT_IFEXPR;
+						aActionType = ACT_IFEXPR;
 					else
 					{
-						action_type = ACT_IFBETWEEN;
+						aActionType = ACT_IFBETWEEN;
 						// Set things up to be parsed as args further down.  A delimiter is inserted later below:
 						memset(operation, ' ', 7);
 					}
@@ -3257,10 +3393,10 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 				case 'C':
 					// Must fall back to ACT_IFEXPR, otherwise "if not var_name_beginning_with_c" is a syntax error.
 					if (first_word_is_not || strnicmp(operation, "contains", 8))
-						action_type = ACT_IFEXPR;
+						aActionType = ACT_IFEXPR;
 					else
 					{
-						action_type = ACT_IFCONTAINS;
+						aActionType = ACT_IFCONTAINS;
 						// Set things up to be parsed as args further down.  A delimiter is inserted later below:
 						memset(operation, ' ', 8);
 					}
@@ -3272,15 +3408,15 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 					case 's':  // "IS"
 					case 'S':
 						if (first_word_is_not)        // v1.0.45: Had forgotten to fix this one with the others,
-							action_type = ACT_IFEXPR; // so now "if not is_something" and "if not is_something()" work.
+							aActionType = ACT_IFEXPR; // so now "if not is_something" and "if not is_something()" work.
 						else
 						{
 							next_word = omit_leading_whitespace(operation + 2);
 							if (strnicmp(next_word, "not", 3))
-								action_type = ACT_IFIS;
+								aActionType = ACT_IFIS;
 							else
 							{
-								action_type = ACT_IFISNOT;
+								aActionType = ACT_IFISNOT;
 								// Remove the word "not" to set things up to be parsed as args further down.
 								memset(next_word, ' ', 3);
 							}
@@ -3290,24 +3426,24 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 					case 'n':  // "IN"
 					case 'N':
 						if (first_word_is_not)
-							action_type = ACT_IFEXPR;
+							aActionType = ACT_IFEXPR;
 						else
 						{
-							action_type = ACT_IFIN;
+							aActionType = ACT_IFIN;
 							operation[1] = ' '; // Remove the 'N' in "IN".  'I' is replaced with ',' later below.
 						}
 						break;
 					default:
 						// v1.0.35.01 It must fall back to ACT_IFEXPR, otherwise "if not var_name_beginning_with_i"
 						// is a syntax error.
-						action_type = ACT_IFEXPR;
+						aActionType = ACT_IFEXPR;
 					} // switch()
 					break;
 				case 'n':  // It's either "not in", "not between", or "not contains"
 				case 'N':
 					// Must fall back to ACT_IFEXPR, otherwise "if not var_name_beginning_with_n" is a syntax error.
 					if (strnicmp(operation, "not", 3))
-						action_type = ACT_IFEXPR;
+						aActionType = ACT_IFEXPR;
 					else
 					{
 						// Remove the "NOT" separately in case there is more than one space or tab between
@@ -3316,59 +3452,30 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 						next_word = omit_leading_whitespace(operation + 3);
 						if (!strnicmp(next_word, "in", 2))
 						{
-							action_type = ACT_IFNOTIN;
+							aActionType = ACT_IFNOTIN;
 							memset(next_word, ' ', 2);
 						}
 						else if (!strnicmp(next_word, "between", 7))
 						{
-							action_type = ACT_IFNOTBETWEEN;
+							aActionType = ACT_IFNOTBETWEEN;
 							memset(next_word, ' ', 7);
 						}
 						else if (!strnicmp(next_word, "contains", 8))
 						{
-							action_type = ACT_IFNOTCONTAINS;
+							aActionType = ACT_IFNOTCONTAINS;
 							memset(next_word, ' ', 8);
 						}
 					}
 					break;
 
 				default: // To minimize the times where expressions must have an outer set of parentheses, assume all unknown operators are expressions.
-					action_type = ACT_IFEXPR;
+					aActionType = ACT_IFEXPR;
 				} // switch()
+			} // Detection of type of IF-statement.
 
-				// Set things up to be parsed as args later on:
-				if (action_type != ACT_IFEXPR)
-				{
-					*operation = g_delimiter;
-					if (action_type == ACT_IFBETWEEN || action_type == ACT_IFNOTBETWEEN)
-					{
-						// I decided against the syntax "if var between 3,8" because the gain in simplicity
-						// and the small avoidance of ambiguity didn't seem worth the cost in terms of readability.
-						for (next_word = operation;;)
-						{
-							if (   !(next_word = strcasestr(next_word, "and"))   )
-								return ScriptError("BETWEEN requires the word AND.", aLineText); // Seems too rare a thing to warrant falling back to ACT_IFEXPR for this.
-							if (strchr(" \t", *(next_word - 1)) && strchr(" \t", *(next_word + 3)))
-							{
-								// Since there's a space or tab on both sides, we know this is the correct "and",
-								// i.e. not one contained within one of the parameters.  Examples:
-								// if var between band and cat  ; Don't falsely detect "band"
-								// if var betwwen Andy and David  ; Don't falsely detect "Andy".
-								// Replace the word AND with a delimiter so that it will be parsed correctly later:
-								*next_word = g_delimiter;
-								*(next_word + 1) = ' ';
-								*(next_word + 2) = ' ';
-								break;
-							}
-							else
-								next_word += 3;  // Skip over this false "and".
-						}
-					} // ACT_IFBETWEEN
-				} // action_type != ACT_IFEXPR
-			} // operation isn't the type of "if (expr)" that starts with "if(".
-			if (action_type == ACT_IFEXPR)
+			if (aActionType == ACT_IFEXPR) // There are various ways above for aActionType to become ACT_IFEXPR.
 			{
-				// Since this is ACT_IFEXPR, action_args is known not to be the empty string, which is relied on below.
+				// Since this is ACT_IFEXPR, action_args is known not to be an empty string, which is relied on below.
 				char *action_args_last_char = action_args + strlen(action_args) - 1; // Shouldn't be a whitespace char since those should already have been removed at an earlier stage.
 				if (*action_args_last_char == '{') // This is an if-expression statement with an open-brace on the same line.
 				{
@@ -3377,50 +3484,253 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 					add_openbrace_afterward = true;
 				}
 			}
-		}
-		else // The action type is something other than an IF.
-		{
-			if (*action_args == '=')
-				action_type = ACT_ASSIGN;
-			else if (*action_args == ':' && *(action_args + 1) == '=')  // :=
-				action_type = ACT_ASSIGNEXPR;
-			else if (*action_args == '+' && (*(action_args + 1) == '=' || *(action_args + 1) == '+')) // += or ++
-				action_type = ACT_ADD;
-			else if (*action_args == '-' && (*(action_args + 1) == '=' || *(action_args + 1) == '-')) // -= or --
-				action_type = ACT_SUB;
-			else if (*action_args == '*' && *(action_args + 1) == '=') // *=
-				action_type = ACT_MULT;
-			else if (*action_args == '/' && *(action_args + 1) == '=') // /=
-				action_type = ACT_DIV;
-			if (action_type != ACT_INVALID)
+			else // It's a IF-statement, but a traditional/non-expression one.
 			{
-				// Set things up to be parsed as args later on:
-				*action_args = g_delimiter; // Replace the +,-,:,*,/ with a delimiter for later parsing.
-				if (action_type != ACT_ASSIGN)
+				// Set things up to be parsed as args later on.
+				*operation = g_delimiter;
+				if (aActionType == ACT_IFBETWEEN || aActionType == ACT_IFNOTBETWEEN)
 				{
-					if (*(action_args + 1) == '=')
-						*(action_args + 1) = ' ';  // Remove the "=" from consideration.
-					else
-						*(action_args + 1) = '1';  // Turn ++ and -- into ",1"
-				}
-				action_args = aLineText;
-			}
+					// I decided against the syntax "if var between 3,8" because the gain in simplicity
+					// and the small avoidance of ambiguity didn't seem worth the cost in terms of readability.
+					for (next_word = operation;;)
+					{
+						if (   !(next_word = strcasestr(next_word, "and"))   )
+							return ScriptError("BETWEEN requires the word AND.", aLineText); // Seems too rare a thing to warrant falling back to ACT_IFEXPR for this.
+						if (strchr(" \t", *(next_word - 1)) && strchr(" \t", *(next_word + 3)))
+						{
+							// Since there's a space or tab on both sides, we know this is the correct "and",
+							// i.e. not one contained within one of the parameters.  Examples:
+							// if var between band and cat  ; Don't falsely detect "band"
+							// if var betwwen Andy and David  ; Don't falsely detect "Andy".
+							// Replace the word AND with a delimiter so that it will be parsed correctly later:
+							*next_word = g_delimiter;
+							*(next_word + 1) = ' ';
+							*(next_word + 2) = ' ';
+							break;
+						}
+						else
+							next_word += 3;  // Skip over this false "and".
+					} // for()
+				} // ACT_IFBETWEEN
+			} // aActionType != ACT_IFEXPR
 		}
-		if (action_type == ACT_INVALID)
-			// v1.0.41: Support one-true brace style even if there's no space, but make it strict so that
-			// things like "Loop{ string" are reported as errors (in case user intended a file-pattern loop).
-			if (!stricmp(action_name, "Loop{") && !*action_args)
-			{
-				action_type = ACT_LOOP;
-				add_openbrace_afterward = true;
-			}
-			else
-				// v1.0.40: Give a more specific error message now now that hotkeys can make it here due to
-				// the change that avoids the need to escape double-colons:
-				return ScriptError(strstr(aLineText, HOTKEY_FLAG) ? "Invalid hotkey." : ERR_UNRECOGNIZED_ACTION, aLineText);
-	} // If no matching command found.
+		else // It isn't an IF-statement, so check for assignments/operators that determine that this line isn't one that starts with a named command.
+		{
+			//////////////////////////////////////////////////////
+			// Detect operators and assignments such as := and +=
+			//////////////////////////////////////////////////////
+			// This section is done before the section that checks whether action_name is a valid command
+			// because it avoids ambiguity in a line such as the following:
+			//    Input = test  ; Would otherwise be confused with the Input command.
+			// But there may be times when a line like this is used:
+			//    MsgBox =  ; i.e. the equals is intended to be the first parameter, not an operator.
+			// In the above case, the user can provide the optional comma to avoid the ambiguity:
+			//    MsgBox, =
+			char action_args_2nd_char = action_args[1];
+			bool convert_pre_inc_or_dec = false; // Set default.
 
-	Action &this_action = (action_type == ACT_INVALID) ? g_old_act[old_action_type] : g_act[action_type];
+			switch(*action_args)
+			{
+			case '=': // i.e. var=value (old-style assignment)
+				aActionType = ACT_ASSIGN;
+				break;
+			case ':':
+				// v1.0.40: Allow things like "MsgBox :: test" to be valid by insisting that '=' follows ':'.
+				if (action_args_2nd_char == '=') // i.e. :=
+					aActionType = ACT_ASSIGNEXPR;
+				break;
+			case '+':
+				// Support for ++i (and in the next case, --i).  In these cases, action_name must be either
+				// "+" or "-", and the first character of action_args must match it.
+				if ((convert_pre_inc_or_dec = action_name[0] == '+' && !action_name[1]) // i.e. the pre-increment operator; e.g. ++index.
+					|| action_args_2nd_char == '=') // i.e. x+=y (by contrast, post-increment is recognized only after we check for a command name to cut down on ambiguity).
+					aActionType = ACT_ADD;
+				break;
+			case '-':
+				// Do a complete validation/recognition of the operator to allow a line such as the following,
+				// which omits the first optional comma, to still be recognized as a command rather than a
+				// variable-with-operator:
+				// SetBatchLines -1
+				if ((convert_pre_inc_or_dec = action_name[0] == '-' && !action_name[1]) // i.e. the pre-decrement operator; e.g. --index.
+					|| action_args_2nd_char == '=') // i.e. x-=y  (by contrast, post-decrement is recognized only after we check for a command name to cut down on ambiguity).
+					aActionType = ACT_SUB;
+				break;
+			case '*':
+				if (action_args_2nd_char == '=') // i.e. *=
+					aActionType = ACT_MULT;
+				break;
+			case '/':
+				if (action_args_2nd_char == '=') // i.e. /=
+					aActionType = ACT_DIV;
+				// ACT_DIV is different than //= and // because ACT_DIV supports floating point inputs by yielding
+				// a floating point result (i.e. it doesn't Floor() the result when the inputs are floats).
+				else if (action_args_2nd_char == '/' && action_args[2] == '=') // i.e. //=
+					aActionType = ACT_EXPRESSION; // Mark this line as a stand-alone expression.
+				break;
+			case '.':
+			case '|':
+			case '&':
+			case '^':
+				if (action_args_2nd_char == '=') // i.e. .= and |= and &= and ^=
+					aActionType = ACT_EXPRESSION; // Mark this line as a stand-alone expression.
+				break;
+			//case '?': Stand-alone ternary such as true ? fn1() : fn2().  These are rare so are
+			// checked later, only after action_name has been checked to see if it's a valid command.
+			case '>':
+			case '<':
+				if (action_args_2nd_char == *action_args && action_args[2] == '=') // i.e. >>= and <<=
+					aActionType = ACT_EXPRESSION; // Mark this line as a stand-alone expression.
+				break;
+			//default: Leave aActionType set to ACT_INVALID. This also covers case '\0' in case that's possible.
+			} // switch()
+
+			if (aActionType) // An assignment or other type of action was discovered above.
+			{
+				if (convert_pre_inc_or_dec) // Set up pre-ops like ++index and --index to be parsed properly later.
+				{
+					// The following converts:
+					// ++x -> EnvAdd x,1 (not really "EnvAdd" per se; but ACT_ADD).
+					// Set action_args to be the word that occurs after the ++ or --:
+					action_args = omit_leading_whitespace(++action_args); // Though there generally isn't any.
+					if (StrChrAny(action_args, EXPR_ALL_SYMBOLS ".")) // Support things like ++Var ? f1() : f2() and ++Var /= 5. Don't need strstr(action_args, " ?") because the search already looks for ':'.
+						aActionType = ACT_EXPRESSION; // Mark this line as a stand-alone expression.
+					else
+					{
+						// Set up aLineText and action_args to be parsed later on as a list of two parameters:
+						// The variable name followed by the amount to be added or subtracted (e.g. "ScriptVar, 1").
+						// We're not changing the length of aLineText by doing this, so it should be large enough:
+						size_t new_length = strlen(action_args);
+						// Since action_args is just a pointer into the aLineText buffer (which caller has ensured
+						// is modifiable), use memmove() so that overlapping source & dest are properly handled:
+						memmove(aLineText, action_args, new_length + 1); // +1 to include the zero terminator.
+						// Append the second param, which is just "1" since the ++ and -- only inc/dec by 1:
+						aLineText[new_length++] = g_delimiter;
+						aLineText[new_length++] = '1';
+						aLineText[new_length] = '\0';
+					}
+				}
+				else if (aActionType != ACT_EXPRESSION) // i.e. it's ACT_ASSIGN/ASSIGNEXPR/ADD/SUB/MULT/DIV
+				{
+					if (aActionType == ACT_ADD || aActionType == ACT_SUB)
+					{
+						// Find the time units arg, if it's present, so that compound statements can be
+						// distinguished from date/time math; e.g. "x+=1, y+=2" should be marked as
+						// a stand-alone expression.
+						char *cp;
+						for (in_quotes = false, open_parens = 0, cp = action_args + 2; *cp; ++cp)
+						{
+							switch (*cp)
+							{
+							case '"': // This is whole section similar to another one later below, so see it for comments.
+								in_quotes = !in_quotes;
+								break;
+							case '(':
+								if (!in_quotes) // Literal parentheses inside a quoted string should not be counted for this purpose.
+									++open_parens;
+								break;
+							case ')':
+								if (!in_quotes)
+									--open_parens;
+								break;
+							}
+							if (*cp == g_delimiter && !in_quotes && open_parens < 1) // A delimiting comma other than one in a sub-statement or function. Shouldn't need to worry about unquoted escaped commas since they don't make sense with += and -=.
+							{
+								cp = omit_leading_whitespace(cp + 1);
+								if (StrChrAny(cp, EXPR_ALL_SYMBOLS ".")) // Don't need strstr(cp, " ?") because the search already looks for ':'.
+									aActionType = ACT_EXPRESSION; // It's clearly an expression not a word like Days or %VarContainingTheWordDays%.
+								break;
+							}
+						}
+					}
+					if (aActionType != ACT_EXPRESSION) // The above didn't make ADD/SUB a stand-alone expression.
+					{
+						// The following converts:
+						// x+=2 -> ACT_ADD x, 2.
+						// But post-inc/dec are recognized only after we check for a command name to cut down on ambiguity
+						*action_args = g_delimiter; // Replace the =,+,-,:,*,/ with a delimiter for later parsing.
+						if (aActionType != ACT_ASSIGN)
+							action_args[1] = ' '; // Remove the "=" from consideration.
+						//else the operator is '=' so it has no second character.
+					}
+				}
+				//else it's an isolated expression so no changes are desired.
+				action_args = aLineText; // Since this is an assignment and/or expression, use the line's full text for later parsing.
+			}
+		} // Handling of assignments and other operators.
+	}
+	//else aActionType was already determined by the caller.
+
+	// Now the above has ensured that action_args is the first parameter itself, or empty-string if none.
+	// If action_args now starts with a delimiter, it means that the first param is blank/empty.
+
+	if (!aActionType && !aOldActionType) // Caller nor logic above has yet determined the action.
+		if (   !(aActionType = ConvertActionType(action_name))   ) // Is this line a command?
+			aOldActionType = ConvertOldActionType(action_name);    // If not, is it an old-command?
+
+	if (!aActionType && !aOldActionType) // Didn't find any action or command in this line.
+	{
+		// v1.0.41: Support one-true brace style even if there's no space, but make it strict so that
+		// things like "Loop{ string" are reported as errors (in case user intended a file-pattern loop).
+		if (!stricmp(action_name, "Loop{") && !*action_args)
+		{
+			aActionType = ACT_LOOP;
+			add_openbrace_afterward = true;
+		}
+		else if (*action_args == '?' && IS_SPACE_OR_TAB(action_args[1]) // '?' currently requires a trailing space or tab because variable names can contain '?' (except '?' by itself).  For simplicty, no NBSP check.
+			|| strchr(EXPR_ALL_SYMBOLS ".", *action_args))
+		{
+			char *question_mark;
+			if ((*action_args == '+' || *action_args == '-') && action_args[1] == *action_args) // Post-inc/dec. See comments further below.
+			{
+				if (action_args[2]) // i.e. if the ++ and -- isn't the last thing; e.g. x++ ? fn1() : fn2() ... Var++ //= 2
+					aActionType = ACT_EXPRESSION; // Mark this line as a stand-alone expression.
+				else
+				{
+					// The logic here allows things like IfWinActive-- to be seen as commands even without
+					// a space before the -- or ++.  For backward compatibility and code simplicity, it seems
+					// best to keep that behavior rather than distinguishing between Command-- and Command --.
+					// In any case, "Command --" should continue to be seen as a command regardless of what
+					// changes are ever made.  That's why this section occurs below the command-name lookup.
+					// The following converts x++ to "ACT_ADD x,1".
+					aActionType = (*action_args == '+') ? ACT_ADD : ACT_SUB;
+					*action_args = g_delimiter;
+					action_args[1] = '1';
+				}
+				action_args = aLineText; // Since this is an assignment and/or expression, use the line's full text for later parsing.
+			}
+			else if (*action_args == '?' // Don't need a leading space if first char is '?' (though should have a trailing, but for simplicity it isn't checked).
+				|| (question_mark = strstr(action_args, " ? ")) && strchr(question_mark, ':')) // Rough check (see comments below). Relies on short-circuit boolean order.
+			{
+				// To avoid hindering load-time error detection such as misspelled command names, allow stand-alone
+				// expressions only for things that can produce a side-effect (currently only ternaries like
+				// the ones mentioned later below need to be checked since the following other things were
+				// previously recognized as ACT_EXPRESSION if appropriate: function-calls, post- and
+				// pre-inc/dec (++/--), and assignment operators like := += *= (though these don't necessarily
+				// need to be ACT_EXPRESSION to support multi-statement; they can be ACT_ASSIGNEXPR, ACT_ADD, etc.
+				// and still support comma-separated statements.
+				// Stand-alone ternaries are checked for here rather than earlier to allow a command name
+				// (of present) to take precedence (since stand-alone ternaries seem much rarer than 
+				// "Command ? something" such as "MsgBox ? something".  Could also check for a colon somewhere
+				// to the right if further ambiguity-resolution is ever needed.  Also, a stand-alone ternary
+				// should have at least one function-call and/or assignment; otherwise it would serve no purpose.
+				// A line may contain a stand-alone ternary operator to call functions that have side-effects
+				// or perform assignments.  For example:
+				//    IsDone ? fn1() : fn2()
+				//    3 > 2 ? x:=1 : y:=1
+				//    (3 > 2) ... not supported due to overlap with continuation sections.
+				aActionType = ACT_EXPRESSION; // Mark this line as a stand-alone expression.
+				action_args = aLineText; // Since this is an assignment and/or expression, use the line's full text for later parsing.
+			}
+			//else leave it as an unknown action to avoid hindering load-time error detection.
+			// In other words, don't be too permissive about what gets marked as a stand-alone expression.
+		}
+		if (!aActionType) // Above still didn't find a valid action (i.e. check aActionType again in case the above changed it).
+			// v1.0.40: Give a more specific error message now now that hotkeys can make it here due to
+			// the change that avoids the need to escape double-colons:
+			return ScriptError(strstr(aLineText, HOTKEY_FLAG) ? "Invalid hotkey." : ERR_UNRECOGNIZED_ACTION, aLineText);
+	}
+
+	Action &this_action = aActionType ? g_act[aActionType] : g_old_act[aOldActionType];
 
 	//////////////////////////////////////////////////////////////////////////////////////////////
 	// Handle escaped-sequences (escaped delimiters and all others except variable deref symbols).
@@ -3517,7 +3827,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 	// the user to have to escape commas that are intended to be literal.
 	///////////////////////////////////////////////////////////////////////////////////////
 	int mark, max_params_override = 0; // Set default.
-	if (action_type == ACT_MSGBOX)
+	if (aActionType == ACT_MSGBOX)
 	{
 		// First find out how many non-literal (non-escaped) delimiters are present.
 		// Use a high maximum so that we can almost always find and analyze the command's
@@ -3615,7 +3925,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 	/////////////////////////////////////////////////////////////
 	// MaxParams has already been verified as being <= MAX_ARGS.
 	// Any g_delimiter-delimited items beyond MaxParams will be included in a lump inside the last param:
-	int nArgs, nArgs_plus_one, open_parens;
+	int nArgs, nArgs_plus_one;
 	char *arg[MAX_ARGS], *arg_map[MAX_ARGS];
 	ActionTypeType subaction_type = ACT_INVALID; // Must init these.
 	ActionTypeType suboldaction_type = OLD_INVALID;
@@ -3624,14 +3934,14 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 		: (mIsAutoIt2 ? (this_action.MaxParamsAu2WithHighBit & 0x7F) // 0x7F removes the high-bit from consideration; that bit is used for an unrelated purpose.
 			: this_action.MaxParams);
 	int max_params_minus_one = max_params - 1;
-	bool in_quotes, is_expression;
+	bool is_expression;
 	ActionTypeType *np;
 
 	for (nArgs = mark = 0; action_args[mark] && nArgs < max_params; ++nArgs)
 	{
 		if (nArgs == 2) // i.e. the 3rd arg is about to be added.
 		{
-			switch (action_type) // will be ACT_INVALID if this_action is an old-style command.
+			switch (aActionType) // will be ACT_INVALID if this_action is an old-style command.
 			{
 			case ACT_IFWINEXIST:
 			case ACT_IFWINNOTEXIST:
@@ -3639,7 +3949,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 			case ACT_IFWINNOTACTIVE:
 				subaction_start = action_args + mark;
 				if (subaction_end_marker = ParseActionType(subaction_name, subaction_start, false))
-					if (   (subaction_type = ConvertActionType(subaction_name)) == ACT_INVALID   )
+					if (   !(subaction_type = ConvertActionType(subaction_name))   )
 						suboldaction_type = ConvertOldActionType(subaction_name);
 				break;
 			}
@@ -3697,7 +4007,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 				{
 					if (is_expression)
 						continue;
-					if (action_type == ACT_TRANSFORM && (nArgs == 2 || nArgs == 3)) // i.e. the 3rd or 4th arg is about to be added.
+					if (aActionType == ACT_TRANSFORM && (nArgs == 2 || nArgs == 3)) // i.e. the 3rd or 4th arg is about to be added.
 					{
 						// Somewhat inefficient in the case where it has to be called for both Arg#2 and Arg#3,
 						// but that is pretty rare.  Overall, expressions and quoted strings in these args
@@ -3727,7 +4037,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 							continue;
 						}
 					}
-					// v1.0.43.07: Fixed below to use this_action instead of g_act[action_type] so that the
+					// v1.0.43.07: Fixed below to use this_action instead of g_act[aActionType] so that the
 					// numeric params of legacy commands like EnvAdd/Sub/LeftClick can be detected.  Without
 					// this fix, the last comma in a line like "EnvSub, var, Add(2, 3)" is seen as a parameter
 					// delimiter, which causes a loadtime syntax error.
@@ -3787,16 +4097,16 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 	////////////////////////////////////////////////////////////////////////
 	// Handle legacy commands that are supported for backward compatibility.
 	////////////////////////////////////////////////////////////////////////
-	if (old_action_type != OLD_INVALID)
+	if (aOldActionType)
 	{
-		switch(old_action_type)
+		switch(aOldActionType)
 		{
 		case OLD_LEFTCLICK:
 		case OLD_RIGHTCLICK:
 			// Insert an arg at the beginning of the list to indicate the mouse button.
 			arg[2] = arg[1];  arg_map[2] = arg_map[1];
 			arg[1] = arg[0];  arg_map[1] = arg_map[0];
-			arg[0] = old_action_type == OLD_LEFTCLICK ? "" : "Right";  arg_map[0] = NULL; // "" is treated the same as "Left"
+			arg[0] = aOldActionType == OLD_LEFTCLICK ? "" : "Right";  arg_map[0] = NULL; // "" is treated the same as "Left"
 			return AddLine(ACT_MOUSECLICK, arg, ++nArgs, arg_map);
 		case OLD_LEFTCLICKDRAG:
 		case OLD_RIGHTCLICKDRAG:
@@ -3805,7 +4115,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 			arg[3] = arg[2];  arg_map[3] = arg_map[2];
 			arg[2] = arg[1];  arg_map[2] = arg_map[1];
 			arg[1] = arg[0];  arg_map[1] = arg_map[0];
-			arg[0] = (old_action_type == OLD_LEFTCLICKDRAG) ? "Left" : "Right";  arg_map[0] = NULL;
+			arg[0] = (aOldActionType == OLD_LEFTCLICKDRAG) ? "Left" : "Right";  arg_map[0] = NULL;
 			return AddLine(ACT_MOUSECLICKDRAG, arg, ++nArgs, arg_map);
 		case OLD_HIDEAUTOITWIN:
 			// This isn't a perfect mapping because the word "on" or "off" might be contained
@@ -3858,22 +4168,22 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 
 		// For these, break rather than return so that further processing can be done:
 		case OLD_IFEQUAL:
-			action_type = ACT_IFEQUAL;
+			aActionType = ACT_IFEQUAL;
 			break;
 		case OLD_IFNOTEQUAL:
-			action_type = ACT_IFNOTEQUAL;
+			aActionType = ACT_IFNOTEQUAL;
 			break;
 		case OLD_IFGREATER:
-			action_type = ACT_IFGREATER;
+			aActionType = ACT_IFGREATER;
 			break;
 		case OLD_IFGREATEROREQUAL:
-			action_type = ACT_IFGREATEROREQUAL;
+			aActionType = ACT_IFGREATEROREQUAL;
 			break;
 		case OLD_IFLESS:
-			action_type = ACT_IFLESS;
+			aActionType = ACT_IFLESS;
 			break;
 		case OLD_IFLESSOREQUAL:
-			action_type = ACT_IFLESSOREQUAL;
+			aActionType = ACT_IFLESSOREQUAL;
 			break;
 #ifdef _DEBUG
 		default:
@@ -3887,7 +4197,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 	//////////////////////////////////////////////////////////////////////////////////////////////////
 	// The check below: Don't bother if this IF (e.g. IfWinActive) has zero params or if the
 	// subaction was already found above:
-	if (nArgs && !subaction_type && !suboldaction_type && ACT_IS_IF_OLD(action_type, old_action_type))
+	if (nArgs && !subaction_type && !suboldaction_type && ACT_IS_IF_OLD(aActionType, aOldActionType))
 	{
 		char *delimiter;
 		char *last_arg = arg[nArgs - 1];
@@ -3903,7 +4213,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 				subaction_start = action_args + mark;
 				if (subaction_end_marker = ParseActionType(subaction_name, subaction_start, false))
 				{
-					if (   (subaction_type = ConvertActionType(subaction_name)) == ACT_INVALID   )
+					if (   !(subaction_type = ConvertActionType(subaction_name))   )
 						suboldaction_type = ConvertOldActionType(subaction_name);
 					if (subaction_type || suboldaction_type) // A valid sub-action (command) was found.
 					{
@@ -3925,7 +4235,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 	// Loop {   ; Known limitation: Overlaps with file-pattern loop that retrieves single file of name "{".
 	// Loop 5 { ; Also overlaps, this time with file-pattern loop that retrieves numeric filename ending in '{'.
 	// Loop %Var% {  ; Similar, but like the above seems acceptable given extreme rarity of user intending a file pattern.
-	if (action_type == ACT_LOOP && nArgs == 1 && arg[0][0])  // A loop with exactly one, non-blank arg.
+	if (aActionType == ACT_LOOP && nArgs == 1 && arg[0][0])  // A loop with exactly one, non-blank arg.
 	{
 		char *arg1 = arg[0]; // For readability and possibly performance.
 		// A loop with the above criteria (exactly one arg) can only validly be a normal/counting loop or
@@ -3955,7 +4265,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 		}
 	}
 
-	if (!AddLine(action_type, arg, nArgs, arg_map))
+	if (!AddLine(aActionType, arg, nArgs, arg_map))
 		return FAIL;
 	if (add_openbrace_afterward)
 		if (!AddLine(ACT_BLOCK_BEGIN))
@@ -4320,13 +4630,13 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 						if (!in_quotes)
 						{
 							if (!open_parens)
-								return ScriptError("Missing \"(\"", cp); // And indicate cp as the exact spot.
+								return ScriptError(ERR_MISSING_OPEN_PAREN, cp); // And indicate cp as the exact spot.
 							--open_parens;
 						}
 						break;
 					}
 				}
-				if (open_parens) // At least one open-paren is never closed.
+				if (open_parens) // At least one '(' is never closed.
 					return ScriptError(ERR_MISSING_CLOSE_PAREN, this_new_arg.text);
 
 				#define ERR_EXP_ILLEGAL_CHAR "The leftmost character above is illegal in an expression." // "above" refers to the layout of the error dialog.
@@ -4363,7 +4673,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 						for (op_end = op_begin + 1;; ++op_end)
 						{
 							if (!*op_end)
-								return ScriptError("Missing close-quote.", op_begin);
+								return ScriptError(ERR_MISSING_CLOSE_QUOTE, op_begin);
 							if (*op_end == '"') // If not followed immediately by another, this is the end of it.
 							{
 								++op_end;
@@ -4382,7 +4692,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					// Now op_end marks the end of this operand.  The end might be the zero terminator, an operator, etc.
 
 					// Must be done only after op_end has been set above (since loop uses op_end):
-					if (*op_begin == '.' && IS_SPACE_OR_TAB(op_begin[1])) // If true, it can't be something like "5." because the dot inside would never be parsed separately in that case.
+					if (*op_begin == '.' && strchr(" \t=", op_begin[1])) // If true, it can't be something like "5." because the dot inside would never be parsed separately in that case.  Also allows ".=" operator.
 						continue;
 					//else any '.' not followed by a space or tab is likely a number without a leading zero,
 					// so continue on below to process it.
@@ -4453,10 +4763,12 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 
 					// Below takes care of recognizing hexadecimal integers, which avoids the 'x' character
 					// inside of something like 0xFF from being detected as the name of a variable:
-					if (!IsPureNumeric(op_begin, true, false, true))
+					if (   !IsPureNumeric(op_begin, true, false, true) // Not a numeric literal...
+						&& !(*op_begin == '?' && !op_begin[1])   ) // ...and not an isolated '?' operator.  Relies on short-circuit boolean order.
 					{
 						is_function = (orig_char == '(');
-						// This operand must be a variable reference or string literal, otherwise it's a syntax error.
+						// This operand must be a variable/function reference or string literal, otherwise it's
+						// a syntax error.
 						// Check explicitly for derefs since the vast majority don't have any, and this
 						// avoids the function call in those cases:
 						if (strchr(op_begin, g_DerefChar)) // This operand contains at least one double dereference.
@@ -4498,7 +4810,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 							++deref_count;
 						}
 					}
-					//else purely numeric.  Do nothing since pure numbers don't need any processing at this stage.
+					//else purely numeric or '?'.  Do nothing since pure numbers and '?' don't need any
+					// processing at this stage.
 					*op_end = orig_char; // Undo the temporary termination.
 				} // expression pre-parsing loop.
 
@@ -4534,7 +4847,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					// wParam and lParam) as expressions so that at runtime, the leading '"' in a
 					// quoted numeric string such as "123" can be used to differentiate that string
 					// from a numeric value/expression such as 123 or 122+1.
-					if (!*cp && !(aActionType == ACT_SENDMESSAGE || aActionType == ACT_POSTMESSAGE))
+					if (!*cp && aActionType != ACT_SENDMESSAGE && aActionType != ACT_POSTMESSAGE)
 					{
 						this_new_arg.is_expression = false;
 						// Bugfix for 1.0.25.06: The below has been disabled because:
@@ -5928,6 +6241,8 @@ ResultType Script::DefineFunc(char *aBuf, Var *aFuncExceptionVar[])
 			value_length = param_end - param_start;
 			if (value_length > MAX_FORMATTED_NUMBER_LENGTH) // Too rare to justify elaborate handling or error reporting.
 				value_length = MAX_FORMATTED_NUMBER_LENGTH;
+			// The following section is similar to that used to support initializers for static variables.
+			// So maybe maintain them together.
 			strlcpy(buf, param_start, value_length + 1);  // Make a temp copy to simplify the below (especially IsPureNumeric).
 			if (!strcmp(buf, "\"\"")) // Empty pair of quotes "".
 			{
@@ -6184,6 +6499,12 @@ Func *Script::FindFunc(char *aFuncName, size_t aFuncNameLength)
 	}
 	else if (!stricmp(func_name, "StrLen"))
 		bif = BIF_StrLen;
+	else if (!stricmp(func_name, "SubStr"))
+	{
+		bif = BIF_SubStr;
+		min_params = 2;
+		max_params = 3;
+	}
 	else if (!stricmp(func_name, "InStr"))
 	{
 		bif = BIF_InStr;
@@ -7333,8 +7654,15 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 						// as required by ByRef:
 						for (cp = param_start, param_last_char = omit_trailing_whitespace(param_start, param_end - 1)
 							; cp <= param_last_char; ++cp)
-							if (strchr(EXPR_ALL_SYMBOLS, *cp))
+							if (strchr(EXPR_ALL_SYMBOLS_FOR_BYREF, *cp)) // i.e. don't forbid parentheses because a variable or assignment can be enclosed in them even though they're redundant.  Don't forbid space/tab because operators like := can have them.
 							{
+								if (strchr(EXPR_ASSIGN1_SYMBOLS, *cp) && strchr(EXPR_ASSIGN2_SYMBOLS, cp[1])) // Relies on short-circuit boolean order.
+								{
+									// Skip over :=, +=, -=, *=, /=, ++, -- ... because they can be passed ByRef.
+									// In fact, don't even continue the loop because any assignment can be followed
+									// by an arbitrarily complex sub-expression which shouldn't disqualify ByRef.
+									break;
+								}
 								abort = true; // So that the caller doesn't also report an error.
 								return line->PreparseError(ERR_BYREF, param_start);   // param_start seems more informative than func.mParam[deref->param_count].var->mName
 							}
@@ -7344,7 +7672,8 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 						// For each deref after the function name itself, ensure that there is at least
 						// one deref in between this param's param_start and param_end.  This finds many
 						// common syntax errors such as passing a literal number or string to a ByRef
-						// parameter.  Note that there can be more than one for something like Array%i%_%j%.
+						// parameter.  Note that there can be more than one for something like Array%i%_%j%
+						// or a ternary like true ? x : y.
 						for (found = false, deref2 = deref + 1; deref2 && deref2->marker; ++deref2)
 							if (deref2->marker >= param_start && deref2->marker < param_end)
 							{
@@ -7445,7 +7774,7 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 				else
 				{
 					abort = true; // So that the caller doesn't also report an error.
-					return line->PreparseError("Missing \"}\"");
+					return line->PreparseError(ERR_MISSING_CLOSE_BRACE);
 				}
 			--nest_level;
 			// The convention is to have the BLOCK_BEGIN's related_line
@@ -7463,7 +7792,7 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 			// END_BLOCK line itself so that the caller can differentiate between
 			// a NULL due to end-of-script and a NULL caused by an error:
 			return aFindBlockEnd ? line  // Doesn't seem necessary to set abort to true.
-				: line->PreparseError("Missing \"{\"");
+				: line->PreparseError(ERR_MISSING_OPEN_BRACE);
 		default: // Continue line-by-line.
 			line = line->mNextLine;
 		} // switch()
@@ -9520,12 +9849,12 @@ __forceinline ResultType Line::Perform() // __forceinline() currently boosts per
 			// previously by ExpandArgs()) just to find out if it's IsBinaryClip()).
 			if (ARGVARRAW2) // RAW is safe due to the above check of mArgc > 1.
 			{
-				if (ARGVARRAW2->IsBinaryClip())             // This is executed via things like: x := %binary_clip%
-					return AssignBinaryClip(*output_var, *ARGVARRAW2);
+				if (ARGVARRAW2->IsBinaryClip()) // This is true via things like: x := %binary_clip%
+					return output_var->AssignBinaryClip(*ARGVARRAW2); // ARG2 must be VAR_NORMAL due to IsBinaryClip() check above (it can't even be VAR_CLIPBOARDALL).
 					// Performance should be good in this case since IsBinaryClip() implies a single isolated deref,
 					// which would never have been copied into the deref buffer.
 				if (ARGVARRAW2->Type() == VAR_CLIPBOARDALL) // Probably never called this way due to load-time
-					return AssignClipboardAll(*output_var); // conversion to ACT_ASSIGN.  But kept in case it can be.
+					return output_var->AssignClipboardAll(); // conversion to ACT_ASSIGN.  But kept in case it can be.
 			}
 		}
 		// Note that simple assignments such as Var:="xyz" or Var:=Var2 are resolved to be
@@ -9533,10 +9862,12 @@ __forceinline ResultType Line::Perform() // __forceinline() currently boosts per
 		// normally rather than evaluated as an expression.
 		return output_var->Assign(ARG2); // ARG2 now contains the evaluated result of the expression.
 
-	case ACT_FUNCTIONCALL:
+	case ACT_EXPRESSION:
 		// Nothing needs to be done because the expression in ARG1 (which is the only arg) has already
-		// been evaluated and its functions and subfunctions called, e.g. the following line:
-		// fn(123, "string", var, fn2(y))
+		// been evaluated and its functions and subfunctions called.  Examples:
+		//    fn(123, "string", var, fn2(y))
+		//    x&=3
+		//    var ? fn1() : fn2()
 		return OK;
 
 	// Like AutoIt2, if either output_var or ARG1 aren't purely numeric, they
@@ -9653,23 +9984,21 @@ __forceinline ResultType Line::Perform() // __forceinline() currently boosts per
 			return output_var->Assign(ATOI64(output_var->Contents()) * ATOI64(ARG2));  // Overload: Assigns an INT.
 
 	case ACT_DIV:
-	{
 		DETERMINE_NUMERIC_TYPES
 		IF_EITHER_IS_FLOAT
 		{
 			double ARG2_as_float = ATOF(ARG2);  // Since ATOF() returns double, at least on MSVC++ 7.x
-			if (!ARG2_as_float)
-				return LineError(ERR_DIVIDEBYZERO ERR_ABORT, FAIL, ARG2);
+			if (!ARG2_as_float)              // v1.0.46: Make behavior more consistent with expressions by
+				return output_var->Assign(); // avoiding a runtime error dialog; just make the output variable blank.
 			return output_var->Assign(ATOF(output_var->Contents()) / ARG2_as_float);  // Overload: Assigns a double.
 		}
 		else // Non-numeric variables or values are considered to be zero for the purpose of the calculation.
 		{
 			__int64 ARG2_as_int = ATOI64(ARG2);
-			if (!ARG2_as_int)
-				return LineError(ERR_DIVIDEBYZERO ERR_ABORT, FAIL, ARG2);
+			if (!ARG2_as_int)                // v1.0.46: Make behavior more consistent with expressions by
+				return output_var->Assign(); // avoiding a runtime error dialog; just make the output variable blank.
 			return output_var->Assign(ATOI64(output_var->Contents()) / ARG2_as_int);  // Overload: Assigns an INT.
 		}
-	}
 
 	case ACT_STRINGLEFT:
 		chars_to_extract = ATOI(ARG3); // Use 32-bit signed to detect negatives and fit it VarSizeType.
@@ -10161,7 +10490,28 @@ __forceinline ResultType Line::Perform() // __forceinline() currently boosts per
 	case ACT_CRITICAL:
 		// For code size reduction, no runtime validation is done (only load-time).  Thus, anything other
 		// than "Off" (especially NEUTRAL) is considered to be "On":
-		g.AllowThreadToBeInterrupted = !(g.ThreadIsCritical = (ConvertOnOff(ARG1, NEUTRAL) != TOGGLED_OFF));
+		if (g.ThreadIsCritical = (ConvertOnOff(ARG1, NEUTRAL) != TOGGLED_OFF))
+		{
+			// v1.0.46: When the current thread is critical, have the script check messages less often to
+			// reduce situations where an OnMesage or GUI message must be discarded due to "thread already
+			// running".  Using 16 rather than the default of 5 solves reliability problems in a custom-menu-draw
+			// script and probably many similar scripts -- even when the system is under load (though 16 might not
+			// be enough during an extreme load depending on the exact preemption/timeslice dynamics involved).
+			// DON'T GO TOO HIGH because this setting reduces response time for ALL messages, even those that
+			// don't launch script threads (especially painting/drawing and other screen-update events).
+			// Future enhancement: Could allow the value of 16 to be customized via something like "Critical 25".
+			// However, it seems best not to allow it to go too high (say, no more than 2000) because that would
+			// cause the script to completely hang if the critical thread never finishes, or takes a long time
+			// to finish.  A configurable limit might also allow things to work better on Win9x because it has
+			// a bigger tickcount granularity.
+			g.PeekFrequency = 16; // Some hardware has a tickcount granularity of 15 instead of 10, so this covers more variations.
+			g.AllowThreadToBeInterrupted = false;
+		}
+		else
+		{
+			g.PeekFrequency = DEFAULT_PEEK_FREQUENCY;
+			g.AllowThreadToBeInterrupted = true;
+		}
 		// If it's being turned off, allow thread to be immediately interrupted regardless of any
 		// "Thread Interrupt" settings.
 		// Now that the thread's interruptibility has been explicitly set, the script is in charge

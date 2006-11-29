@@ -249,7 +249,8 @@ Action g_act[] =
 	, {"=", 1, 2, 2 H, NULL}  // Omitting the second param sets the var to be empty. "H" (high-bit) is probably needed for those cases when PerformAssign() must call ExpandArgs() or similar.
 	, {":=", 1, 2, 2, {2, 0}} // Same, though param #2 is flagged as numeric so that expression detection is automatic.  "H" (high-bit) doesn't appear to be needed even when ACT_ASSIGNEXPR calls AssignBinaryClip() because that AssignBinaryClip() checks for source==dest.
 
-	// ACT_FUNCTIONCALL, which is a naked function call outside of any IF or assignment, e.g. fn1(123, fn2(y))
+	// ACT_EXPRESSION, which is a stand-alone expression outside of any IF or assignment-command;
+	// e.g. fn1(123, fn2(y)) or x&=3
 	// Its name should be "" so that Line::ToText() will properly display it.
 	, {"", 1, 1, 1, {1, 0}}
 

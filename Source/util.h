@@ -490,8 +490,8 @@ inline char *UTOA(unsigned long value, char *buf)
 // window's current keyboard layout rather than the script's.  This change is somewhat less certain to
 // be desirable uncondionally for the Input command (especially invisible/non-V-option Inputs); but it 
 // seems best to use the same approach to avoid calling ToAsciiEx() more than once in cases where a
-// script has hotstrings and also uses the Input command Calling ToAsciiEx() twice in such a case would
-// be likely to aggravate its side effects with dead keys as described at length below).
+// script has hotstrings and also uses the Input command. Calling ToAsciiEx() twice in such a case would
+// be likely to aggravate its side effects with dead keys as described at length in the hook/Input code).
 #define Get_active_window_keybd_layout \
 	HWND active_window;\
 	HKL active_window_keybd_layout = GetKeyboardLayout((active_window = GetForegroundWindow())\

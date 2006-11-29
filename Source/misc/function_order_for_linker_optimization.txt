@@ -56,9 +56,9 @@ atof             ;
 ?ATOF@@YANPAD@Z  ; ATOF is called far less often than ATOI64 (though perhaps about the same as ATOI().
 
 ?PerformAssign@Line@@AAE?AW4ResultType@@XZ
-?Assign@Var@@QAE?AW4ResultType@@N@Z  ; Assign a Double (calls snprintf).
-?Free@Var@@QAEXH_N@Z
+?Free@Var@@QAEXH_N@Z  ; Called fairly often by the main Var::Assign().
 ?Assign@Var@@QAE?AW4ResultType@@PADK_N1@Z  ; Assign MAIN
+?Assign@Var@@QAE?AW4ResultType@@AAUExprTokenType@@@Z  ; Assign a Token.
 
 ; Some below also used by ExpandExpression to write results back out to the deref buffer, and for conversion of numbers to strings:
 _itoa
@@ -439,30 +439,6 @@ _vsnprintf  ; Sandwiching this function between the other two seems likely to yi
 ; SCRIPT2.OBJ
 ??$swap@J@@YAXAAJ0@Z
 
-?BIF_Abs@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_Asc@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_ASinACos@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_ATan@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_Chr@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_Cos@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_Exp@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_FileExist@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_FloorCeil@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_GetKeyState@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_IL_Add@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_IL_Create@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_IL_Destroy@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_InStr@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_IsLabel@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_LV_AddInsertModify@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_LV_Delete@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_LV_GetNextOrCount@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_LV_GetText@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_LV_InsertModifyDeleteCol@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_LV_SetImageList@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_Mod@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_OnMessage@@YAXAAUExprTokenType@@QAPAU1@H@Z
-
 ; LIB_PCRE
 pcre_study
 pcre_compile
@@ -494,17 +470,6 @@ LeaveCriticalSection@4
 DeleteCriticalSection@4
 EnterCriticalSection@4
 
-?BIF_Round@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_Sin@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_SqrtLogLn@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_StatusBar@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_StrLen@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_Tan@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_TV_AddModifyDelete@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_TV_Get@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_TV_GetRelatedItem@@YAXAAUExprTokenType@@QAPAU1@H@Z
-?BIF_WinExistActive@@YAXAAUExprTokenType@@QAPAU1@H@Z
-
 ?ArgMustBeDereferenced@Line@@QAE?AW4ResultType@@PAVVar@@HQAPAV3@@Z ; Seldom called; only for isolated input variables.
 ?ResolveVarOfArg@Line@@QAEPAVVar@@H_N@Z
 ?ResolveAlias@Var@@QAEPAV1@XZ
@@ -525,6 +490,8 @@ EnterCriticalSection@4
 ?BackupFunctionVars@Var@@SA?AW4ResultType@@AAVFunc@@AAPAUVarBkp@@AAH@Z
 ?Backup@Var@@QAEXAAUVarBkp@@@Z
 ?AcceptNewMem@Var@@QAEXPADK@Z
+?AppendIfRoom@Var@@QAE?AW4ResultType@@PADK@Z
+?Assign@Var@@QAE?AW4ResultType@@N@Z  ; Kept away from central section because most scripts don't use doubles.  Assign a Double (calls snprintf).
 ?AssignHWND@Var@@QAE?AW4ResultType@@PAUHWND__@@@Z  ; Assign an HWND.
 ?OverwriteAttrib@Var@@QAEXE@Z
 
@@ -532,7 +499,48 @@ EnterCriticalSection@4
 ?ExprTokenToDoubleOrInt@@YA?AW4ResultType@@AAUExprTokenType@@@Z
 ?ExprTokenToInt64@@YA_JAAUExprTokenType@@@Z
 ?ExprTokenToString@@YAPADAAUExprTokenType@@PAD@Z
-?ExprTokenToVar@@YA?AW4ResultType@@AAUExprTokenType@@AAVVar@@@Z
+; >>> Frequently-called and perf-sensitive, so keep the following near ExprTokenToString() above <<<
+?BIF_InStr@@YAXAAUExprTokenType@@QAPAU1@H@Z  ; Often called close together in scripts.
+?BIF_SubStr@@YAXAAUExprTokenType@@QAPAU1@H@Z ;
+?BIF_StrLen@@YAXAAUExprTokenType@@QAPAU1@H@Z ;
+
+?BIF_LV_AddInsertModify@@YAXAAUExprTokenType@@QAPAU1@H@Z
+?BIF_LV_Delete@@YAXAAUExprTokenType@@QAPAU1@H@Z
+?BIF_LV_GetNextOrCount@@YAXAAUExprTokenType@@QAPAU1@H@Z
+?BIF_LV_GetText@@YAXAAUExprTokenType@@QAPAU1@H@Z
+?BIF_LV_InsertModifyDeleteCol@@YAXAAUExprTokenType@@QAPAU1@H@Z
+?BIF_LV_SetImageList@@YAXAAUExprTokenType@@QAPAU1@H@Z
+
+?BIF_IL_Add@@YAXAAUExprTokenType@@QAPAU1@H@Z      ; ImageList functions: kept between ListView and TreeView functions.
+?BIF_IL_Create@@YAXAAUExprTokenType@@QAPAU1@H@Z
+?BIF_IL_Destroy@@YAXAAUExprTokenType@@QAPAU1@H@Z
+
+?BIF_TV_AddModifyDelete@@YAXAAUExprTokenType@@QAPAU1@H@Z
+?BIF_TV_Get@@YAXAAUExprTokenType@@QAPAU1@H@Z
+?BIF_TV_GetRelatedItem@@YAXAAUExprTokenType@@QAPAU1@H@Z
+
+?BIF_StatusBar@@YAXAAUExprTokenType@@QAPAU1@H@Z
+
+?BIF_Asc@@YAXAAUExprTokenType@@QAPAU1@H@Z
+?BIF_Chr@@YAXAAUExprTokenType@@QAPAU1@H@Z
+?BIF_FileExist@@YAXAAUExprTokenType@@QAPAU1@H@Z
+?BIF_GetKeyState@@YAXAAUExprTokenType@@QAPAU1@H@Z
+?BIF_IsLabel@@YAXAAUExprTokenType@@QAPAU1@H@Z
+?BIF_OnMessage@@YAXAAUExprTokenType@@QAPAU1@H@Z
+?BIF_WinExistActive@@YAXAAUExprTokenType@@QAPAU1@H@Z
+
+?BIF_Abs@@YAXAAUExprTokenType@@QAPAU1@H@Z
+?BIF_Mod@@YAXAAUExprTokenType@@QAPAU1@H@Z
+?BIF_Round@@YAXAAUExprTokenType@@QAPAU1@H@Z
+?BIF_FloorCeil@@YAXAAUExprTokenType@@QAPAU1@H@Z
+
+?BIF_Exp@@YAXAAUExprTokenType@@QAPAU1@H@Z
+?BIF_SqrtLogLn@@YAXAAUExprTokenType@@QAPAU1@H@Z
+?BIF_Cos@@YAXAAUExprTokenType@@QAPAU1@H@Z
+?BIF_Sin@@YAXAAUExprTokenType@@QAPAU1@H@Z
+?BIF_Tan@@YAXAAUExprTokenType@@QAPAU1@H@Z
+?BIF_ASinACos@@YAXAAUExprTokenType@@QAPAU1@H@Z
+?BIF_ATan@@YAXAAUExprTokenType@@QAPAU1@H@Z
 
 qmathAcos@8
 qmathAsin@8
@@ -1490,8 +1498,8 @@ WSAStartup@8
 ?PrepareForWrite@Clipboard@@QAEPADI@Z
 ?Set@Clipboard@@QAE?AW4ResultType@@PADI@Z
 ?Contents@Clipboard@@QAEPADXZ
-?AssignBinaryClip@Line@@AAE?AW4ResultType@@AAVVar@@0@Z  ; script2.obj
-?AssignClipboardAll@Line@@AAE?AW4ResultType@@AAVVar@@@Z  ; script2.obj
+?AssignClipboardAll@Var@@QAE?AW4ResultType@@XZ  ; var.obj
+?AssignBinaryClip@Var@@QAE?AW4ResultType@@AAV1@@Z  ; var.obj
 
 ; Hook
 ?AddRemoveHooks@@YAXE_N@Z

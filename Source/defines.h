@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.45.04"
+#define NAME_VERSION "1.0.46.00"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -137,29 +137,63 @@ enum SymbolType // For use with ExpandExpression() and IsPureNumeric().
 	 PURE_NOT_NUMERIC // Must be zero/false because callers rely on that.
 	, PURE_INTEGER, PURE_FLOAT
 	, SYM_STRING = PURE_NOT_NUMERIC, SYM_INTEGER = PURE_INTEGER, SYM_FLOAT = PURE_FLOAT // Specific operand types.
-#define IS_NUMERIC(symbol) ((symbol) == SYM_INTEGER || (symbol) == SYM_FLOAT)
+#define IS_NUMERIC(symbol) ((symbol) == SYM_INTEGER || (symbol) == SYM_FLOAT) // Ordered for short-circuit performance.
 	, SYM_VAR // An operand that is a variable's contents.
 	, SYM_OPERAND // Generic/undetermined type of operand.
 	, SYM_OPERAND_END // Marks the symbol after the last operand.  This value is used below.
 	, SYM_BEGIN = SYM_OPERAND_END  // SYM_BEGIN is a special marker to simplify the code.
 #define IS_OPERAND(symbol) ((symbol) < SYM_OPERAND_END)
+	, SYM_POST_INCREMENT, SYM_POST_DECREMENT // Kept in this position for use by YIELDS_AN_OPERAND() [helps performance].
 	, SYM_CPAREN, SYM_OPAREN, SYM_COMMA  // CPAREN (close-paren) must come right before OPAREN and must be the first non-operand symbol other than SYM_BEGIN.
-#define IS_OPERAND_OR_CPAREN(symbol) ((symbol) < SYM_OPAREN) // Definitely needs the parentheses around symbol.
-	, SYM_OR, SYM_AND, SYM_LOWNOT  // LOWNOT is the word "not", the low precedence counterpart of !
+#define YIELDS_AN_OPERAND(symbol) ((symbol) < SYM_OPAREN) // CPAREN also covers the tail end of a function call.  Post-inc/dec yields an operand for things like Var++ + 2.  Definitely needs the parentheses around symbol.
+	, SYM_ASSIGN, SYM_ASSIGN_ADD, SYM_ASSIGN_SUBTRACT, SYM_ASSIGN_MULTIPLY, SYM_ASSIGN_DIVIDE, SYM_ASSIGN_FLOORDIVIDE
+	, SYM_ASSIGN_BITOR, SYM_ASSIGN_BITXOR, SYM_ASSIGN_BITAND, SYM_ASSIGN_BITSHIFTLEFT, SYM_ASSIGN_BITSHIFTRIGHT
+	, SYM_ASSIGN_CONCAT // THIS MUST BE KEPT AS THE LAST (AND SYM_ASSIGN THE FIRST) BECAUSE THEY'RE USED IN A RANGE-CHECK.
+#define IS_ASSIGNMENT(symbol) (symbol <= SYM_ASSIGN_CONCAT && symbol >= SYM_ASSIGN) // Check upper bound first for short-circuit performance.
+	, SYM_IFF_ELSE, SYM_IFF_THEN // THESE TERNARY OPERATORS MUST BE KEPT IN THIS ORDER AND ADJACENT TO THE BELOW.
+	, SYM_OR, SYM_AND // MUST BE KEPT IN THIS ORDER AND ADJACENT TO THE ABOVE because infix-to-postfix is optimized to check a range rather than a series of equalities.
+	, SYM_LOWNOT  // LOWNOT is the word "not", the low precedence counterpart of !
 	, SYM_EQUAL, SYM_EQUALCASE, SYM_NOTEQUAL // =, ==, <>
 	, SYM_GT, SYM_LT, SYM_GTOE, SYM_LTOE  // >, <, >=, <=
 	, SYM_CONCAT
 	, SYM_BITOR // Seems more intuitive to have these higher in prec. than the above, unlike C and Perl, but like Python.
-	, SYM_BITXOR
+	, SYM_BITXOR // SYM_BITOR (ABOVE) MUST BE KEPT FIRST AMONG THE BIT OPERATORS BECAUSE IT'S USED IN A RANGE-CHECK.
 	, SYM_BITAND
-	, SYM_BITSHIFTLEFT, SYM_BITSHIFTRIGHT // << >>
-	, SYM_PLUS, SYM_MINUS
-	, SYM_TIMES, SYM_DIVIDE, SYM_FLOORDIVIDE
-	, SYM_NEGATIVE, SYM_HIGHNOT, SYM_BITNOT, SYM_ADDRESS  // Don't change position or order of these because Infix-to-postfix converter's special handling for SYM_POWER relies on them being adjacent to each other.
-	, SYM_POWER    // See below for why this takes precedence over negative.
-	, SYM_DEREF
+	, SYM_BITSHIFTLEFT, SYM_BITSHIFTRIGHT // << >>  ALSO: SYM_BITSHIFTRIGHT MUST BE KEPT LAST AMONG THE BIT OPERATORS BECAUSE IT'S USED IN A RANGE-CHECK.
+	, SYM_ADD, SYM_SUBTRACT
+	, SYM_MULTIPLY, SYM_DIVIDE, SYM_FLOORDIVIDE
+	, SYM_NEGATIVE, SYM_HIGHNOT, SYM_BITNOT, SYM_ADDRESS, SYM_DEREF  // Don't change position or order of these because Infix-to-postfix converter's special handling for SYM_POWER relies on them being adjacent to each other.
+	, SYM_POWER    // See comments near precedence array for why this takes precedence over SYM_NEGATIVE.
+	, SYM_PRE_INCREMENT, SYM_PRE_DECREMENT // Must be kept after the post-ops and in this order relative to each other due to a range check in the code.
 	, SYM_FUNC     // A call to a function.
-	, SYM_COUNT    // Must be last.
+	, SYM_COUNT    // Must be last because it's the total symbol count for everything above.
+	, SYM_INVALID = SYM_COUNT
+};
+
+struct DerefType; // Forward declarations for use below.
+class Var;        //
+struct ExprTokenType  // Something in the compiler hates the name TokenType, so using a different name.
+{
+	// Due to the presence of 8-byte members (double and __int64) this entire struct is aligned on 8-byte
+	// vs. 4-byte boundaries.  The compiler defaults to this because otherwise an 8-byte member might
+	// sometimes not start at an even address, which would hurt performance on Pentiums, etc.
+	union // Which of its members is used depends on the value of symbol, below.
+	{
+		__int64 value_int64; // for SYM_INTEGER
+		double value_double; // for SYM_FLOAT
+		DerefType *deref;    // for SYM_FUNC
+		Var *var;            // for SYM_VAR
+		struct {char *marker; char *buf;};  // for SYM_STRING and SYM_OPERAND (buf is used by built-in functions).
+	};
+	// Note that marker's str-length should not be stored in this struct, even though it might be readily
+	// available in places and thus help performance.  This is because if it were stored and the marker
+	// or SYM_VAR's var pointed to a location that was changed as a side effect of an expression's
+	// call to a script function, the length would then be invalid.
+	SymbolType symbol; // Short-circuit benchmark is currently much faster with this and the next beneath the union, but not sure why.
+	ExprTokenType *circuit_token; // Facilitates short-circuit boolean evaluation.
+	// The above two probably need to be adjacent to each other to conserve memory due to 8-byte alignment,
+	// which is the default alignment (for performance reasons) in any struct that contains 8-byte members
+	// such as double and __int64.
 };
 
 // But the array that goes with these actions is in globaldata.cpp because
@@ -170,7 +204,7 @@ enum enum_act {
 // Seems best to make ACT_INVALID zero so that it will be the ZeroMemory() default within
 // any POD structures that contain an action_type field:
   ACT_INVALID = FAIL  // These should both be zero for initialization and function-return-value purposes.
-, ACT_ASSIGN, ACT_ASSIGNEXPR, ACT_FUNCTIONCALL, ACT_ADD, ACT_SUB, ACT_MULT, ACT_DIV
+, ACT_ASSIGN, ACT_ASSIGNEXPR, ACT_EXPRESSION, ACT_ADD, ACT_SUB, ACT_MULT, ACT_DIV
 , ACT_ASSIGN_FIRST = ACT_ASSIGN, ACT_ASSIGN_LAST = ACT_DIV
 , ACT_REPEAT // Never parsed directly, only provided as a translation target for the old command (see other notes).
 , ACT_ELSE   // Parsed at a lower level than most commands to support same-line ELSE-actions (e.g. "else if").
@@ -372,12 +406,12 @@ typedef UCHAR HookType;
 // Therefore, must update tick_now again (its value is used by macro and possibly by its caller)
 // to avoid having to Peek() immediately after the next iteration.
 // ...
-// The code might bench faster when "g_script.mLastPeekTime = tick_now" is a sep. operation rather
+// The code might bench faster when "g_script.mLastPeekTime = tick_now" is a separate operation rather
 // than combined in a chained assignment statement.
 #define LONG_OPERATION_UPDATE \
 {\
 	tick_now = GetTickCount();\
-	if (tick_now - g_script.mLastPeekTime > 5)\
+	if (tick_now - g_script.mLastPeekTime > g.PeekFrequency)\
 	{\
 		if (PeekMessage(&msg, NULL, 0, 0, PM_NOREMOVE))\
 			MsgSleep(-1);\
@@ -390,7 +424,7 @@ typedef UCHAR HookType;
 #define LONG_OPERATION_UPDATE_FOR_SENDKEYS \
 {\
 	tick_now = GetTickCount();\
-	if (tick_now - g_script.mLastPeekTime > 5)\
+	if (tick_now - g_script.mLastPeekTime > g.PeekFrequency)\
 	{\
 		if (PeekMessage(&msg, NULL, 0, 0, PM_NOREMOVE))\
 			SLEEP_WITHOUT_INTERRUPTION(-1) \
@@ -508,6 +542,7 @@ struct global_struct
 
 	// All these one-byte members are kept adjacent to make the struct smaller, which helps conserve stack space:
 	SendModes SendMode;
+	DWORD PeekFrequency; // DWORD vs. UCHAR might improve performance a little since it's checked so often.
 	DWORD CalledByIsDialogMessageOrDispatchMsg; // Detects that fact that some messages (like WM_KEYDOWN->WM_NOTIFY for UpDown controls) are translated to different message numbers by IsDialogMessage (and maybe Dispatch too).
 	bool CalledByIsDialogMessageOrDispatch; // Helps avoid launching a monitor function twice for the same message.  This would probably be okay if it were a normal global rather than in the g-struct, but due to messaging complexity, this lends peace of mind and robustness.
 	bool TitleFindFast; // Whether to use the fast mode of searching window text, or the more thorough slow mode.
@@ -572,6 +607,8 @@ inline void global_init(global_struct &g)
 	// Not sure what the optimal default is.  1 seems too low (scripts would be very slow by default):
 	g.LinesPerCycle = -1;
 	g.IntervalBeforeRest = 10;  // sleep for 10ms every 10ms
+	#define DEFAULT_PEEK_FREQUENCY 5
+	g.PeekFrequency = DEFAULT_PEEK_FREQUENCY; // v1.0.46. See comments in ACT_CRITICAL.
 	g.AllowThreadToBeInterrupted = true; // Separate from g_AllowInterruption so that they can have independent values.
 	g.AllowTimers = true;
 	g.ThreadIsCritical = false;

@@ -157,9 +157,13 @@ enum CommandIDs {CONTROL_ID_FIRST = IDCANCEL + 1
 #define ERR_PARAM4_MUST_BE_BLANK "Parameter #4 must be blank in this case."
 #define ERR_INVALID_KEY_OR_BUTTON "Invalid key or button name"
 #define ERR_MISSING_OUTPUT_VAR "Requires at least one of its output variables."
+#define ERR_MISSING_OPEN_PAREN "Missing \"(\""
+#define ERR_MISSING_OPEN_BRACE "Missing \"{\""
 #define ERR_MISSING_CLOSE_PAREN "Missing \")\""
-#define ERR_MISSING_COMMA "Missing comma" // No period after short phrases.
-#define ERR_BLANK_PARAM "Blank parameter"
+#define ERR_MISSING_CLOSE_BRACE "Missing \"}\""
+#define ERR_MISSING_CLOSE_QUOTE "Missing close-quote" // No period after short phrases.
+#define ERR_MISSING_COMMA "Missing comma"             //
+#define ERR_BLANK_PARAM "Blank parameter"             //
 #define ERR_BYREF "Caller must pass a variable to this ByRef parameter."
 #define ERR_ELSE_WITH_NO_IF "ELSE with no matching IF"
 #define ERR_OUTOFMEM "Out of memory."  // Used by RegEx too, so don't change it without also changing RegEx to keep the former string.
@@ -313,30 +317,6 @@ struct map_item
 	int type;
 	union {char *marker; DerefType *deref; Var *var;}; // Depends on the value of type, above.
 	char *end;
-};
-
-struct ExprTokenType  // Something in the compiler hates the name TokenType, so using a different name.
-{
-	// Due to the presence of 8-byte members (double and __int64) this entire struct is aligned on 8-byte
-	// vs. 4-byte boundaries.  The compiler defaults to this because otherwise an 8-byte member might
-	// sometimes not start at an even address, which would hurt performance on Pentiums, etc.
-	union // Which of its members is used depends on the value of symbol, below.
-	{
-		__int64 value_int64; // for SYM_INTEGER
-		double value_double; // for SYM_FLOAT
-		DerefType *deref;    // for SYM_FUNC
-		Var *var;            // for SYM_VAR
-		struct {char *marker; char *buf;};  // for SYM_STRING and SYM_OPERAND (buf is used by built-in functions).
-	};
-	// Note that marker's str-length should not be stored in this struct, even though it might be readily
-	// available in places and thus help performance.  This is because if it were stored and the marker
-	// or SYM_VAR's var pointed to a location that was changed as a side effect of an expression's
-	// call to a script function, the length would then be invalid.
-	SymbolType symbol; // Short-circuit benchmark is currently much faster with this and the next beneath the union, but not sure why.
-	ExprTokenType *circuit_token; // Facilitates short-circuit boolean evaluation.
-	// The above two probably need to be adjacent to each other to conserve memory due to 8-byte alignment,
-	// which is the default alignment (for performance reasons) in any struct that contains 8-byte members
-	// such as double and __int64.
 };
 
 typedef UCHAR ArgTypeType;  // UCHAR vs. an enum, to save memory.
@@ -544,8 +524,6 @@ private:
 	ResultType MouseGetPos(DWORD aOptions);
 	ResultType FormatTime(char *aYYYYMMDD, char *aFormat);
 	ResultType PerformAssign();
-	ResultType AssignClipboardAll(Var &aOutputVar);
-	ResultType AssignBinaryClip(Var &aOutputVar, Var &aInputVar);
 	ResultType StringReplace();
 	ResultType StringSplit(char *aArrayName, char *aInputString, char *aDelimiterList, char *aOmitList);
 	ResultType SplitPath(char *aFileSpec);
@@ -795,18 +773,34 @@ public:
 
 	// The following are characters that can't legally occur after an AND or OR.  It excludes all unary operators
 	// "!~*&-+" as well as the parentheses chars "()":
-	// continuation lines:
-	#define EXPR_CORE "<>=/|^,"
+	#define EXPR_CORE "<>=/|^,:"
 	// The characters common to both EXPR_TELLTALES and EXPR_OPERAND_TERMINATORS:
 	#define EXPR_COMMON " \t" EXPR_CORE "*&~!()"  // Space and Tab are included at the beginning for performance.
+	#define EXPR_COMMON_FOR_BYREF "<>=/|^,*&~!" // No parentheses, space, tab, or colon (no colon because want to be able to pass a ternary byref).
+	#define CONTINUATION_LINE_SYMBOLS EXPR_CORE ".+-*&!?~" // v1.0.46.
 	// Characters whose presence in a mandatory-numeric param make it an expression for certain.
 	// + and - are not included here because legacy numeric parameters can contain unary plus or minus,
 	// e.g. WinMove, -%x%, -%y%:
 	#define EXPR_TELLTALES EXPR_COMMON "\""
 	// Characters that mark the end of an operand inside an expression.  Double-quote must not be included:
 	#define EXPR_OPERAND_TERMINATORS EXPR_COMMON "+-"
-	#define EXPR_ALL_SYMBOLS EXPR_OPERAND_TERMINATORS "\""
-	#define EXPR_ILLEGAL_CHARS "'\\:;`{}" // Characters illegal in an expression.
+	#define EXPR_ALL_SYMBOLS EXPR_OPERAND_TERMINATORS "\"" // Excludes '.' and '?' since they need special treatment due to the present/future allowance of them inside the names of variable and functions.
+	#define EXPR_ALL_SYMBOLS_FOR_BYREF EXPR_COMMON_FOR_BYREF ".+-\"" // Dot is also included.
+	#define EXPR_ASSIGN1_SYMBOLS ":+-*.|&^/><" // The symbols used as the first character of an assignment operator.
+	#define EXPR_ASSIGN2_SYMBOLS "=+-/><"  // The symbols used as the second character: //=, >>=, .=, :=, +=, -=, *=, /=, ++, --, etc.
+	#define EXPR_ILLEGAL_CHARS "'\\;`{}" // Characters illegal in an expression.
+	// The following HOTSTRING option recognizer is kept somewhat forgiving/non-specific for backward compatibility
+	// (e.g. scripts may have some invalid hotstring options, which are simply ignored).  This definition is here
+	// because it's related to continuation line symbols. Also, avoid ever adding "&" to hotstring options because
+	// it might introduce ambiguity in the differentiation of things like:
+	//    : & x::hotkey action
+	//    : & *::abbrev with leading colon::
+	#define IS_HOTSTRING_OPTION(chr) (isalnum(chr) || strchr("?*- \t", chr))
+	// The characters below are ordered with most-often used ones first, for performance:
+	#define DEFINE_END_FLAGS \
+		char end_flags[] = {' ', g_delimiter, '(', '\t', '<', '>', ':', '=', '+', '-', '*', '/', '!', '~', '&', '|', '^', '\0'}; // '\0' must be last.
+		// '?' and '.' are omitted from the above because they require special handling due to being permitted
+		// in the curruent or future names of variables and functions.
 
 	Var *ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary = true);
 	ResultType ExpandArgs(VarSizeType aSpaceNeeded = VARSIZE_ERROR, Var *aArgVar[] = NULL);
@@ -2535,6 +2529,7 @@ public:
 
 void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_StrLen(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_SubStr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_Asc(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_Chr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_IsLabel(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
@@ -2578,7 +2573,6 @@ void BIF_IL_Add(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParam
 __int64 ExprTokenToInt64(ExprTokenType &aToken);
 double ExprTokenToDouble(ExprTokenType &aToken);
 char *ExprTokenToString(ExprTokenType &aToken, char *aBuf);
-ResultType ExprTokenToVar(ExprTokenType &aToken, Var &aOutputVar);
 ResultType ExprTokenToDoubleOrInt(ExprTokenType &aToken);
 
 char *RegExMatch(char *aHaystack, char *aNeedleRegEx);

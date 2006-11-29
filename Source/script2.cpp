@@ -6420,9 +6420,9 @@ ResultType Line::PerformAssign()
 		if (source_var = mArg[1].deref[0].var) // Caller has ensured none of this line's derefs is a function-call, so var should always be the proper member of the union to check.
 		{
 			if (source_var->Type() == VAR_CLIPBOARDALL) // The caller is performing the special mode "Var = %ClipboardAll%".
-				return AssignClipboardAll(output_var); // Outsourced to another function to help CPU cache hits/misses in this frequently-called function.
+				return output_var.AssignClipboardAll(); // Outsourced to another function to help CPU cache hits/misses in this frequently-called function.
 			if (source_var->IsBinaryClip()) // Caller wants a variable with binary contents assigned (copied) to another variable (usually VAR_CLIPBOARD).
-				return AssignBinaryClip(output_var, *source_var); // Outsourced to another function to help CPU cache hits/misses in this frequently-called function.
+				return output_var.AssignBinaryClip(*source_var); // Outsourced to another function to help CPU cache hits/misses in this frequently-called function.
 		}
 	}
 
@@ -6571,240 +6571,6 @@ ResultType Line::PerformAssign()
 	// especially for concat loops involving things like Var = %Var%String:
 	output_var.Length() = (VarSizeType)(g.AutoTrim ? trim(contents, length) : length);
 	return output_var.Close();  // i.e. Consider this function to be always successful unless this fails.
-}
-
-
-
-ResultType Line::AssignClipboardAll(Var &aOutputVar)
-{
-	if (aOutputVar.Type() == VAR_CLIPBOARD) // Seems pointless (nor is the below equipped to handle it), so make this have no effect.
-		return OK;
-	if (!g_clip.Open())
-		return LineError(CANT_OPEN_CLIPBOARD_READ);
-	// Calculate the size needed:
-	// EnumClipboardFormats() retrieves all formats, including synthesized formats that don't
-	// actually exist on the clipboard but are instead constructed on demand.  Unfortunately,
-	// there doesn't appear to be any way to reliably determine which formats are real and
-	// which are synthesized (if there were such a way, a large memory savings could be
-	// realized by omitting the synthesized formats from the saved version). One thing that
-	// is certain is that the "real" format(s) come first and the synthesized ones afterward.
-	// However, that's not quite enough because although it is recommended that apps store
-	// the primary/preferred format first, the OS does not enforce this.  For example, testing
-	// shows that the apps do not have to store CF_UNICODETEXT prior to storing CF_TEXT,
-	// in which case the clipboard might have inaccurate CF_TEXT as the first element and
-	// more accurate/complete (non-synthesized) CF_UNICODETEXT stored as the next.
-	// In spite of the above, the below seems likely to be accurate 99% or more of the time,
-	// which seems worth it given the large savings of memory that are achieved, especially
-	// for large quantities of text or large images. Confidence is further raised by the
-	// fact that MSDN says there's no advantage/reason for an app to place multiple formats
-	// onto the clipboard if those formats are available through synthesis.
-	// And since CF_TEXT always(?) yields synthetic CF_OEMTEXT and CF_UNICODETEXT, and
-	// probably (but less certainly) vice versa: if CF_TEXT is listed first, it might certainly
-	// mean that the other two do not need to be stored.  There is some slight doubt about this
-	// in a situation where an app explicitly put CF_TEXT onto the clipboard and then followed
-	// it with CF_UNICODETEXT that isn't synthesized, nor does it match what would have been
-	// synthesized. However, that seems extremely unlikely (it would be much more likely for
-	// an app to store CF_UNICODETEXT *first* followed by custom/non-synthesized CF_TEXT, but
-	// even that might be unheard of in practice).  So for now -- since there is no documentation
-	// to be found about this anywhere -- it seems best to omit some of the most common
-	// synthesized formats:
-	// CF_TEXT is the first of three text formats to appear: Omit CF_OEMTEXT and CF_UNICODETEXT.
-	//    (but not vice versa since those are less certain to be synthesized)
-	//    (above avoids using four times the amount of memory that would otherwise be required)
-	//    UPDATE: Only the first text format is included now, since MSDN says there is no
-	//    advantage/reason to having multiple non-synthesized text formats on the clipboard.
-	// CF_DIB: Always omit this if CF_DIBV5 is available (which must be present on Win2k+, at least
-	// as a synthesized format, whenever CF_DIB is present?) This policy seems likely to avoid
-	// the issue where CF_DIB occurs first yet CF_DIBV5 that comes later is *not* synthesized,
-	// perhaps simply because the app stored DIB prior to DIBV5 by mistake (though there is
-	// nothing mandatory, so maybe it's not really a mistake). Note: CF_DIBV5 supports alpha
-	// channel / transparency, and perhaps other things, and it is likely that when synthesized,
-	// no information of the original CF_DIB is lost. Thus, when CF_DIBV5 is placed back onto
-	// the clipboard, any app that needs CF_DIB will have it synthesized back to the original
-	// data (hopefully). It's debatable whether to do it that way or store whichever comes first
-	// under the theory that an app would never store both formats on the clipboard since MSDN
-	// says: "If the system provides an automatic type conversion for a particular clipboard format,
-	// there is no advantage to placing the conversion format(s) on the clipboard."
-	bool format_is_text;
-	HGLOBAL hglobal;
-	SIZE_T size;
-	UINT format;
-	VarSizeType space_needed;
-	UINT dib_format_to_omit = 0, meta_format_to_omit = 0, text_format_to_include = 0;
-	// Start space_needed off at 4 to allow room for guaranteed final termination of aOutputVar's contents.
-	// The termination must be of the same size as format because a single-byte terminator would
-	// be read in as a format of 0x00?????? where ?????? is an access violation beyond the buffer.
-	for (space_needed = sizeof(format), format = 0; format = EnumClipboardFormats(format);)
-	{
-		// No point in calling GetLastError() since it would never be executed because the loop's
-		// condition breaks on zero return value.
-		format_is_text = (format == CF_TEXT || format == CF_OEMTEXT || format == CF_UNICODETEXT);
-		if ((format_is_text && text_format_to_include) // The first text format has already been found and included, so exclude all other text formats.
-			|| format == dib_format_to_omit) // ... or this format was marked excluded by a prior iteration.
-			continue;
-		// GetClipboardData() causes Task Manager to report a (sometimes large) increase in
-		// memory utilization for the script, which is odd since it persists even after the
-		// clipboard is closed.  However, when something new is put onto the clipboard by the
-		// the user or any app, that memory seems to get freed automatically.  Also, 
-		// GetClipboardData(49356) fails in MS Visual C++ when the copied text is greater than
-		// about 200 KB (but GetLastError() returns ERROR_SUCCESS).  When pasting large sections
-		// of colorized text into MS Word, it can't get the colorized text either (just the plain
-		// text). Because of this example, it seems likely it can fail in other places or under
-		// other circumstances, perhaps by design of the app. Therefore, be tolerant of failures
-		// because partially saving the clipboard seems much better than aborting the operation.
-		if (hglobal = g_clip.GetClipboardDataTimeout(format))
-		{
-			space_needed += (VarSizeType)(sizeof(format) + sizeof(size) + GlobalSize(hglobal)); // The total amount of storage space required for this item.
-			if (format_is_text) // If this is true, then text_format_to_include must be 0 since above didn't "continue".
-				text_format_to_include = format;
-			if (!dib_format_to_omit)
-			{
-				if (format == CF_DIB)
-					dib_format_to_omit = CF_DIBV5;
-				else if (format == CF_DIBV5)
-					dib_format_to_omit = CF_DIB;
-			}
-			if (!meta_format_to_omit) // Checked for the same reasons as dib_format_to_omit.
-			{
-				if (format == CF_ENHMETAFILE)
-					meta_format_to_omit = CF_METAFILEPICT;
-				else if (format == CF_METAFILEPICT)
-					meta_format_to_omit = CF_ENHMETAFILE;
-			}
-		}
-		//else omit this format from consideration.
-	}
-
-	if (space_needed == sizeof(format)) // This works because even a single empty format requires space beyond sizeof(format) for storing its format+size.
-	{
-		g_clip.Close();
-		return aOutputVar.Assign(); // Nothing on the clipboard, so just make aOutputVar blank.
-	}
-
-	// Resize the output variable, if needed:
-	if (!aOutputVar.Assign(NULL, space_needed - 1, true, false))
-	{
-		g_clip.Close();
-		return FAIL; // Above should have already reported the error.
-	}
-
-	// Retrieve and store all the clipboard formats.  Because failures of GetClipboardData() are now
-	// tolerated, it seems safest to recalculate the actual size (actual_space_needed) of the data
-	// in case it varies from that found in the estimation phase.  This is especially necessary in
-	// case GlobalLock() ever fails, since that isn't even attempted during the estimation phase.
-	// Otherwise, the variable's mLength member would be set to something too high (the estimate),
-	// which might cause problems elsewhere.
-	LPVOID hglobal_locked;
-	LPVOID binary_contents = aOutputVar.Contents();
-	VarSizeType capacity = aOutputVar.Capacity(); // Note that this is the granted capacity, which might be a little larger than requested.
-	VarSizeType added_size, actual_space_used;
-	for (actual_space_used = sizeof(format), format = 0; format = EnumClipboardFormats(format);)
-	{
-		// No point in calling GetLastError() since it would never be executed because the loop's
-		// condition breaks on zero return value.
-		if ((format == CF_TEXT || format == CF_OEMTEXT || format == CF_UNICODETEXT) && format != text_format_to_include
-			|| format == dib_format_to_omit || format == meta_format_to_omit)
-			continue;
-		// Although the GlobalSize() documentation implies that a valid HGLOBAL should not be zero in
-		// size, it does happen, at least in MS Word and for CF_BITMAP.  Therefore, in order to save
-		// the clipboard as accurately as possible, also save formats whose size is zero.  Note that
-		// GlobalLock() fails to work on hglobals of size zero, so don't do it for them.
-		if ((hglobal = g_clip.GetClipboardDataTimeout(format)) // This and the next line rely on short-circuit boolean order.
-			&& (!(size = GlobalSize(hglobal)) || (hglobal_locked = GlobalLock(hglobal)))) // Size of zero or lock succeeded: Include this format.
-		{
-			// Any changes made to how things are stored here should also be made to the size-estimation
-			// phase so that space_needed matches what is done here:
-			added_size = (VarSizeType)(sizeof(format) + sizeof(size) + size);
-			actual_space_used += added_size;
-			if (actual_space_used > capacity) // Tolerate incorrect estimate by omitting formats that won't fit.
-				actual_space_used -= added_size;
-			else
-			{
-				*(UINT *)binary_contents = format;
-				binary_contents = (char *)binary_contents + sizeof(format);
-				*(SIZE_T *)binary_contents = size;
-				binary_contents = (char *)binary_contents + sizeof(size);
-				if (size)
-				{
-					memcpy(binary_contents, hglobal_locked, size);
-					binary_contents = (char *)binary_contents + size;
-				}
-				//else hglobal_locked is not valid, so don't reference it or unlock it.
-			}
-			if (size)
-				GlobalUnlock(hglobal); // hglobal not hglobal_locked.
-		}
-	}
-	g_clip.Close();
-	*(UINT *)binary_contents = 0; // Final termination (must be UINT, see above).
-	aOutputVar.Length() = actual_space_used - 1; // Omit the final zero-byte from the length in case any other routines assume that exactly one zero exists at the end of var's length.
-	return aOutputVar.Close(true); // Pass "true" to make it binary-clipboard type.
-}
-
-
-
-ResultType Line::AssignBinaryClip(Var &aOutputVar, Var &aInputVar)
-// Caller has ensured that aOutputVar.Type() is VAR_NORMAL or VAR_CLIPBOARD (usually via load-time validation).
-// Caller has ensured that aInputVar.IsBinaryClip()==true.
-{
-	LPVOID binary_contents = aInputVar.Contents();
-	VarSizeType source_length = aInputVar.Length();
-	if (aOutputVar.Type() == VAR_NORMAL) // Copy a binary variable to another variable that isn't the clipboard.
-	{
-		if (binary_contents == aOutputVar.Contents()) // v1.0.45: source==dest, so nothing to do. It's compared this way in case ByRef/aliases are involved. This will detect even them.
-			return OK;
-		if (!aOutputVar.Assign(NULL, source_length))
-			return FAIL; // Above should have already reported the error.
-		memcpy(aOutputVar.Contents(), binary_contents, source_length + 1); // MUST CALL Contents() again in case Assign() changed it. Add 1 not sizeof(format).
-		aOutputVar.Length() = source_length;
-		return aOutputVar.Close(true); // Pass "true" to make it binary-clipboard type.
-	}
-
-	// Since above didn't return, a variable containing binary clipboard data is being copied back onto
-	// the clipboard.
-	if (!g_clip.Open())
-		return LineError(CANT_OPEN_CLIPBOARD_WRITE);
-	EmptyClipboard(); // Failure is not checked for since it's probably impossible under these conditions.
-
-	// In case the variable contents are incomplete or corrupted (such as having been read in from a
-	// bad file with FileRead), prevent reading beyond the end of the variable:
-	LPVOID next, binary_contents_max = (char *)binary_contents + source_length + 1; // The last acessible byte, which should be the last byte of the (UINT)0 terminator.
-	HGLOBAL hglobal;
-	LPVOID hglobal_locked;
-	UINT format;
-	SIZE_T size;
-
-	while ((next = (char *)binary_contents + sizeof(format)) <= binary_contents_max
-		&& (format = *(UINT *)binary_contents)) // Get the format.  Relies on short-circuit boolean order.
-	{
-		binary_contents = next;
-		if ((next = (char *)binary_contents + sizeof(size)) > binary_contents_max)
-			break;
-		size = *(UINT *)binary_contents; // Get the size of this format's data.
-		binary_contents = next;
-		if ((next = (char *)binary_contents + size) > binary_contents_max)
-			break;
-	    if (   !(hglobal = GlobalAlloc(GMEM_MOVEABLE, size))   ) // size==0 is okay.
-		{
-			g_clip.Close();
-			return LineError(ERR_OUTOFMEM); // Short msg since so rare.
-		}
-		if (size) // i.e. Don't try to lock memory of size zero.  It won't work and it's not needed.
-		{
-			if (   !(hglobal_locked = GlobalLock(hglobal))   )
-			{
-				GlobalFree(hglobal);
-				g_clip.Close();
-				return LineError("GlobalLock"); // Short msg since so rare.
-			}
-			memcpy(hglobal_locked, binary_contents, size);
-			GlobalUnlock(hglobal);
-			binary_contents = next;
-		}
-		//else hglobal is just an empty format, but store it for completeness/accuracy (e.g. CF_BITMAP).
-		SetClipboardData(format, hglobal); // The system now owns hglobal.
-	}
-	return g_clip.Close();
 }
 
 
@@ -7533,15 +7299,14 @@ ResultType Line::GetKeyJoyState(char *aKeyName, char *aOption)
 		// Caller needs a token with a buffer of at least this size:
 		char buf[MAX_FORMATTED_NUMBER_LENGTH + 1];
 		ExprTokenType token;
-		// The following must be set for ScriptGetJoyState():
-		token.symbol = SYM_STRING;
-		token.marker = buf;
+		token.symbol = SYM_STRING; // These must be set as defaults for ScriptGetJoyState().
+		token.marker = buf;        //
 		ScriptGetJoyState(joy, joystick_id, token, false);
-		ExprTokenToVar(token, output_var); // Write the result based on whether the token is a string or number.
-		// Always returns OK since ScriptGetJoyState() returns FAIL and sets output_var to be blank if
-		// the result is indeterminate or there was a problem reading the joystick.  We don't want
-		// such a failure to be considered a "critical failure" that will exit the current quasi-thread.
-		return OK;
+		// Above: ScriptGetJoyState() returns FAIL and sets output_var to be blank if the result is
+		// indeterminate or there was a problem reading the joystick.  But we don't want such a failure
+		// to be considered a "critical failure" that will exit the current quasi-thread, so its result
+		// is discarded.
+		return output_var.Assign(token); // Write the result based on whether the token is a string or number.
 	}
 	// Otherwise: There is a virtual key (not a joystick control).
 	KeyStateTypes key_state_type;
@@ -10800,6 +10565,68 @@ void BIF_StrLen(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParam
 
 
 
+void BIF_SubStr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount) // Added in v1.0.46.
+{
+	// Get the first arg, which is the string used as the source of the extraction. Call it "haystack" for clarity.
+	char *haystack = ExprTokenToString(*aParam[0], aResultToken.buf); // Remember that aResultToken.buf is part of a union, though in this case there's no danger of overwriting it since our result will always be of STRING type (not int or float).
+	int haystack_length = (int)EXPR_TOKEN_LENGTH(aParam[0], haystack);
+
+	// Set default return value in case of early return.
+	aResultToken.symbol = SYM_STRING;
+	aResultToken.marker = "";
+
+	// Load-time validation has ensured that at least the first two parameters are present:
+	int starting_offset = (int)ExprTokenToInt64(*aParam[1]) - 1; // The one-based starting position in haystack (if any).  Convert it to zero-based.
+	if (starting_offset > haystack_length)
+		return; // Yield the empty string (a default set higher above).
+	if (starting_offset < 0) // Same convention as RegExMatch/Replace(): Treat a StartingPos of 0 (offset -1) as "start at the string's last char".  Similarly, treat negatives as starting further to the left of the end of the string.
+	{
+		starting_offset += haystack_length;
+		if (starting_offset < 0)
+			starting_offset = 0;
+	}
+
+	int remaining_length_available = haystack_length - starting_offset;
+	int extract_length;
+	if (aParamCount < 3) // No length specified, so extract all the remaining length.
+		extract_length = remaining_length_available;
+	else
+	{
+		if (   !(extract_length = (int)ExprTokenToInt64(*aParam[2]))   )  // It has asked to extract zero characters.
+			return; // Yield the empty string (a default set higher above).
+		if (extract_length < 0)
+		{
+			extract_length += remaining_length_available; // Result is the number of characters to be extracted (i.e. after omitting the number of chars specified in extract_length).
+			if (extract_length < 1) // It has asked to omit all characters.
+				return; // Yield the empty string (a default set higher above).
+		}
+		else // extract_length > 0
+			if (extract_length > remaining_length_available)
+				extract_length = remaining_length_available;
+	}
+
+	// Above has set extract_length to the exact number of characters that will actually be extracted.
+	char *result = haystack + starting_offset; // This is the result except for the possible need to truncate it below.
+
+	if (extract_length == remaining_length_available) // All of haystack is desired (starting at starting_offset).
+	{
+		aResultToken.marker = result; // No need for any copying or termination, just send back part of haystack.
+		return;                       // Caller and Var:Assign() know that overlap is possible, so this seems safe.
+	}
+
+	// Otherwise, validation higher above has ensured: extract_length < remaining_length_available.
+	// Caller has provided a NULL circuit_token as a means of passing back memory we allocate here.
+	// So if we change "result" to be non-NULL, the caller will take over responsibility for freeing that memory.
+	if (   !(aResultToken.circuit_token = (ExprTokenType *)malloc(extract_length + 1))   ) // Out of memory. Due to rarity, don't display an error dialog (there's currently no way for a built-in function to abort the current thread anyway?)
+		return; // Yield the empty string (a default set higher above).
+	aResultToken.marker = (char *)aResultToken.circuit_token; // Store the address of the result for the caller.
+	memcpy(aResultToken.marker, result, extract_length);
+	aResultToken.marker[extract_length] = '\0'; // Must be done separately from the memcpy() because the memcpy() might just be taking a substring (i.e. long before result's terminator).
+	aResultToken.buf = (char *)(size_t)extract_length; // MANDATORY FOR USERS OF CIRCUIT_TOKEN: "buf" is being overloaded to store the length for our caller.
+}
+
+
+
 void BIF_Asc(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
 {
 	// Result will always be an integer (this simplifies scripts that work with binary zeros since an
@@ -11573,21 +11400,28 @@ void BIF_RegEx(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 	char haystack_buf[MAX_FORMATTED_NUMBER_LENGTH + 1];
 	char *haystack = ExprTokenToString(*aParam[0], haystack_buf); // Load-time validation has already ensured that at least two actual parameters are present.
 	int haystack_length = (int)EXPR_TOKEN_LENGTH(aParam[0], haystack);
+
 	int param_index = mode_is_replace ? 5 : 3;
-	int starting_offset = aParamCount > param_index ? (int)ExprTokenToInt64(*aParam[param_index])-1 : 0; // The one-based starting position in haystack (if any).  Convert it to zero-based.
-	if (starting_offset < 0) // Treat a StartingPos of 0 (offset -1) as "start at the string's last char".  Similarly, treat negatives as starting further to the left of the end of the string.
+	int starting_offset;
+	if (aParamCount <= param_index)
+		starting_offset = 0; // The one-based starting position in haystack (if any).  Convert it to zero-based.
+	else
 	{
-		starting_offset += haystack_length;
-		if (starting_offset < 0)
-			starting_offset = 0;
+		starting_offset = (int)ExprTokenToInt64(*aParam[param_index]) - 1;
+		if (starting_offset < 0) // Same convention as SubStr(): Treat a StartingPos of 0 (offset -1) as "start at the string's last char".  Similarly, treat negatives as starting further to the left of the end of the string.
+		{
+			starting_offset += haystack_length;
+			if (starting_offset < 0)
+				starting_offset = 0;
+		}
+		else if (starting_offset > haystack_length)
+			// Although pcre_exec() seems to work properly even without this check, its absence would allow
+			// the empty string to be found beyond the length of haystack, which could lead to problems and is
+			// probably more trouble than its worth (assuming it has any worth -- perhaps for a pattern that
+			// looks backward from itself; but that seems too rare to support and might create code that's
+			// harder to maintain, especially in RegExReplace()).
+			starting_offset = haystack_length; // Due to rarity of this condition, opt for simplicity: just point it to the terminator, which is in essence an empty string (which will cause result in "no match" except when searcing for "").
 	}
-	else if (starting_offset > haystack_length)
-		// Although pcre_exec() seems to work properly even without this check, its absence would allow
-		// the empty string to be found beyond the length of haystack, which could lead to problems and is
-		// probably more trouble than its worth (assuming it has any worth -- perhaps for a pattern that
-		// looks backward from itself; but that seems too rare to support and might create code that's
-		// harder to maintain, especially in RegExReplace()).
-		starting_offset = haystack_length; // Due to rarity of this condition, opt for simplicity: just point it to the terminator, which is in essence an empty string (which will cause result in "no match" except when searcing for "").
 
 	// SET UP THE OFFSET ARRAY, which consists of int-pairs containing the start/end offset of each match.
 	int pattern_count;
@@ -13836,29 +13670,6 @@ char *ExprTokenToString(ExprTokenType &aToken, char *aBuf)
 		return aBuf;
 	default: // Not an operand.
 		return "";
-	}
-}
-
-
-
-ResultType ExprTokenToVar(ExprTokenType &aToken, Var &aOutputVar)
-// Writes aToken's value into aOutputVar.
-// Returns FAIL if aToken isn't an operand or the assignment failed.  Returns OK on success.
-// Currently only supports SYM_VAR if the variable is a normal variable, not a built-in or env. var.
-{
-	switch (aToken.symbol)
-	{
-	case SYM_STRING:
-	case SYM_OPERAND:
-		return aOutputVar.Assign(aToken.marker);
-	case SYM_VAR:
-		return aOutputVar.Assign(aToken.var->Contents());
-	case SYM_INTEGER:
-		return aOutputVar.Assign(aToken.value_int64);
-	case SYM_FLOAT:
-		return aOutputVar.Assign(aToken.value_double);
-	default: // Not an operand.
-		return FAIL;
 	}
 }
 

@@ -23,13 +23,20 @@ GNU General Public License for more details.
 char Var::sEmptyString[] = ""; // For explanation, see its declaration in .h file.
 
 
-ResultType Var::Assign(int aValueToAssign) // For some reason, these functions are actually faster when not inline.
+ResultType Var::AssignHWND(HWND aWnd)
 {
-	char value_string[256];
-	// ITOA() seems to perform quite a bit better than sprintf() in this case:
-	return Assign(ITOA(aValueToAssign, value_string));
-	//snprintf(value_string, sizeof(value_string), "%d", aValueToAssign);
-	//return Assign(value_string);
+	// Convert to unsigned 64-bit to support for 64-bit pointers.  Since most script operations --
+	// such as addition and comparison -- read strings in as signed 64-bit, it is documented that
+	// math and other numerical operations should never be performed on these while they exist
+	// as strings in script variables:
+	//#define ASSIGN_HWND_TO_VAR(var, hwnd) var->Assign((unsigned __int64)hwnd)
+	// UPDATE: Always assign as hex for better compatibility with Spy++ and other apps that
+	// report window handles:
+	char buf[64];
+	*buf = '0';
+	buf[1] = 'x';
+	_ui64toa((unsigned __int64)aWnd, buf + 2, 16);
+	return Assign(buf);
 }
 
 
@@ -39,6 +46,17 @@ ResultType Var::Assign(DWORD aValueToAssign)
 {
 	char value_string[256];
 	return Assign(UTOA(aValueToAssign, value_string));
+}
+
+
+
+ResultType Var::Assign(int aValueToAssign) // For some reason, these functions are actually faster when not inline.
+{
+	char value_string[256];
+	// ITOA() seems to perform quite a bit better than sprintf() in this case:
+	return Assign(ITOA(aValueToAssign, value_string));
+	//snprintf(value_string, sizeof(value_string), "%d", aValueToAssign);
+	//return Assign(value_string);
 }
 
 
@@ -73,6 +91,283 @@ ResultType Var::Assign(double aValueToAssign)
 	char value_string[MAX_FORMATTED_NUMBER_LENGTH + 1];
 	snprintf(value_string, sizeof(value_string), g.FormatFloat, aValueToAssign); // "%0.6f"; %f can handle doubles in MSVC++.
 	return Assign(value_string);
+}
+
+
+
+ResultType Var::Assign(ExprTokenType &aToken)
+// Returns OK or FAIL.
+// Writes aToken's value into aOutputVar based on the type of the token.
+// Caller must ensure that aToken.symbol is an operand (not an operator or other symbol).
+// Caller must ensure that if aToken.symbol==SYM_VAR, aToken.var->Type()==VAR_NORMAL, not the clipboard or any built-in var.
+{
+	switch (aToken.symbol)
+	{
+	// Below: Caller has ensured that aToken.var's Type() is always VAR_NORMAL.
+	case SYM_INTEGER: return Assign(aToken.value_int64); // Listed first for performance because it's Likely the most common from our callers.
+	case SYM_VAR:
+	{
+		// Below relies on the fact that aliases can't point to other aliases (enforced by UpdateAlias()).
+		Var &source_var = *(aToken.var->mType == VAR_ALIAS ? aToken.var->mAliasFor : aToken.var);
+		return (source_var.mAttrib & VAR_ATTRIB_BINARY_CLIP) // Caller has ensured that source_var's Type() is VAR_NORMAL.
+			? AssignBinaryClip(source_var)  // Caller wants a variable with binary contents assigned (copied) to another variable (usually VAR_CLIPBOARD).
+			: Assign(source_var.mContents, source_var.mLength); // Pass length to improve performance.
+	}
+	case SYM_FLOAT:   return Assign(aToken.value_double); // Listed last because it's probably the least common.
+	default:          return Assign(aToken.marker); // SYM_STRING or SYM_OPERAND.
+	}
+}
+
+
+
+ResultType Var::AssignClipboardAll()
+// Caller must ensure that "this" is a normal variable or the clipboard (though if it's the clipboard, this
+// function does nothing).
+{
+	if (mType == VAR_ALIAS)
+		// For maintainability, it seems best not to use the following method:
+		//    Var &var = *(mType == VAR_ALIAS ? mAliasFor : this);
+		// If that were done, bugs would be easy to introduce in a long function like this one
+		// if your forget at use the implicit "this" by accident.  So instead, just call self.
+		return mAliasFor->AssignClipboardAll();
+	if (mType == VAR_CLIPBOARD) // Seems pointless to do Clipboard:=ClipboardAll, and the below isn't equipped
+		return OK;              // to handle it, so make this have no effect.
+	if (!g_clip.Open())
+		return g_script.ScriptError(CANT_OPEN_CLIPBOARD_READ);
+
+	// Calculate the size needed:
+	// EnumClipboardFormats() retrieves all formats, including synthesized formats that don't
+	// actually exist on the clipboard but are instead constructed on demand.  Unfortunately,
+	// there doesn't appear to be any way to reliably determine which formats are real and
+	// which are synthesized (if there were such a way, a large memory savings could be
+	// realized by omitting the synthesized formats from the saved version). One thing that
+	// is certain is that the "real" format(s) come first and the synthesized ones afterward.
+	// However, that's not quite enough because although it is recommended that apps store
+	// the primary/preferred format first, the OS does not enforce this.  For example, testing
+	// shows that the apps do not have to store CF_UNICODETEXT prior to storing CF_TEXT,
+	// in which case the clipboard might have inaccurate CF_TEXT as the first element and
+	// more accurate/complete (non-synthesized) CF_UNICODETEXT stored as the next.
+	// In spite of the above, the below seems likely to be accurate 99% or more of the time,
+	// which seems worth it given the large savings of memory that are achieved, especially
+	// for large quantities of text or large images. Confidence is further raised by the
+	// fact that MSDN says there's no advantage/reason for an app to place multiple formats
+	// onto the clipboard if those formats are available through synthesis.
+	// And since CF_TEXT always(?) yields synthetic CF_OEMTEXT and CF_UNICODETEXT, and
+	// probably (but less certainly) vice versa: if CF_TEXT is listed first, it might certainly
+	// mean that the other two do not need to be stored.  There is some slight doubt about this
+	// in a situation where an app explicitly put CF_TEXT onto the clipboard and then followed
+	// it with CF_UNICODETEXT that isn't synthesized, nor does it match what would have been
+	// synthesized. However, that seems extremely unlikely (it would be much more likely for
+	// an app to store CF_UNICODETEXT *first* followed by custom/non-synthesized CF_TEXT, but
+	// even that might be unheard of in practice).  So for now -- since there is no documentation
+	// to be found about this anywhere -- it seems best to omit some of the most common
+	// synthesized formats:
+	// CF_TEXT is the first of three text formats to appear: Omit CF_OEMTEXT and CF_UNICODETEXT.
+	//    (but not vice versa since those are less certain to be synthesized)
+	//    (above avoids using four times the amount of memory that would otherwise be required)
+	//    UPDATE: Only the first text format is included now, since MSDN says there is no
+	//    advantage/reason to having multiple non-synthesized text formats on the clipboard.
+	// CF_DIB: Always omit this if CF_DIBV5 is available (which must be present on Win2k+, at least
+	// as a synthesized format, whenever CF_DIB is present?) This policy seems likely to avoid
+	// the issue where CF_DIB occurs first yet CF_DIBV5 that comes later is *not* synthesized,
+	// perhaps simply because the app stored DIB prior to DIBV5 by mistake (though there is
+	// nothing mandatory, so maybe it's not really a mistake). Note: CF_DIBV5 supports alpha
+	// channel / transparency, and perhaps other things, and it is likely that when synthesized,
+	// no information of the original CF_DIB is lost. Thus, when CF_DIBV5 is placed back onto
+	// the clipboard, any app that needs CF_DIB will have it synthesized back to the original
+	// data (hopefully). It's debatable whether to do it that way or store whichever comes first
+	// under the theory that an app would never store both formats on the clipboard since MSDN
+	// says: "If the system provides an automatic type conversion for a particular clipboard format,
+	// there is no advantage to placing the conversion format(s) on the clipboard."
+	bool format_is_text;
+	HGLOBAL hglobal;
+	SIZE_T size;
+	UINT format;
+	VarSizeType space_needed;
+	UINT dib_format_to_omit = 0, meta_format_to_omit = 0, text_format_to_include = 0;
+	// Start space_needed off at 4 to allow room for guaranteed final termination of the variable's contents.
+	// The termination must be of the same size as format because a single-byte terminator would
+	// be read in as a format of 0x00?????? where ?????? is an access violation beyond the buffer.
+	for (space_needed = sizeof(format), format = 0; format = EnumClipboardFormats(format);)
+	{
+		// No point in calling GetLastError() since it would never be executed because the loop's
+		// condition breaks on zero return value.
+		format_is_text = (format == CF_TEXT || format == CF_OEMTEXT || format == CF_UNICODETEXT);
+		if ((format_is_text && text_format_to_include) // The first text format has already been found and included, so exclude all other text formats.
+			|| format == dib_format_to_omit) // ... or this format was marked excluded by a prior iteration.
+			continue;
+		// GetClipboardData() causes Task Manager to report a (sometimes large) increase in
+		// memory utilization for the script, which is odd since it persists even after the
+		// clipboard is closed.  However, when something new is put onto the clipboard by the
+		// the user or any app, that memory seems to get freed automatically.  Also, 
+		// GetClipboardData(49356) fails in MS Visual C++ when the copied text is greater than
+		// about 200 KB (but GetLastError() returns ERROR_SUCCESS).  When pasting large sections
+		// of colorized text into MS Word, it can't get the colorized text either (just the plain
+		// text). Because of this example, it seems likely it can fail in other places or under
+		// other circumstances, perhaps by design of the app. Therefore, be tolerant of failures
+		// because partially saving the clipboard seems much better than aborting the operation.
+		if (hglobal = g_clip.GetClipboardDataTimeout(format))
+		{
+			space_needed += (VarSizeType)(sizeof(format) + sizeof(size) + GlobalSize(hglobal)); // The total amount of storage space required for this item.
+			if (format_is_text) // If this is true, then text_format_to_include must be 0 since above didn't "continue".
+				text_format_to_include = format;
+			if (!dib_format_to_omit)
+			{
+				if (format == CF_DIB)
+					dib_format_to_omit = CF_DIBV5;
+				else if (format == CF_DIBV5)
+					dib_format_to_omit = CF_DIB;
+			}
+			if (!meta_format_to_omit) // Checked for the same reasons as dib_format_to_omit.
+			{
+				if (format == CF_ENHMETAFILE)
+					meta_format_to_omit = CF_METAFILEPICT;
+				else if (format == CF_METAFILEPICT)
+					meta_format_to_omit = CF_ENHMETAFILE;
+			}
+		}
+		//else omit this format from consideration.
+	}
+
+	if (space_needed == sizeof(format)) // This works because even a single empty format requires space beyond sizeof(format) for storing its format+size.
+	{
+		g_clip.Close();
+		return Assign(); // Nothing on the clipboard, so just make the variable blank.
+	}
+
+	// Resize the output variable, if needed:
+	if (!Assign(NULL, space_needed - 1, true, false))
+	{
+		g_clip.Close();
+		return FAIL; // Above should have already reported the error.
+	}
+
+	// Retrieve and store all the clipboard formats.  Because failures of GetClipboardData() are now
+	// tolerated, it seems safest to recalculate the actual size (actual_space_needed) of the data
+	// in case it varies from that found in the estimation phase.  This is especially necessary in
+	// case GlobalLock() ever fails, since that isn't even attempted during the estimation phase.
+	// Otherwise, the variable's mLength member would be set to something too high (the estimate),
+	// which might cause problems elsewhere.
+	LPVOID hglobal_locked;
+	LPVOID binary_contents = mContents;
+	VarSizeType added_size, actual_space_used;
+	for (actual_space_used = sizeof(format), format = 0; format = EnumClipboardFormats(format);)
+	{
+		// No point in calling GetLastError() since it would never be executed because the loop's
+		// condition breaks on zero return value.
+		if ((format == CF_TEXT || format == CF_OEMTEXT || format == CF_UNICODETEXT) && format != text_format_to_include
+			|| format == dib_format_to_omit || format == meta_format_to_omit)
+			continue;
+		// Although the GlobalSize() documentation implies that a valid HGLOBAL should not be zero in
+		// size, it does happen, at least in MS Word and for CF_BITMAP.  Therefore, in order to save
+		// the clipboard as accurately as possible, also save formats whose size is zero.  Note that
+		// GlobalLock() fails to work on hglobals of size zero, so don't do it for them.
+		if ((hglobal = g_clip.GetClipboardDataTimeout(format)) // This and the next line rely on short-circuit boolean order.
+			&& (!(size = GlobalSize(hglobal)) || (hglobal_locked = GlobalLock(hglobal)))) // Size of zero or lock succeeded: Include this format.
+		{
+			// Any changes made to how things are stored here should also be made to the size-estimation
+			// phase so that space_needed matches what is done here:
+			added_size = (VarSizeType)(sizeof(format) + sizeof(size) + size);
+			actual_space_used += added_size;
+			if (actual_space_used > mCapacity) // Tolerate incorrect estimate by omitting formats that won't fit. Note that mCapacity is the granted capacity, which might be a little larger than requested.
+				actual_space_used -= added_size;
+			else
+			{
+				*(UINT *)binary_contents = format;
+				binary_contents = (char *)binary_contents + sizeof(format);
+				*(SIZE_T *)binary_contents = size;
+				binary_contents = (char *)binary_contents + sizeof(size);
+				if (size)
+				{
+					memcpy(binary_contents, hglobal_locked, size);
+					binary_contents = (char *)binary_contents + size;
+				}
+				//else hglobal_locked is not valid, so don't reference it or unlock it.
+			}
+			if (size)
+				GlobalUnlock(hglobal); // hglobal not hglobal_locked.
+		}
+	}
+	g_clip.Close();
+	*(UINT *)binary_contents = 0; // Final termination (must be UINT, see above).
+	mLength = actual_space_used - 1; // Omit the final zero-byte from the length in case any other routines assume that exactly one zero exists at the end of var's length.
+	mAttrib |= VAR_ATTRIB_BINARY_CLIP;
+	return OK;
+}
+
+
+
+ResultType Var::AssignBinaryClip(Var &aSourceVar)
+// Caller must ensure that this->Type() is VAR_NORMAL or VAR_CLIPBOARD (usually via load-time validation).
+// Caller must ensure that aSourceVar->Type()==VAR_NORMAL and aSourceVar->IsBinaryClip()==true.
+{
+	if (mType == VAR_ALIAS)
+		// For maintainability, it seems best not to use the following method:
+		//    Var &var = *(mType == VAR_ALIAS ? mAliasFor : this);
+		// If that were done, bugs would be easy to introduce in a long function like this one
+		// if your forget at use the implicit "this" by accident.  So instead, just call self.
+		return mAliasFor->AssignBinaryClip(aSourceVar);
+
+	// Resolve early for maintainability.
+	// Relies on the fact that aliases can't point to other aliases (enforced by UpdateAlias()).
+	Var &source_var = (aSourceVar.mType == VAR_ALIAS) ? *aSourceVar.mAliasFor : aSourceVar;
+
+	if (mType == VAR_NORMAL) // Copy a binary variable to another variable that isn't the clipboard.
+	{
+		if (source_var.mContents == mContents) // v1.0.45: source==dest, so nothing to do. It's compared this way in case aSourceVar is a ByRef/alias. This covers even that situation.
+			return OK;
+		if (!Assign(NULL, source_var.mLength))
+			return FAIL; // Above should have already reported the error.
+		memcpy(mContents, source_var.mContents, source_var.mLength + 1); // Add 1 not sizeof(format). Note that mContents might have just changed due Assign() above.
+		mAttrib |= VAR_ATTRIB_BINARY_CLIP;
+		return OK; // No need to call Close() in this case.
+	}
+
+	// SINCE ABOVE DIDN'T RETURN, A VARIABLE CONTAINING BINARY CLIPBOARD DATA IS BEING COPIED BACK ONTO THE CLIPBOARD.
+	if (!g_clip.Open())
+		return g_script.ScriptError(CANT_OPEN_CLIPBOARD_WRITE);
+	EmptyClipboard(); // Failure is not checked for since it's probably impossible under these conditions.
+
+	// In case the variable contents are incomplete or corrupted (such as having been read in from a
+	// bad file with FileRead), prevent reading beyond the end of the variable:
+	LPVOID next, binary_contents = aSourceVar.mContents;
+	LPVOID binary_contents_max = (char *)binary_contents + aSourceVar.mLength + 1; // The last acessible byte, which should be the last byte of the (UINT)0 terminator.
+	HGLOBAL hglobal;
+	LPVOID hglobal_locked;
+	UINT format;
+	SIZE_T size;
+
+	while ((next = (char *)binary_contents + sizeof(format)) <= binary_contents_max
+		&& (format = *(UINT *)binary_contents)) // Get the format.  Relies on short-circuit boolean order.
+	{
+		binary_contents = next;
+		if ((next = (char *)binary_contents + sizeof(size)) > binary_contents_max)
+			break;
+		size = *(UINT *)binary_contents; // Get the size of this format's data.
+		binary_contents = next;
+		if ((next = (char *)binary_contents + size) > binary_contents_max)
+			break;
+	    if (   !(hglobal = GlobalAlloc(GMEM_MOVEABLE, size))   ) // size==0 is okay.
+		{
+			g_clip.Close();
+			return g_script.ScriptError(ERR_OUTOFMEM); // Short msg since so rare.
+		}
+		if (size) // i.e. Don't try to lock memory of size zero.  It won't work and it's not needed.
+		{
+			if (   !(hglobal_locked = GlobalLock(hglobal))   )
+			{
+				GlobalFree(hglobal);
+				g_clip.Close();
+				return g_script.ScriptError("GlobalLock"); // Short msg since so rare.
+			}
+			memcpy(hglobal_locked, binary_contents, size);
+			GlobalUnlock(hglobal);
+			binary_contents = next;
+		}
+		//else hglobal is just an empty format, but store it for completeness/accuracy (e.g. CF_BITMAP).
+		SetClipboardData(format, hglobal); // The system now owns hglobal.
+	}
+	return g_clip.Close();
 }
 
 
@@ -790,6 +1085,32 @@ void Var::Free(int aWhenToFree, bool aExcludeAliases)
 		// than a theoretical test script seem nearly astronomical.
 		break;
 	} // switch()
+}
+
+
+
+ResultType Var::AppendIfRoom(char *aStr, VarSizeType aLength)
+// Returns OK if there's room enough to append aStr and it succeeds.
+// Returns FAIL otherwise.
+{
+	if (!aLength) // Consider the appending of nothing (even onto unsupported things like clipboard) to be a success.
+		return OK;
+	// Relies on the fact that aliases can't point to other aliases (enforced by UpdateAlias()):
+	Var &var = *(mType == VAR_ALIAS ? mAliasFor : this);
+	if (var.mType != VAR_NORMAL) // e.g. VAR_CLIPBOARD. This is for maintainability since it currently isn't called this way.
+		return FAIL;
+	VarSizeType var_length = LengthIgnoreBinaryClip(); // Get the apparent length because one caller is a concat that wants consistent behavior of the .= operator regardless of whether this shortcut succeeds or not.
+	VarSizeType new_length = var_length + aLength;
+	if (new_length >= var.mCapacity) // Not enough room.
+		return FAIL;
+	memmove(var.mContents + var_length, aStr, aLength);  // memmove() vs. memcpy() in case there's any overlap between source and dest.
+	var.mContents[new_length] = '\0'; // Terminate it as a separate step in case caller passed a length shorter than the apparent length of aStr.
+	var.mLength = new_length;
+	// If this is a binary-clip variable, appending has probably "corrupted" it; so don't allow it to ever be
+	// put back onto the clipboard as binary data (the routine that does that is designed to detect corruption,
+	// but it might not be perfect since corruption is so rare).
+	var.mAttrib &= ~VAR_ATTRIB_BINARY_CLIP;
+	return OK;
 }
 
 

@@ -139,27 +139,15 @@ public:
 	// exception handler there.
 	static char sEmptyString[1]; // See above.
 
-	ResultType AssignHWND(HWND aWnd)
-	{
-		// Convert to unsigned 64-bit to support for 64-bit pointers.  Since most script operations --
-		// such as addition and comparison -- read strings in as signed 64-bit, it is documented that
-		// math and other numerical operations should never be performed on these while they exist
-		// as strings in script variables:
-		//#define ASSIGN_HWND_TO_VAR(var, hwnd) var->Assign((unsigned __int64)hwnd)
-		// UPDATE: Always assign as hex for better compatibility with Spy++ and other apps that
-		// report window handles:
-		char buf[64];
-		*buf = '0';
-		buf[1] = 'x';
-		_ui64toa((unsigned __int64)aWnd, buf + 2, 16);
-		return Assign(buf);
-	}
-
-	ResultType Assign(int aValueToAssign);
+	ResultType AssignHWND(HWND aWnd);
 	ResultType Assign(DWORD aValueToAssign);
+	ResultType Assign(int aValueToAssign);
 	ResultType Assign(__int64 aValueToAssign);
 	//ResultType Assign(unsigned __int64 aValueToAssign);
 	ResultType Assign(double aValueToAssign);
+	ResultType Assign(ExprTokenType &aToken);
+	ResultType AssignClipboardAll();
+	ResultType AssignBinaryClip(Var &aSourceVar);
 	ResultType Assign(char *aBuf = NULL, VarSizeType aLength = VARSIZE_MAX, bool aExactSize = false, bool aObeyMaxMem = true);
 	VarSizeType Get(char *aBuf = NULL);
 
@@ -170,6 +158,7 @@ public:
 	#define VAR_NEVER_FREE                     3
 	#define VAR_FREE_IF_LARGE                  4
 	void Free(int aWhenToFree = VAR_ALWAYS_FREE, bool aExcludeAliases = false);
+	ResultType AppendIfRoom(char *aStr, VarSizeType aLength);
 	void AcceptNewMem(char *aNewMem, VarSizeType aLength);
 	void SetLengthFromContents();
 

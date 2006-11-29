@@ -226,33 +226,44 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 	// of something like 2**1**2 does matter).  It also helps performance by avoiding unnecessary pushing
 	// and popping of operators to the stack. This array must be kept in sync with "enum SymbolType".
 	// Also, dimensioning explicitly by SYM_COUNT helps enforce that at compile-time:
-	static int sPrecedence[SYM_COUNT] =
+	static UCHAR sPrecedence[SYM_COUNT] =  // Performance: UCHAR vs. INT benches a little faster, perhaps due to the slight reduction in code size it causes.
 	{
 		0, 0, 0, 0, 0, 0 // SYM_STRING, SYM_INTEGER, SYM_FLOAT, SYM_VAR, SYM_OPERAND, SYM_BEGIN (SYM_BEGIN must be lowest precedence).
-		, 1, 1, 1        // SYM_CPAREN, SYM_OPAREN, SYM_COMMA (to simplify the code, parentheses must be lower than all operators in precedence).
-		, 2              // SYM_OR
-		, 3              // SYM_AND
-		, 4              // SYM_LOWNOT (the low precedence version of logical-not)
-		, 5, 5, 5        // SYM_EQUAL, SYM_EQUALCASE, SYM_NOTEQUAL (lower prec. than the below so that "x < 5 = var" means "result of comparison is the boolean value in var".
-		, 6, 6, 6, 6     // SYM_GT, SYM_LT, SYM_GTOE, SYM_LTOE
-		, 7              // SYM_CONCAT
-		, 8              // SYM_BITOR -- Seems more intuitive to have these three higher in prec. than the above, unlike C and Perl, but like Python.
-		, 9              // SYM_BITXOR
-		, 10             // SYM_BITAND
-		, 11, 11         // SYM_BITSHIFTLEFT, SYM_BITSHIFTRIGHT
-		, 12, 12         // SYM_PLUS, SYM_MINUS
-		, 13, 13, 13     // SYM_TIMES, SYM_DIVIDE, SYM_FLOORDIVIDE
-		, 14, 14, 14, 14 // SYM_NEGATIVE (unary minus), SYM_HIGHNOT (the high precedence "not" operator), SYM_BITNOT, SYM_ADDRESS
-		, 15             // SYM_POWER (see note below).
-		, 16             // SYM_DEREF -- Giving this a higher precedence than the above allows !*Var to work, and also -*Var and ~*Var.
-		, 17             // SYM_FUNC -- Probably must be of highest precedence for it to work properly.
+		, 82, 82         // SYM_POST_INCREMENT, SYM_POST_DECREMENT: Highest precedence operator so that it will work even though it comes *after* a variable name (unlike other unaries, which come before).
+		, 4, 4           // SYM_CPAREN, SYM_OPAREN (to simplify the code, parentheses must be lower than all operators in precedence).
+		, 6              // SYM_COMMA -- Must be just above SYM_OPAREN so it doesn't pop OPARENs off the stack.
+		, 7,7,7,7,7,7,7,7,7,7,7,7  // SYM_ASSIGN_*. THESE HAVE AN ODD NUMBER to indicate right-to-left evaluation order, which is necessary for cascading assignments such as x:=y:=1 to work.
+//		, 8              // This value must be left unused so that the one above can be promoted to it by the infix-to-postfix routine.
+		, 11, 11         // SYM_IFF_ELSE, SYM_IFF_THEN (ternary conditional).  HAS AN ODD NUMBER to indicate right-to-left evaluation order, which is necessary for ternaries to perform traditionally when nested in each other without parentheses.
+//		, 12             // THIS VALUE MUST BE LEFT UNUSED so that the one above can be promoted to it by the infix-to-postfix routine.
+		, 16             // SYM_OR
+		, 20             // SYM_AND
+		, 25             // SYM_LOWNOT (the word "NOT": the low precedence version of logical-not).  HAS AN ODD NUMBER to indicate right-to-left evaluation order so that things like "not not var" are supports (which can be used to convert a variable into a pure 1/0 boolean value).
+//		, 26             // This value must be left unused so that the one above can be promoted to it by the infix-to-postfix routine.
+		, 30, 30, 30     // SYM_EQUAL, SYM_EQUALCASE, SYM_NOTEQUAL (lower prec. than the below so that "x < 5 = var" means "result of comparison is the boolean value in var".
+		, 34, 34, 34, 34 // SYM_GT, SYM_LT, SYM_GTOE, SYM_LTOE
+		, 38             // SYM_CONCAT
+		, 42             // SYM_BITOR -- Seems more intuitive to have these three higher in prec. than the above, unlike C and Perl, but like Python.
+		, 46             // SYM_BITXOR
+		, 50             // SYM_BITAND
+		, 54, 54         // SYM_BITSHIFTLEFT, SYM_BITSHIFTRIGHT
+		, 58, 58         // SYM_ADD, SYM_SUBTRACT
+		, 62, 62, 62     // SYM_MULTIPLY, SYM_DIVIDE, SYM_FLOORDIVIDE
+		, 67,67,67,67,67 // SYM_NEGATIVE (unary minus), SYM_HIGHNOT (the high precedence "!" operator), SYM_BITNOT, SYM_ADDRESS, SYM_DEREF
+		// NOTE: THE ABOVE MUST BE AN ODD NUMBER to indicate right-to-left evaluation order, which was added in v1.0.46 to support consecutive unary operators such as !*var !!var (!!var can be used to convert a value into a pure 1/0 boolean).
+//		, 68             // THIS VALUE MUST BE LEFT UNUSED so that the one above can be promoted to it by the infix-to-postfix routine.
+		, 72             // SYM_POWER (see note below).  Associativity kept as left-to-right for backward compatibility (e.g. 2**2**3 is 4**3=64 not 2**8=256).
+		, 77, 77         // SYM_PRE_INCREMENT, SYM_PRE_DECREMENT (higher precedence than SYM_POWER because it doesn't make sense to evaluate power first because that would cause ++/-- to fail due to operating on a non-lvalue.
+//		, 78             // THIS VALUE MUST BE LEFT UNUSED so that the one above can be promoted to it by the infix-to-postfix routine.
+//		, 82, 82         // RESERVED FOR SYM_POST_INCREMENT, SYM_POST_DECREMENT (which are listed higher above for the performance of YIELDS_AN_OPERAND().
+		, 86             // SYM_FUNC -- Must be of highest precedence so that it stays tightly bound together as though it's a single operand for use by other operators.
 	};
 	// Most programming languages give exponentiation a higher precedence than unary minus and logical-not.
 	// For example, -2**2 is evaluated as -(2**2), not (-2)**2 (the latter is unsupported by qmathPow anyway).
 	// However, this rule requires a small workaround in the postfix-builder to allow 2**-2 to be
 	// evaluated as 2**(-2) rather than being seen as an error.  v1.0.45: A similar thing is required
 	// to allow the following to work: 2**!1, 2**not 0, 2**~0xFFFFFFFE, 2**&x.
-	// On a related note, the right-to-left tradition of something like 2**3**4 is not implemented.
+	// On a related note, the right-to-left tradition of something like 2**3**4 is not implemented (maybe in v2).
 	// Instead, the expression is evaluated from left-to-right (like other operators) to simplify the code.
 
 	#define MAX_TOKENS 512 // Max number of operators/operands.  Seems enough to handle anything realistic, while conserving call-stack space.
@@ -279,7 +290,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 	{
 		// Because neither the postfix array nor the stack can ever wind up with more tokens than were
 		// contained in the original infix array, only the infix array need be checked for overflow:
-		if (infix_count > MAX_TOKENS - 1) // No room for this operator or operand to be added.
+		if (infix_count >= MAX_TOKENS) // No room for this operator or operand to be added.
 			goto abnormal_end;
 
 		map_item &this_map_item = map[map_index];
@@ -289,7 +300,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 		case EXP_DEREF_VAR:
 		case EXP_DEREF_FUNC:
 		case EXP_DEREF_SINGLE:
-			if (infix_count && IS_OPERAND_OR_CPAREN(infix[infix_count - 1].symbol)) // If it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
+			if (infix_count && YIELDS_AN_OPERAND(infix[infix_count - 1].symbol)) // If it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
 			{
 				if (infix_count > MAX_TOKENS - 2) // -2 to ensure room for this operator and the operand further below.
 					goto abnormal_end;
@@ -297,8 +308,8 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 			}
 			switch (this_map_item.type)
 			{
-			case EXP_DEREF_VAR: // Type() is always VAR_NORMAL as verified earlier. This is relied upon in several places such as built-in functions.
-				infix[infix_count].symbol = SYM_VAR; // DllCall() and possibly others rely on this having been done to support changing the value of a parameter (similar to by-ref).
+			case EXP_DEREF_VAR: // DllCall() and possibly others rely on this having been done to support changing the value of a parameter (similar to by-ref).
+				infix[infix_count].symbol = SYM_VAR; // Type() is always VAR_NORMAL as verified earlier. This is relied upon in several places such as built-in functions.
 				infix[infix_count].var = this_map_item.var;
 				break;
 			case EXP_DEREF_FUNC:
@@ -378,78 +389,140 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 			{
 			// The most common cases are kept up top to enhance performance if switch() is implemented as if-else ladder.
 			case '+':
-				sym_prev = infix_count ? infix[infix_count - 1].symbol : SYM_OPAREN; // OPARAN is just a placeholder.
-				if (IS_OPERAND_OR_CPAREN(sym_prev)) // CPAREN also covers the tail end of a function call.
-					this_infix_item.symbol = SYM_PLUS;
-				else // Remove unary pluses from consideration since they do not change the calculation.
-					--infix_count; // Counteract the loop's increment.
+				if (cp[1] == '=')
+				{
+					++cp; // An additional increment to have loop skip over the operator's second symbol.
+					this_infix_item.symbol = SYM_ASSIGN_ADD;
+				}
+				else
+				{
+					sym_prev = infix_count ? infix[infix_count - 1].symbol : SYM_OPAREN; // OPARAN is just a placeholder.
+					if (YIELDS_AN_OPERAND(sym_prev))
+					{
+						if (cp[1] == '+')
+						{
+							// For consistency, assume that since the previous item is an operand (even if it's
+							// ')'), this is a post-op that applies to that operand.  For example, the following
+							// are all treated the same for consistency (implicit concatention where the '.'
+							// is omitted is rare anyway).
+							// x++ y
+							// x ++ y
+							// x ++y
+							++cp; // An additional increment to have loop skip over the operator's second symbol.
+							this_infix_item.symbol = SYM_POST_INCREMENT;
+						}
+						else
+							this_infix_item.symbol = SYM_ADD;
+					}
+					else if (cp[1] == '+') // Pre-increment.
+					{
+						++cp; // An additional increment to have loop skip over the operator's second symbol.
+						this_infix_item.symbol = SYM_PRE_INCREMENT;
+					}
+					else // Remove unary pluses from consideration since they do not change the calculation.
+						--infix_count; // Counteract the loop's increment.
+				}
 				break;
 			case '-':
+				if (cp[1] == '=')
+				{
+					++cp; // An additional increment to have loop skip over the operator's second symbol.
+					this_infix_item.symbol = SYM_ASSIGN_SUBTRACT;
+					break;
+				}
+				// Otherwise (since above didn't "break"):
 				sym_prev = infix_count ? infix[infix_count - 1].symbol : SYM_OPAREN; // OPARAN is just a placeholder.
 				// Must allow consecutive unary minuses because otherwise, the following example
 				// would not work correctly when y contains a negative value: var := 3 * -y
-				if (sym_prev == SYM_NEGATIVE) // Have this negative cancel out the previous negative.
-					infix_count -= 2;  // Subtracts 1 for the loop's increment, and 1 to remove the previous item.
-				else // Differentiate between unary minus and the "subtract" operator:
+				if (YIELDS_AN_OPERAND(sym_prev))
 				{
-					if (IS_OPERAND_OR_CPAREN(sym_prev))
-						this_infix_item.symbol = SYM_MINUS;
-					else // Unary minus.
+					if (cp[1] == '-')
 					{
-						// Set default for cases where the processing below this line doesn't determine
-						// it's a negative numeric literal:
-						this_infix_item.symbol = SYM_NEGATIVE;
-						// v1.0.40.06: The smallest signed 64-bit number (-0x8000000000000000) wasn't properly
-						// supported in previous versions because its unary minus was being seen as an operator,
-						// and thus the raw number was being passed as a positive to _atoi64() or _strtoi64(),
-						// neither of which would recognize it as a valid value.  To correct this, a unary
-						// minus followed by a raw numeric literal is now treated as a single literal number
-						// rather than unary minus operator followed by a positive number.
-						//
-						// To be a valid "literal negative number", the character immediately following
-						// the unary minus must not be:
-						// 1) Whitespace (atoi() and such don't support it, nor is it at all conventional).
-						// 2) An open-parenthesis such as the one in -(x).
-						// 3) Another unary minus or operator such as --2 (which should evaluate to 2).
-						// To cover the above and possibly other unforeseen things, insist that the first
-						// character be a digit (even a hex literal must start with 0).
-						if (cp[1] >= '0' && cp[1] <= '9')
-						{
-							// Find the end of this number (this also sets op_end correctly for use by
-							// "goto numeric_literal"):
-							for (op_end = cp + 2; !strchr(EXPR_OPERAND_TERMINATORS, *op_end); ++op_end);
-							if (op_end < this_map_item.end) // Detect numeric double derefs such as one created via "12%i% = value".
-							{
-								// Because the power operator takes precedence over unary minus, don't collapse
-								// unary minus into a literal numeric literal if the number is immediately
-								// followed by the power operator.  This is correct behavior even for
-								// -0x8000000000000000 because -0x8000000000000000**2 would in fact be undefined
-								// because +0x8000000000000000 is beyond the signed 64-bit range.
-								// Use a temp variable because numeric_literal requires that op_end be set properly:
-								char *pow_temp = omit_leading_whitespace(op_end);
-								if (!(pow_temp[0] == '*' && pow_temp[1] == '*'))
-									goto numeric_literal; // Goto is used for performance and also as a patch to minimize the chance of breaking other things via redesign.
-								//else leave this unary minus as an operator.
-							}
-							//else possible double deref, so leave this unary minus as an operator.
-						}
+						// See comments at SYM_POST_INCREMENT about this section.
+						++cp; // An additional increment to have loop skip over the operator's second symbol.
+						this_infix_item.symbol = SYM_POST_DECREMENT;
 					}
+					else
+						this_infix_item.symbol = SYM_SUBTRACT;
 				}
+				else if (cp[1] == '-') // Pre-decrement.
+				{
+					++cp; // An additional increment to have loop skip over the operator's second symbol.
+					this_infix_item.symbol = SYM_PRE_DECREMENT;
+				}
+				else // Unary minus.
+				{
+					// Set default for cases where the processing below this line doesn't determine
+					// it's a negative numeric literal:
+					this_infix_item.symbol = SYM_NEGATIVE;
+					// v1.0.40.06: The smallest signed 64-bit number (-0x8000000000000000) wasn't properly
+					// supported in previous versions because its unary minus was being seen as an operator,
+					// and thus the raw number was being passed as a positive to _atoi64() or _strtoi64(),
+					// neither of which would recognize it as a valid value.  To correct this, a unary
+					// minus followed by a raw numeric literal is now treated as a single literal number
+					// rather than unary minus operator followed by a positive number.
+					//
+					// To be a valid "literal negative number", the character immediately following
+					// the unary minus must not be:
+					// 1) Whitespace (atoi() and such don't support it, nor is it at all conventional).
+					// 2) An open-parenthesis such as the one in -(x).
+					// 3) Another unary minus or operator such as --2 (which should evaluate to 2).
+					// To cover the above and possibly other unforeseen things, insist that the first
+					// character be a digit (even a hex literal must start with 0).
+					if (cp[1] >= '0' && cp[1] <= '9')
+					{
+						// Find the end of this number (this also sets op_end correctly for use by
+						// "goto numeric_literal"):
+						for (op_end = cp + 2; !strchr(EXPR_OPERAND_TERMINATORS, *op_end); ++op_end);
+						if (op_end < this_map_item.end) // Detect numeric double derefs such as one created via "12%i% = value".
+						{
+							// Because the power operator takes precedence over unary minus, don't collapse
+							// unary minus into a literal numeric literal if the number is immediately
+							// followed by the power operator.  This is correct behavior even for
+							// -0x8000000000000000 because -0x8000000000000000**2 would in fact be undefined
+							// because +0x8000000000000000 is beyond the signed 64-bit range.
+							// Use a temp variable because numeric_literal requires that op_end be set properly:
+							char *pow_temp = omit_leading_whitespace(op_end);
+							if (!(pow_temp[0] == '*' && pow_temp[1] == '*'))
+								goto numeric_literal; // Goto is used for performance and also as a patch to minimize the chance of breaking other things via redesign.
+							//else leave this unary minus as an operator.
+						}
+						//else possible double deref, so leave this unary minus as an operator.
+					}
+				} // Unary minus.
 				break;
 			case ',':
-				this_infix_item.symbol = SYM_COMMA; // It's serves only as a "do not auto-concatenate" indicator for later below.
+				this_infix_item.symbol = SYM_COMMA; // Used to separate sub-statements and function parameters.
 				break;
 			case '/':
-				if (cp[1] == '/')
+				if (cp[1] == '=')
 				{
-					++cp; // An additional increment to have loop skip over the second '/' too.
-					this_infix_item.symbol = SYM_FLOORDIVIDE;
+					++cp; // An additional increment to have loop skip over the operator's second symbol.
+					this_infix_item.symbol = SYM_ASSIGN_DIVIDE;
+				}
+				else if (cp[1] == '/')
+				{
+					if (cp[2] == '=')
+					{
+						cp += 2; // An additional increment to have loop skip over the operator's 2nd & 3rd symbols.
+						this_infix_item.symbol = SYM_ASSIGN_FLOORDIVIDE;
+					}
+					else
+					{
+						++cp; // An additional increment to have loop skip over the second '/' too.
+						this_infix_item.symbol = SYM_FLOORDIVIDE;
+					}
 				}
 				else
 					this_infix_item.symbol = SYM_DIVIDE;
 				break;
 			case '*':
-				if (cp[1] == '*') // Python, Perl, and other languages also use ** for power.
+				if (cp[1] == '=')
+				{
+					++cp; // An additional increment to have loop skip over the operator's second symbol.
+					this_infix_item.symbol = SYM_ASSIGN_MULTIPLY;
+				}
+				else if (cp[1] == '*') // Python, Perl, and other languages also use ** for power.
 				{
 					++cp; // An additional increment to have loop skip over the second '*' too.
 					this_infix_item.symbol = SYM_POWER;
@@ -458,8 +531,8 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 				{
 					// Differentiate between unary dereference (*) and the "multiply" operator:
 					// See '-' above for more details:
-					this_infix_item.symbol = IS_OPERAND_OR_CPAREN(infix_count ? infix[infix_count - 1].symbol : SYM_OPAREN)
-						? SYM_TIMES : SYM_DEREF;
+					this_infix_item.symbol = YIELDS_AN_OPERAND(infix_count ? infix[infix_count - 1].symbol : SYM_OPAREN)
+						? SYM_MULTIPLY : SYM_DEREF;
 				}
 				break;
 			case '!':
@@ -481,7 +554,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 				// for prior to checking the below.  For example, if what immediately follows the open-paren is
 				// the string "int)", this symbol is not open-paren at all but instead the unary type-cast-to-int
 				// operator.
-				if (infix_count && IS_OPERAND_OR_CPAREN(infix[infix_count - 1].symbol)) // If it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
+				if (infix_count && YIELDS_AN_OPERAND(infix[infix_count - 1].symbol)) // If it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
 				{
 					if (infix_count > MAX_TOKENS - 2) // -2 to ensure room for this operator and the operand further below.
 						goto abnormal_end;
@@ -513,8 +586,16 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 					this_infix_item.symbol = SYM_GTOE;
 					break;
 				case '>':
-					++cp; // An additional increment to have loop skip over the second '>' too.
-					this_infix_item.symbol = SYM_BITSHIFTRIGHT;
+					if (cp[2] == '=')
+					{
+						cp += 2; // An additional increment to have loop skip over the operator's 2nd & 3rd symbols.
+						this_infix_item.symbol = SYM_ASSIGN_BITSHIFTRIGHT;
+					}
+					else
+					{
+						++cp; // An additional increment to have loop skip over the second '>' too.
+						this_infix_item.symbol = SYM_BITSHIFTRIGHT;
+					}
 					break;
 				default:
 					this_infix_item.symbol = SYM_GT;
@@ -532,8 +613,16 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 					this_infix_item.symbol = SYM_NOTEQUAL;
 					break;
 				case '<':
-					++cp; // An additional increment to have loop skip over the second '<' too.
-					this_infix_item.symbol = SYM_BITSHIFTLEFT;
+					if (cp[2] == '=')
+					{
+						cp += 2; // An additional increment to have loop skip over the operator's 2nd & 3rd symbols.
+						this_infix_item.symbol = SYM_ASSIGN_BITSHIFTLEFT;
+					}
+					else
+					{
+						++cp; // An additional increment to have loop skip over the second '<' too.
+						this_infix_item.symbol = SYM_BITSHIFTLEFT;
+					}
 					break;
 				default:
 					this_infix_item.symbol = SYM_LT;
@@ -545,11 +634,16 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 					++cp; // An additional increment to have loop skip over the second '&' too.
 					this_infix_item.symbol = SYM_AND;
 				}
+				else if (cp[1] == '=')
+				{
+					++cp; // An additional increment to have loop skip over the operator's second symbol.
+					this_infix_item.symbol = SYM_ASSIGN_BITAND;
+				}
 				else
 				{
 					// Differentiate between unary "take the address of" and the "bitwise and" operator:
 					// See '-' above for more details:
-					this_infix_item.symbol = IS_OPERAND_OR_CPAREN(infix_count ? infix[infix_count - 1].symbol : SYM_OPAREN)
+					this_infix_item.symbol = YIELDS_AN_OPERAND(infix_count ? infix[infix_count - 1].symbol : SYM_OPAREN)
 						? SYM_BITAND : SYM_ADDRESS;
 				}
 				break;
@@ -559,11 +653,22 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 					++cp; // An additional increment to have loop skip over the second '|' too.
 					this_infix_item.symbol = SYM_OR;
 				}
+				else if (cp[1] == '=')
+				{
+					++cp; // An additional increment to have loop skip over the operator's second symbol.
+					this_infix_item.symbol = SYM_ASSIGN_BITOR;
+				}
 				else
 					this_infix_item.symbol = SYM_BITOR;
 				break;
 			case '^':
-				this_infix_item.symbol = SYM_BITXOR;
+				if (cp[1] == '=')
+				{
+					++cp; // An additional increment to have loop skip over the operator's second symbol.
+					this_infix_item.symbol = SYM_ASSIGN_BITXOR;
+				}
+				else
+					this_infix_item.symbol = SYM_BITXOR;
 				break;
 			case '~':
 				// If what lies to its left is a CPARAN or OPERAND, SYM_CONCAT is not auto-inserted because:
@@ -572,6 +677,18 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 				//    always be seen as the binary subtract operator in such cases.
 				// 3) Simplifies the code.
 				this_infix_item.symbol = SYM_BITNOT;
+				break;
+			case '?':
+				this_infix_item.symbol = SYM_IFF_THEN;
+				break;
+			case ':':
+				if (cp[1] == '=')
+				{
+					++cp; // An additional increment to have loop skip over the second '|' too.
+					this_infix_item.symbol = SYM_ASSIGN;
+				}
+				else
+					this_infix_item.symbol = SYM_IFF_ELSE;
 				break;
 
 			case '"': // Raw string literal.
@@ -603,7 +720,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 				// meaning that a series of characters such as """" would be correctly converted into
 				// two double quotes rather than just collapsing into one.
 				// For the below, see comments at (this_map_item.type == EXP_DEREF_SINGLE) above.
-				if (infix_count && IS_OPERAND_OR_CPAREN(infix[infix_count - 1].symbol)) // If it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
+				if (infix_count && YIELDS_AN_OPERAND(infix[infix_count - 1].symbol)) // If it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
 				{
 					if (infix_count > MAX_TOKENS - 2) // -2 to ensure room for this operator and the operand further below.
 						goto abnormal_end;
@@ -627,13 +744,22 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 				// things like (x=3)and(5=4) or even "x and!y", the and/or/not operators are processed
 				// here with the numeric literals since we want to find op_end the same way.
 
-				if (*cp == '.' && IS_SPACE_OR_TAB(cp[1])) // This one must be done here rather than as a "case".  See comment below.
+				if (*cp == '.') // This one must be done here rather than as a "case".  See comment below.
 				{
-					this_infix_item.symbol = SYM_CONCAT;
-					break;
+					if (cp[1] == '=')
+					{
+						++cp; // An additional increment to have loop skip over the operator's second symbol.
+						this_infix_item.symbol = SYM_ASSIGN_CONCAT;
+						break;
+					}
+					if (IS_SPACE_OR_TAB(cp[1]))
+					{
+						this_infix_item.symbol = SYM_CONCAT;
+						break;
+					}
 				}
-				//else any '.' not followed by a space or tab is likely a number without a leading zero,
-				// so continue on below to process it.
+				// Since above didn't "break", this is a '.' not followed by a space, tab, or '='.  So it's
+				// likely a number without a leading zero like .2, so continue on below to process it.
 
 				// Find the end of this operand or keyword, even if that end is beyond this_map_item.end.
 				// StrChrAny() is not used because if *op_end is '\0', the strchr() below will find it too:
@@ -669,7 +795,7 @@ numeric_literal:
 				// Since above didn't "continue", this item is a raw numeric literal, either SYM_FLOAT or
 				// SYM_INTEGER (to be differentiated later).
 				// For the below, see comments at (this_map_item.type == EXP_DEREF_SINGLE) above.
-				if (infix_count && IS_OPERAND_OR_CPAREN(infix[infix_count - 1].symbol)) // If it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
+				if (infix_count && YIELDS_AN_OPERAND(infix[infix_count - 1].symbol)) // If it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
 				{
 					if (infix_count > MAX_TOKENS - 2) // -2 to ensure room for this operator and the operand further below.
 						goto abnormal_end;
@@ -757,7 +883,7 @@ double_deref:
 		// Example 1: Var := "abc" %naked_double_ref%
 		// Example 2: Var := "abc" Array%Index%
 		// UPDATE: Here is the means by which the above is now supported:
-		if (infix_count && IS_OPERAND_OR_CPAREN(infix[infix_count - 1].symbol)) // If it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
+		if (infix_count && YIELDS_AN_OPERAND(infix[infix_count - 1].symbol)) // If it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
 		{
 			if (infix_count > MAX_TOKENS - 2) // -2 to ensure room for this operator and the operand further below.
 				goto abnormal_end;
@@ -818,161 +944,206 @@ double_deref:
 				infix[infix_count].var = found_var;
 			}
 		} // Double-deref section.
-		++infix_count;
+		++infix_count; // This is done here rather than in the loop's control statement because there's currently at least one "continue" above that doesn't do the increment.
 	} // for each map item
+
+	if (infix_count >= MAX_TOKENS) // No room for this operator or operand to be added.
+		goto abnormal_end;
+	infix[infix_count].symbol = SYM_INVALID; // Terminate the array with a special item.  This allows infix-to-postfix conversion to do a faster traversal of the infix array.
 
 	////////////////////////////
 	// CONVERT INFIX TO POSTFIX.
 	////////////////////////////
-	#define STACK_PUSH(token) stack[stack_count++] = &token
+	#define STACK_PUSH(token_ptr) stack[stack_count++] = token_ptr
 	#define STACK_POP stack[--stack_count]  // To be used as the r-value for an assignment.
 	// SYM_BEGIN is the first item to go on the stack.  It's a flag to indicate that conversion to postfix has begun:
 	ExprTokenType token_begin;
 	token_begin.symbol = SYM_BEGIN;
-	STACK_PUSH(token_begin);
+	STACK_PUSH(&token_begin);
 
-	int i;
 	SymbolType stack_symbol, infix_symbol;
+	ExprTokenType *this_infix = infix;
+	int functions_on_stack = 0;
 
-	for (i = 0; stack_count > 0;) // While SYM_BEGIN is still on the stack, continue iterating.
+	for (;;) // While SYM_BEGIN is still on the stack, continue iterating.
 	{
-		stack_symbol = stack[stack_count - 1]->symbol; // Frequently used, so resolve only once to help performance.
-
-		// "i" will be out of bounds if infix expression is complete but stack is not empty.
-		// So the very first check must be for that.
-		if (i == infix_count) // End of infix expression, but loop's check says stack still has items on it.
-		{
-			if (stack_symbol == SYM_BEGIN) // Stack is basically empty, so stop the loop.
-				// Remove SYM_BEGIN from the stack, leaving the stack empty for use in the next stage.
-				// This also signals our loop to stop.
-				--stack_count;
-			else if (stack_symbol == SYM_OPAREN) // Open paren is never closed (currently impossible due to load-time balancing, but kept for completeness).
-				goto abnormal_end;
-			else // Pop item of the stack, and continue iterating, which will hit this line until stack is empty.
-			{
-				postfix[postfix_count] = STACK_POP;
-				postfix[postfix_count++]->circuit_token = NULL; // Set default. It's only ever overridden after it's in the postfix array.
-			}
-			continue;
-		}
-
-		// Only after the above is it safe to use "i" as an index.
-		infix_symbol = infix[i].symbol; // Frequently used, so resolve only once to help performance.
+		ExprTokenType *&this_postfix = postfix[postfix_count]; // Resolve early, especially for use by "goto". Reduces code size a bit, though it doesn't measurably help performance.
+		infix_symbol = this_infix->symbol;                     //
 
 		// Put operands into the postfix array immediately, then move on to the next infix item:
 		if (IS_OPERAND(infix_symbol)) // At this stage, operands consist of only SYM_OPERAND and SYM_STRING.
 		{
-			postfix[postfix_count] = infix + i++;
-			postfix[postfix_count++]->circuit_token = NULL; // Set default. It's only ever overridden after it's in the postfix array.
-			continue;
+			this_postfix = this_infix++;
+			this_postfix->circuit_token = NULL; // Set default. It's only ever overridden after it's in the postfix array.
+			++postfix_count;
+			continue; // Doing a goto to a hypothetical "standard_postfix_circuit_token" (in lieu of these last 3 lines) reduced performance and didn't help code size.
 		}
 
-		// Since above didn't "continue", the current infix symbol is not an operand.
+		// Since above didn't "continue", the current infix symbol is not an operand, but an operator or other symbol.
+		stack_symbol = stack[stack_count - 1]->symbol; // Frequently used, so resolve only once to help performance.
+
 		switch(infix_symbol)
 		{
-		// CPAREN is listed first for performance.  It occurs frequently while emptying the stack to search
-		// for the matching open-paren:
-		case SYM_CPAREN:
-			if (stack_symbol == SYM_OPAREN) // The first open-paren on the stack must be the one that goes with this close-paren.
+		case SYM_CPAREN: // Listed first for performance. It occurs frequently while emptying the stack to search for the matching open-parenthesis.
+			if (stack_symbol == SYM_OPAREN) // See comments near the bottom of this case.  The first open-paren on the stack must be the one that goes with this close-paren.
 			{
 				--stack_count; // Remove this open-paren from the stack, since it is now complete.
-				++i;           // Since this pair of parentheses is done, move on to the next token in the infix expression.
+				++this_infix;  // Since this pair of parentheses is done, move on to the next token in the infix expression.
 				// There should be no danger of stack underflow in the following because SYM_BEGIN always
 				// exists at the bottom of the stack:
-				if (stack[stack_count - 1]->symbol == SYM_FUNC) // Within the postfix list, a function-call should always immediately follow its params.
+				if (stack[stack_count - 1]->symbol == SYM_FUNC) // i.e. topmost item on stack is SYM_FUNC.
 				{
-					postfix[postfix_count] = STACK_POP;
-					postfix[postfix_count++]->circuit_token = NULL; // Set default. It's only ever overridden after it's in the postfix array.
+					--functions_on_stack;
+					goto standard_pop_into_postfix; // Within the postfix list, a function-call should always immediately follow its params.
 				}
 			}
 			else if (stack_symbol == SYM_BEGIN) // Paren is closed without having been opened (currently impossible due to load-time balancing, but kept for completeness).
 				goto abnormal_end; 
-			else
+			else // This stack item is an operator.
 			{
-				postfix[postfix_count] = STACK_POP;
-				postfix[postfix_count++]->circuit_token = NULL; // Set default. It's only ever overridden after it's in the postfix array.
+				goto standard_pop_into_postfix;
 				// By not incrementing i, the loop will continue to encounter SYM_CPAREN and thus
 				// continue to pop things off the stack until the corresponding OPAREN is reached.
 			}
 			break;
 
-		// Open-parentheses always go on the stack to await their matching close-parentheses:
+		case SYM_FUNC:
+			++functions_on_stack; // This technique performs well but prevents multi-statements from being nested inside function calls (seems too obscure to worry about); e.g. fn((x:=5, y+=3), 2)
+			STACK_PUSH(this_infix++);
+			// NOW FALL INTO THE OPEN-PAREN BELOW because load-time validation has ensured that each SYM_FUNC
+			// is followed by a '('.
+// ABOVE CASE FALLS INTO BELOW.
 		case SYM_OPAREN:
-			STACK_PUSH(infix[i++]);
+			// Open-parentheses always go on the stack to await their matching close-parentheses.
+			STACK_PUSH(this_infix++);
 			break;
 
-		case SYM_COMMA:
-			// Fix for v1.0.31.01: Commas must force everything off the stack until this comma's own function
-			// call is encountered on the stack.  Otherwise, an expression such as fn(a+b, c) would be incorrectly
-			// converted to postfix "a b c + fn()" (i.e. the plus would operate upon b & c rather than a & b).
-			// First function-call on the stack must own this comma if expression is syntactically correct.
-			// Each function-call is accompanied by its open-parenthesis on the stack:
-			if (stack_symbol != SYM_OPAREN || stack[stack_count - 2]->symbol != SYM_FUNC) // Relies on short-circuit boolean order.
+		case SYM_IFF_ELSE: // i.e. this infix symbol is ':'.
+			if (stack_symbol == SYM_BEGIN) // ELSE with no matching IF/THEN (load-time currently doesn't validate/detect this).
+				goto abnormal_end;  // Below relies on the above check having been done, to avoid underflow.
+			// Otherwise:
+			this_postfix = STACK_POP; // There should be no danger of stack underflow in the following because SYM_BEGIN always exists at the bottom of the stack.
+			if (stack_symbol == SYM_IFF_THEN) // See comments near the bottom of this case. The first found "THEN" on the stack must be the one that goes with this "ELSE".
 			{
-				postfix[postfix_count] = STACK_POP;
-				postfix[postfix_count++]->circuit_token = NULL; // Set default. It's only ever overridden after it's in the postfix array.
-				// And by not incrementing i, this comma/case will continue to be encountered until everything comes off the stack the needs to be.
+				this_postfix->circuit_token = this_infix; // Point this "THEN" to its "ELSE" for use by short-circuit. This simplifies short-circuit by means such as avoiding the need to take notice of nested IFF's when discarding a branch (a different stage points the IFF's condition to its "THEN").
+				STACK_PUSH(this_infix++); // Push the ELSE onto the stack so that its operands will go into the postfix array before it.
+				// Above also does ++i since this ELSE found its matching IF/THEN, so it's time to move on to the next token in the infix expression.
 			}
-			else
-				++i; // Omit commas from further consideration, since they only served as a "do not concatenate" indicator earlier.
+			else // This stack item is an operator INCLUDE some other THEN's ELSE (all such ELSE's should be purged from the stack so that 1 ? 1 ? 2 : 3 : 4 creates postfix 112?3:?4: not something like 112?3?4::.
+			{
+				this_postfix->circuit_token = NULL; // Set default. It's only ever overridden after it's in the postfix array.
+				// By not incrementing i, the loop will continue to encounter SYM_IFF_ELSE and thus
+				// continue to pop things off the stack until the corresponding SYM_IFF_THEN is reached.
+			}
+			++postfix_count;
 			break;
 
-		default: // Symbol is an operator, so act according to its precedence.
+		case SYM_INVALID:
+			if (stack_symbol == SYM_BEGIN) // Stack is basically empty, so stop the loop.
+			{
+				--stack_count; // Remove SYM_BEGIN from the stack, leaving the stack empty for use in postfix eval.
+				goto end_of_infix_to_postfix; // Both infix and stack have been fully processed, so move on to the postfix evaluation phase.
+			}
+			else if (stack_symbol == SYM_OPAREN) // Open paren is never closed (currently impossible due to load-time balancing, but kept for completeness).
+				goto abnormal_end;
+			else // Pop item off the stack, AND CONTINUE ITERATING, which will hit this line until stack is empty.
+				goto standard_pop_into_postfix;
+			// ALL PATHS ABOVE must continue or goto.
+
+		default: // This infix symbol is an operator, so act according to its precedence.
 			// If the symbol waiting on the stack has a lower precedence than the current symbol, push the
 			// current symbol onto the stack so that it will be processed sooner than the waiting one.
 			// Otherwise, pop waiting items off the stack (by means of i not being incremented) until their
 			// precedence falls below the current item's precedence, or the stack is emptied.
 			// Note: BEGIN and OPAREN are the lowest precedence items ever to appear on the stack (CPAREN
 			// never goes on the stack, so can't be encountered there).
-			if (   sPrecedence[stack_symbol] < sPrecedence[infix_symbol]
-				|| stack_symbol == SYM_POWER && (infix_symbol >= SYM_NEGATIVE && infix_symbol <= SYM_ADDRESS
+			if (   sPrecedence[stack_symbol] < sPrecedence[infix_symbol] + (sPrecedence[infix_symbol] % 2) // Performance: An sPrecedence2[] array could be made in lieu of the extra add+indexing+modulo, but it benched only 0.3% faster, so the extra code size it caused didn't seem worth it.
+				|| IS_ASSIGNMENT(infix_symbol) && stack_symbol != SYM_DEREF // See note 1 below. Ordered for short-circuit performance.
+				|| stack_symbol == SYM_POWER && (infix_symbol >= SYM_NEGATIVE && infix_symbol <= SYM_DEREF // See note 2 below. Check lower bound first for short-circuit performance.
 					|| infix_symbol == SYM_LOWNOT)   )
 			{
-				// The line above is a workaround to allow 2**-2 (and others in v1.0.45) to be evaluated as
-				// 2**(-2) rather than being seen as an error.  However, for simplicity of code, consecutive
-				// unary operators are not supported (they currently produce a failure [blank value]
-				// because they wind up in the postfix array in the wrong order).
-				// !!x  ; Not supported, but Laszlo pointed out this would useful to convert a blank value into
-				//      ; a zero for use with unitialized variables.  But the workaround is to use !(!x).
-				//      ; A lesser reason not to support it is to reserve !! for future use as a new operator,
-				//      ; though that may be too unlikely due to its counterintuitiveness.
-				//      ; Similarly, "not not x" is not supported for the same reasons as the others here.
-				// !-3  ; Not supported (seems of little use anyway; can be written as !(-3) to make it work).
-				// -!3  ; Not supported (seems useless anyway, can be written as -(!3) to make it work).
-				// !x   ; Supported even if X contains a negative number, since x is recognized as an isolated operand and not something containing unary minus.
-				// !&Var ; Not supported (seems useless anyway; can be written with parentheses to make it work).
-				// -&Var ; Same
-				// ~&Var ; Same
-				// !*Var, -*Var and ~*Var: These are supported by means of having * be a higher precedence than the other unary operators.
-
-				// To facilitate short-circuit boolean evaluation, right before an AND/OR is pushed onto the
-				// stack, connect the end of it's left branch to it.  Note that the following postfix token
-				// can itself be of type AND/OR, a simple example of which is "if (true and true and true)",
-				// in which the first and's parent in an imaginary tree is the second "and".
-				// But how is it certain that this is the final operator or operand of and AND/OR's left branch?
+				// Note 1: v1.0.46: The IS_ASSIGNMENT line above was added in conjunction with the new
+				// assignment operators (e.g. := and +=). Here's what it does: Normally, the assignment
+				// operators have the lowest precedence of all (except for commas) because things that lie
+				// to the *right* of them in the infix expression should be evaluated first to be stored
+				// as the assignment's result.  However, if what lies to the *left* of the assignment
+				// operator isn't a valid lvalue/variable (and not even a unary like -x can produce an lvalue
+				// because they're not supposed to alter the contents of the variable), obeying the normal
+				// precedence rules would be produce a syntax error due to "assigning to non-lvalue".
+				// So instead, apply any pending operator on the stack (which lies to the left of the lvalue
+				// in the infix expression) *after* the assignment by leaving it on the stack.  For example,
+				// C++ and probably other langauges (but not the older ANSI C) evaluate "true ? x:=1 : y:=1"
+				// as a pair of assignments rather than as who-knows-what (probably a syntax error if you
+				// strictly followed precedence).  Similarly, C++ evaluates "true ? var1 : var2 := 3" not as
+				// "(true ? var1 : var2) := 3" (like ANSI C) but as "true ? var1 : (var2 := 3)".  Other examples:
+				// -> not var:=5 ; It's evaluated contrary to precedence as: not (var:=5) [PHP does this too,
+				//    and probably others]
+				// -> 5 + var+=5 ; It's evaluated contrary to precedence as: 5 + (var+=5) [not sure if other
+				//    languages do ones like this]
+				// -> ++i := 5 ; Silly since increment has no lasting effect; so assign the 5 then do the pre-inc.
+				// -> ++i /= 5 ; Valid, but maybe too obscure and inconsistent to treat it differently than
+				//    the others (especially since not many people will remember that unlike i++, ++i produces
+				//    an lvalue); so divide by 5 then do the increment.
+				// -> i++ := 5 (and i++ /= 5) ; Postfix operator can't produce an lvalue, so do the assignment
+				//    first and then the postfix op.
+				// SYM_DEREF is the only exception to the above because there's a slight chance that *Var:=X
+				// (evaluated strictly according to precedence as (*Var):=X) will be used for something someday.
+				// Also, SYM_FUNC seems unaffected by any of this due to its enclosing parentheses (i.e. even
+				// if a function-call can someday generate an lvalue [SYM_VAR], the current rules probably
+				// already support it.
+				// Performance: Adding the above behavior reduced the expressions benchmark by only 0.6%; so
+				// it seems worth it.
+				//
+				// Note 2: The SYM_POWER line above is a workaround to allow 2**-2 (and others in v1.0.45) to be
+				// evaluated as 2**(-2) rather than being seen as an error.  However, as of v1.0.46, consecutive
+				// unary operators are supported via the right-to-left evaluation flag above (formerly, consecutive
+				// unaries produced a failure [blank value]).  For example:
+				// !!x  ; Useful to convert a blank value into a zero for use with unitialized variables.
+				// not not x  ; Same as above.
+				// Other examples: !-x, -!x, !&x, -&Var, ~&Var
+				// And these deref ones (which worked even before v1.0.46 by different means: giving
+				// '*' a higher precedence than the other unaries): !*Var, -*Var and ~*Var
+				// !x  ; Supported even if X contains a negative number, since x is recognized as an isolated operand and not something containing unary minus.
+				//
+				// To facilitate short-circuit boolean evaluation, right before an AND/OR/IFF is pushed onto the
+				// stack, point the end of it's left branch to it.  Note that the following postfix token
+				// can itself be of type AND/OR/IFF, a simple example of which is "if (true and true and true)",
+				// in which the first and's parent (in an imaginary tree) is the second "and".
+				// But how is it certain that this is the final operator or operand of and AND/OR/IFF's left branch?
 				// Here is the explanation:
-				// Everything higher precedence than the AND/OR came off the stack right before it, resulting in
+				// Everything higher precedence than the AND/OR/IFF came off the stack right before it, resulting in
 				// what must be a balanced/complete sub-postfix-expression in and of itself (unless the expression
 				// has a syntax error, which is caught in various places).  Because it's complete, during the
 				// postfix evaluation phase, that sub-expression will result in a new operand for the stack,
-				// which must then be the left side of the AND/OR because the right side immediately follows it
-				// within the postfix array, which in turn is immediately followed its operator (namely AND/OR).
-				if ((infix_symbol == SYM_AND || infix_symbol == SYM_OR) && postfix_count)
-					postfix[postfix_count - 1]->circuit_token = infix + i;
-				STACK_PUSH(infix[i++]);
+				// which must then be the left side of the AND/OR/IFF because the right side immediately follows it
+				// within the postfix array, which in turn is immediately followed its operator (namely AND/OR/IFF).
+				// Also, the final result of an IFF's condition-branch must point to the IFF/THEN symbol itself
+				// because that's the means by which the condition is merely "checked" rather than becoming an
+				// operand itself.
+				if (infix_symbol <= SYM_AND && infix_symbol >= SYM_IFF_THEN && postfix_count) // Check upper bound first for short-circuit performance.
+					postfix[postfix_count - 1]->circuit_token = this_infix; // In the case of IFF, this points the final result of the IFF's condition to its SYM_IFF_THEN (a different stage points the THEN to its ELSE).
+				if (infix_symbol != SYM_COMMA || !functions_on_stack) // Omit function commas from the stack because they're not needed and they would probably prevent proper evaluation.  Only statement-separator commas need to go onto the stack (see SYM_COMMA further below for comments).
+					STACK_PUSH(this_infix);
+				//else it's a function comma, so don't put it in postfix; but still continue on via the line below.
+				++this_infix;
 			}
-			else // Stack item has equal or greater precedence (if equal, left-to-right evaluation order is in effect).
-			{
-				postfix[postfix_count] = STACK_POP;
-				postfix[postfix_count++]->circuit_token = NULL; // Set default. It's only ever overridden after it's in the postfix array.
-			}
+			else // Stack item's precedence >= infix's (if equal, left-to-right evaluation order is in effect).
+				goto standard_pop_into_postfix;
 		} // switch(infix_symbol)
-	} // End of loop that builds postfix array.
+
+		continue; // Avoid falling into the label below except via explicit jump.  Performance: Doing it this way rather than replacing break with continue everywhere above generates slightly smaller and slightly faster code.
+standard_pop_into_postfix: // Use of a goto slightly reduces code size.
+		this_postfix = STACK_POP;
+		this_postfix->circuit_token = NULL; // Set default. It's only ever overridden after it's in the postfix array.
+		++postfix_count;
+	} // End of loop that builds postfix array from the infix array.
+end_of_infix_to_postfix:
 
 	///////////////////////////////////////////////////
 	// EVALUATE POSTFIX EXPRESSION (constructed above).
 	///////////////////////////////////////////////////
-	SymbolType right_is_number, left_is_number;
+	int i;
+	SymbolType right_is_number, left_is_number, result_symbol;
 	double right_double, left_double;
 	__int64 right_int64, left_int64;
 	char *right_string, *left_string;
@@ -980,18 +1151,20 @@ double_deref:
 	size_t right_length, left_length;
 	char left_buf[MAX_FORMATTED_NUMBER_LENGTH + 1];  // BIF_OnMessage relies on this one being large enough to hold MAX_VAR_NAME_LENGTH.
 	char right_buf[MAX_FORMATTED_NUMBER_LENGTH + 1]; // Only needed for holding numbers
-	int j, s, actual_param_count;
+	int j, s, actual_param_count, delta;
 	Func *prev_func;
 	char *result; // "result" is used for return values and also the final result.
 	size_t result_size, alloca_usage = 0; // v1.0.45: Track amount of alloca mem to avoid stress on stack from extreme expressions (mostly theoretical).
-	bool done, udf_is_final_action, make_result_persistent, early_return, left_branch_is_true, left_was_negative;
+	bool done, udf_is_final_action, make_result_persistent, early_return, left_branch_is_true, left_was_negative
+		, is_pre_op;
 	ExprTokenType *circuit_token;
+	Var *sym_assign_var;
 	VarBkp *var_backup = NULL;  // If needed, it will hold an array of VarBkp objects. v1.0.40.07: Initialized to NULL to facilitate an approach that's more maintainable.
 	int var_backup_count; // The number of items in the above array (when it's non-NULL).
 
 	// For each item in the postfix array: if it's an operand, push it onto stack; if it's an operator or
 	// function call, evaluate it and push its result onto the stack.
-	for (i = 0; i < postfix_count; ++i)
+	for (i = 0; i < postfix_count; ++i) // Performance: Using a handle to traverse the postfix array rather than array indexing unexpectedly benchmarked 3% slower (perhaps not statistically significant due to being caused by CPU cache hits or compiler's use of registers).  Because of that, there's not enough reason to switch to that method -- though it does generate smaller code (perhaps a savings of 200 bytes).
 	{
 		ExprTokenType &this_token = *postfix[i];  // For performance and convenience.
 
@@ -1018,7 +1191,7 @@ double_deref:
 				this_token.marker = func.mName;  // Inform function of which built-in function called it (allows code sharing/reduction). Can't use circuit_token because it's value is still needed later below.
 				this_token.buf = left_buf;       // mBIF() can use this to store a string result, and for other purposes.
 
-				// BACKUP THE CIRCUIT TOKEN:
+				// BACK UP THE CIRCUIT TOKEN:
 				circuit_token = this_token.circuit_token; // Backup the current circuit_token, which can be non-NULL (verified through code review).
 				this_token.circuit_token = NULL; // Init to detect whether the called function allocates it (i.e. we're overloading it with a new purpose).
 
@@ -1105,10 +1278,10 @@ double_deref:
 					{
 						if (j < actual_param_count) // This formal has an actual on the stack.
 						{
-							// Move on to the next item in the stack (without popping):  A check higher above
-							// has already ensured that this won't cause stack underflow:
-							--s;
-							if (stack[s]->symbol == SYM_VAR && !func.mParam[j].var->IsByRef())
+							// --s below moves on to the next item in the stack (without popping):  A check higher
+							// above has already ensured that this won't cause stack underflow:
+							ExprTokenType &this_stack_token = *stack[--s]; // Traditional, but doesn't measurably reduce code size and it's unlikely to help performance due to actual flow of control in this case.
+							if (this_stack_token.symbol == SYM_VAR && !func.mParam[j].var->IsByRef())
 							{
 								// Since this formal parameter is passed by value, if it's SYM_VAR, convert it to
 								// SYM_OPERAND to allow the variables to be backed up and reset further below without
@@ -1117,8 +1290,8 @@ double_deref:
 								// DllCall() relies on the fact that this transformation is only done for UDFs
 								// and not built-in functions such as DllCall().  This is because DllCall() sometimes
 								// needs the variable of a parameter for use as an output parameter.
-								stack[s]->marker = stack[s]->var->Contents();
-								stack[s]->symbol = SYM_OPERAND;
+								this_stack_token.marker = this_stack_token.var->Contents();
+								this_stack_token.symbol = SYM_OPERAND;
 							}
 						}
 					}
@@ -1191,36 +1364,18 @@ double_deref:
 						this_formal_param.var->UpdateAlias(token.var); // Make the formal parameter point directly to the actual parameter's contents.
 					}
 					else // This parameter is passed "by value".
-					{
-						switch(token.symbol)
-						{
-						case SYM_VAR:
-							// This case can still happen because the previous loop's conversion of all
-							// by-value SYM_VAR operands into SYM_OPERAND would not have happened if no
-							// backup was needed for this function.
-							// v1.0.45: Pass length (since it's known) so that Assign() doesn't have to call strlen().
-							// But ignore binary clipboard because it's documented that except for certain features,
-							// binary clipboard variables are seen only up to the first binary zero (mostly to
-							// simplify the code).
-							this_formal_param.var->Assign(token.var->Contents(), token.var->LengthIgnoreBinaryClip());
-							break;
-						case SYM_INTEGER:
-							this_formal_param.var->Assign(token.value_int64);
-							break;
-						case SYM_FLOAT: // Listed last for performance.
-							this_formal_param.var->Assign(token.value_double);
-							break;
-						default: // SYM_STRING or SYM_OPERAND
-							this_formal_param.var->Assign(token.marker);
-						}
-					}
+						// If toketoken.var's Type() is always VAR_NORMAL (e.g. never the clipboard).
+						// A SYM_VAR token can still happen because the previous loop's conversion of all
+						// by-value SYM_VAR operands into SYM_OPERAND would not have happened if no
+						// backup was needed for this function.
+						this_formal_param.var->Assign(token);
 				}
 
 				result = ""; // Init to default in case function doesn't return a value or it EXITs or fails.
 
 				// Launch the function similar to Gosub (i.e. not as a new quasi-thread):
 				// The performance gain of conditionally passing NULL in place of result (when this is the
-				// outermost function call of a line consisting only of function calls, namely ACT_FUNCTIONCALL)
+				// outermost function call of a line consisting only of function calls, namely ACT_EXPRESSION)
 				// would not be significant because the Return command's expression (arg1) must still be evaluated
 				// in case it calls any functions that have side-effects, e.g. "return LogThisError()".
 				prev_func = g.CurrentFunc; // This will be non-NULL when a function is called from inside another function.
@@ -1292,13 +1447,13 @@ double_deref:
 			// Above just called a function (either user-defined or built-in).
 			done = EXPR_IS_DONE; // Macro called again because its components may have changed. Resolve macro only once for use in more than one place below.
 
-			// The result just returned needs to be copied to a more persistent location.  This is done right
+			// The result just returned may need to be copied to a more persistent location.  This is done right
 			// away if the result is the contents of a local variable (since all locals are about to be freed
 			// and overwritten), which is assumed to be the case if it's not in the new deref buf because it's
 			// difficult to distinguish between when the function returned one of its own local variables
 			// rather than a global or a string/numeric literal).  The only exceptions are:
 			if (early_return // We're about to return early, so the caller will be ignoring this result entirely.
-				|| done && mActionType == ACT_FUNCTIONCALL // Outermost function call's result will be ignored, so no need to store it.
+				|| done && mActionType == ACT_EXPRESSION // Isolated expression: Outermost function call's result will be ignored, so no need to store it.
 				|| mem_count && result == mem[mem_count - 1]) // v1.0.45: A call to a built-in function can sometimes store its result here, which is already persistent.
 				make_result_persistent = false;
 			else if (result < sDerefBuf || result >= sDerefBuf + sDerefBufSize) // Not in their deref buffer (yields correct result even if sDerefBuf is NULL).
@@ -1430,7 +1585,27 @@ skip_abort_udf:
 			goto push_this_token;
 		} // if (this_token.symbol == SYM_FUNC)
 
-		// Since the above didn't "goto", this token must be a unary or binary operator.
+		if (this_token.symbol == SYM_IFF_ELSE) // This is encountered when a ternary's condition was found to be false by a prior iteration.
+		{
+			if (this_token.circuit_token // This ternary's result is some other ternary's condition (somewhat rare, so the simple method used here isn't much a concern for performance optimization).
+				&& stack_count) // Prevent underflow (this check might not be necessary; so it's just in case there's a way it can happen).
+			{
+				// To support *cascading* short-circuit when ternary/IFF's are nested inside each other, pop the
+				// topmost operand off the stack to modify its circuit_token.  The routine below will then
+				// use this as the parent IFF's *condition*, which is an non-operand of sorts because it's
+				// used only to determine which branch of an IFF will become the operand/result of this IFF.
+				circuit_token = this_token.circuit_token; // Temp copy to avoid overwrite by the next line.
+				this_token = *STACK_POP; // Struct copy.  Doing it this way is more maintainable than other methods, and is unlikely to perform much worse.
+				this_token.circuit_token = circuit_token;
+				goto non_null_circuit_token; // Must do this so that it properly evaluates this_token as the next ternary's condition.
+			}
+			// Otherwise, ignore it because its final result has already been evaluated and pushed onto the
+			// stack via prior iterations.  In other words, this ELSE branch was the IFF's final result, which
+			// is now topmost on the stack for use as an operand by a future operator.
+			continue;
+		}
+
+		// Since the above didn't "goto" or continue, this token must be a unary or binary operator.
 		// Get the first operand for this operator (for non-unary operators, this is the right-side operand):
 		if (!stack_count) // Prevent stack underflow.  An expression such as -*3 causes this.
 			goto abnormal_end;
@@ -1440,6 +1615,33 @@ skip_abort_udf:
 		// of this section.  Generic ones were pushed as-is onto the stack by a previous iteration.
 		if (!IS_OPERAND(right.symbol)) // Haven't found a way to produce this situation yet, but safe to assume it's possible.
 			goto abnormal_end;
+
+		// The following check is done after popping "right" off the stack because a prior iteration has set up
+		// SYM_IFF_THEN to be a unary operator of sorts.
+		if (this_token.symbol == SYM_IFF_THEN) // This is encountered when a ternary's condition was found to be true by a prior iteration.
+		{
+			if (!this_token.circuit_token) // This check is needed for syntax errors such as "1 ? 2" (no matching else) and perhaps other unusual circumstances.
+				goto abnormal_end; // Seems best to consider it a syntax error rather than supporting partial functionality (hard to imagine much legitimate need to omit an ELSE).
+			// SYM_IFF_THEN is encountered only when a previous iteration has determined that the ternary's condition
+			// is true.  At this stage, the ternary's "THEN" branch has already been evaluated and stored in
+			// "right".  So skip over its "else" branch (short-circuit) because that doesn't need to be evaluated.
+			for (++i; postfix[i] != this_token.circuit_token; ++i); // Should always be found, so no need to check postfix_count.
+			// And very soon, the outer loop's ++i will skip over the SYM_IFF_ELSE just found above.
+			right.circuit_token = this_token.circuit_token->circuit_token; // Can be NULL (in fact, it usually is).
+			this_token = right;   // Struct copy to set things up for push_this_token, which in turn is needed
+			goto push_this_token; // (rather than a simple STACK_PUSH(right)) because it checks for *cascading* short circuit in cases where this ternary's result is the boolean condition of another ternary.
+		}
+
+		if (this_token.symbol == SYM_COMMA) // This can only be a statement-separator comma, not a function comma, since function commas weren't put into the postfix array.
+			// Do nothing other than discarding the right-side operand that was just popped off the stack.
+			// This collapses the two sub-statements delimated by a given comma into a single result for
+			// subequent uses by another operator.  Unlike C++, the leftmost operand is preserved, not the
+			// rightmost.  This is because it's faster to just discard the topmost item on the stack, but
+			// more importantly it allows ACT_ASSIGNEXPR, ACT_ADD, and others to work properly.  For example:
+			//    Var:=5, Var1:=(Var2:=1, Var3:=2)
+			// Without the behavior implemented here, the above would wrongly put Var3's rvalue into Var2.
+			continue;
+
 		// If the operand is still generic/undetermined, find out whether it is a string, integer, or float:
 		switch(right.symbol)
 		{
@@ -1462,6 +1664,7 @@ skip_abort_udf:
 		// IF THIS IS A UNARY OPERATOR, we now have the single operand needed to perform the operation.
 		// The cases in the switch() below are all unary operators.  The other operators are handled
 		// in the switch()'s default section:
+		sym_assign_var = NULL; // Set default for use at the bottom of the following switch().
 		switch (this_token.symbol)
 		{
 		case SYM_AND: // These are now unary operators because short-circuit has made them so.  If the AND/OR
@@ -1485,7 +1688,7 @@ skip_abort_udf:
 			if (right_is_number == PURE_INTEGER)
 				this_token.value_int64 = -(right.symbol == SYM_INTEGER ? right.value_int64 : ATOI64(right_contents));
 			else if (right_is_number == PURE_FLOAT)
-				// Overwrite this_token's union with a float. No need to have the overhead of ATOF() since it can't be hex.
+				// Overwrite this_token's union with a float. No need to have the overhead of ATOF() since PURE_FLOAT is never hex.
 				this_token.value_double = -(right.symbol == SYM_FLOAT ? right.value_double : atof(right_contents));
 			else // String.
 			{
@@ -1521,6 +1724,49 @@ skip_abort_udf:
 				// it seems best to have "if !x" evaluate to TRUE.
 				this_token.value_int64 = !*right_contents; // i.e. result is false except for empty string because !"string" is false.
 			this_token.symbol = SYM_INTEGER; // Result of above is always a boolean integer (one or zero).
+			break;
+
+		case SYM_POST_INCREMENT: // These were added in v1.0.46.  It doesn't seem worth translating them into
+		case SYM_POST_DECREMENT: // += and -= at load-time or during the tokenizing phase higher above because 
+		case SYM_PRE_INCREMENT:  // it might introduce precedence problems, plus the post-inc/dec's nature is
+		case SYM_PRE_DECREMENT:  // unique among all the operators in that it pushes an operand before the evaluation.
+			if (right.symbol != SYM_VAR || right_is_number == PURE_NOT_NUMERIC)
+			{
+				this_token.marker = "";          // Make the result blank to indicate invalid operation
+				this_token.symbol = SYM_STRING;  // (assign to non-lvalue or increment/decrement a non-number).
+				break;
+			}
+			// DUE TO CODE SIZE AND PERFORMANCE decided not to support things like the following:
+			// -> ++++i ; This one actually works because pre-ops produce a variable (usable by future pre-ops).
+			// -> i++++ ; Fails because the first ++ produces an operand that isn't a variable.  It could be
+			//    supported via a cascade loop here to pull all remaining consective post/pre ops out of
+			//    the postfix array and apply them to "delta", but it just doesn't seem worth it.
+			// -> --Var++ ; Fails because ++ has higher precedence than --, but it produces an operand that isn't
+			//    a variable, so the "--" fails.  Things like --Var++ seem pointless anyway because they seem
+			//    nearly identical to the sub-expression (Var+1)? Anyway, --Var++ could probably be supported
+			//    using the loop described in the previous example.
+			delta = (this_token.symbol == SYM_POST_INCREMENT || this_token.symbol == SYM_PRE_INCREMENT) ? 1 : -1;
+			is_pre_op = (this_token.symbol >= SYM_PRE_INCREMENT); // Store this early because its symbol is about to get overwritten.
+			if (right_is_number == PURE_INTEGER)
+			{
+				this_token.value_int64 = (right.symbol == SYM_INTEGER) ? right.value_int64 : ATOI64(right_contents);
+				right.var->Assign(this_token.value_int64 + delta);
+			}
+			else // right_is_number must be PURE_FLOAT because it's the only alternative remaining.
+			{
+				// Uses atof() because no need to have the overhead of ATOF() since PURE_FLOAT is never hex.
+				this_token.value_double = (right.symbol == SYM_FLOAT) ? right.value_double : atof(right_contents);
+				right.var->Assign(this_token.value_double + delta);
+			}
+			if (is_pre_op)
+			{
+				// Push the variable itself so that the operation will have already taken effect for whoever
+				// uses this operand/result in the future (i.e. pre-op vs. post-op).
+				this_token.var = right.var;  // Make the result a variable rather than a normal operand so that its
+				this_token.symbol = SYM_VAR; // address can be taken, and it can be passed ByRef. e.g. &(++x)
+			}
+			else // Post-inc/dec, so the non-delta version, which was already stored in this_token, should get pushed.
+				this_token.symbol = right_is_number; // Set the symbol type to match the double or int64 that was already stored higher above.
 			break;
 
 		case SYM_BITNOT: // The tilde (~) operator.
@@ -1581,8 +1827,8 @@ skip_abort_udf:
 			}
 			else // Invalid, so make it a localized blank value.
 			{
-				this_token.symbol = SYM_STRING;
 				this_token.marker = "";
+				this_token.symbol = SYM_STRING;
 			}
 			break;
 
@@ -1593,11 +1839,46 @@ skip_abort_udf:
 			ExprTokenType &left = *STACK_POP; // i.e. the right operand always comes off the stack before the left.
 			if (!IS_OPERAND(left.symbol)) // Haven't found a way to produce this situation yet, but safe to assume it's possible.
 				goto abnormal_end;
+
+			if (IS_ASSIGNMENT(this_token.symbol))
+			{
+				if (left.symbol != SYM_VAR)
+				{
+					this_token.marker = "";          // Make the result blank to indicate invalid operation
+					this_token.symbol = SYM_STRING;  // (assign to non-lvalue).
+					break; // Equivalent to "goto push_this_token" in this case.
+				}
+				switch(this_token.symbol)
+				{
+				// "left" is VAR_NORMAL SYM_VAR's Type() is always VAR_NORMAL.
+				case SYM_ASSIGN: // Listed first for performance (it's probably the most common because things like ++ and += aren't expressions when they're by themselves on a line).
+					left.var->Assign(right);
+					this_token.var = left.var;   // Make the result a variable rather than a normal operand so that its
+					this_token.symbol = SYM_VAR; // address can be taken, and it can be passed ByRef. e.g. &(x:=1)
+					goto push_this_token;
+				case SYM_ASSIGN_ADD:           this_token.symbol = SYM_ADD; break;
+				case SYM_ASSIGN_SUBTRACT:      this_token.symbol = SYM_SUBTRACT; break;
+				case SYM_ASSIGN_MULTIPLY:      this_token.symbol = SYM_MULTIPLY; break;
+				case SYM_ASSIGN_DIVIDE:        this_token.symbol = SYM_DIVIDE; break;
+				case SYM_ASSIGN_FLOORDIVIDE:   this_token.symbol = SYM_FLOORDIVIDE; break;
+				case SYM_ASSIGN_BITOR:         this_token.symbol = SYM_BITOR; break;
+				case SYM_ASSIGN_BITXOR:        this_token.symbol = SYM_BITXOR; break;
+				case SYM_ASSIGN_BITAND:        this_token.symbol = SYM_BITAND; break;
+				case SYM_ASSIGN_BITSHIFTLEFT:  this_token.symbol = SYM_BITSHIFTLEFT; break;
+				case SYM_ASSIGN_BITSHIFTRIGHT: this_token.symbol = SYM_BITSHIFTRIGHT; break;
+				case SYM_ASSIGN_CONCAT:        this_token.symbol = SYM_CONCAT; break;
+				}
+				// Since above didn't goto/break, this is an assignment other than SYM_ASSIGN, so it needs further
+				// evaluation later below before the assignment will actually be made.
+				sym_assign_var = left.var; // This tells the bottom of this switch() to do extra steps for this assignment.
+			}
+
+			// Since above didn't goto/break, this is a non-unary operator that needs further processing.
 			// If the operand is still generic/undetermined, find out whether it is a string, integer, or float:
 			switch(left.symbol)
 			{
 			case SYM_VAR:
-				left_contents = left.var->Contents();
+				left_contents = left.var->Contents(); // SYM_VAR's Type() is always VAR_NORMAL.
 				left_is_number = IsPureNumeric(left_contents, true, false, true);
 				break;
 			case SYM_OPERAND:
@@ -1632,7 +1913,8 @@ skip_abort_udf:
 				case SYM_FLOAT: snprintf(left_buf, sizeof(left_buf), g.FormatFloat, left.value_double); left_string = left_buf; break;
 				default: left_string = left_contents; // SYM_STRING or SYM_OPERAND, which is already in the right format.
 				}
-				
+
+				result_symbol = SYM_INTEGER; // Set default.  Boolean results are treated as integers.
 				switch(this_token.symbol)
 				{
 				case SYM_EQUAL:     this_token.value_int64 = !((g.StringCaseSense == SCS_INSENSITIVE)
@@ -1654,8 +1936,54 @@ skip_abort_udf:
 					// binary clipboard variables are seen only up to the first binary zero (mostly to
 					// simplify the code).
 					right_length = (right.symbol == SYM_VAR) ? right.var->LengthIgnoreBinaryClip() : strlen(right_string);
+					if (sym_assign_var // Since "right" is being appended onto a variable ("left"), an optimization is possible.
+						&& sym_assign_var->AppendIfRoom(right_string, (VarSizeType)right_length)) // But only if the target variable has enough remaining capacity.
+					{
+						this_token.var = sym_assign_var;    // Make the result a variable rather than a normal operand so that its
+						this_token.symbol = SYM_VAR;        // address can be taken, and it can be passed ByRef. e.g. &(x+=1)
+						goto push_this_token; // Skip over all other sections such as subsequent checks of sym_assign_var because it was all taken care of here.
+					}
 					left_length = (left.symbol == SYM_VAR) ? left.var->LengthIgnoreBinaryClip() : strlen(left_string);
 					result_size = right_length + left_length + 1;
+
+					if (output_var && EXPR_IS_DONE) // i.e. this is ACT_ASSIGNEXPR and we're at the final operator, a concat.
+					{
+						result = output_var->Contents();
+						if (result == left_string) // This is something like x := x . y, so simplify it to x .= y
+						{
+							// MUST DO THE ABOVE CHECK because the next section further below might free the
+							// destination memory before doing the operation. Thus, if the destination is the
+							// same as one of the sources, freeing it beforehand would obviously be a problem.
+							if (output_var->AppendIfRoom(right_string, (VarSizeType)right_length))
+								goto normal_end_skip_output_var; // Nothing more to do because it has even taken care of output_var already.
+							//else no optimizations are possible because: 1) No room; 2) The overlap between the
+							// source and dest requires temporary memory.  So fall through to the slower method.
+						}
+						else if (result != right_string) // No overlap between the two sources and dest.
+						{
+							// The check above assumes that only a complete equality/overlap is possible,
+							// not a partial overlap.  A partial overlap between the memory of two variables
+							// seems impossible for a script to produce.  But if it ever does happen, the
+							// Assign() below would free part or all of one of the sources before doing
+							// the concat, which would corrupt the result.
+							// Optimize by copying directly into the target variable rather than the intermediate
+							// step of putting into temporary memory.
+							if (!output_var->Assign(NULL, (VarSizeType)result_size - 1)) // Resize the destination, if necessary.
+								goto abort; // Above should have already reported the error.
+							result = output_var->Contents(); // Call Contents() AGAIN because Assign() may have changed it.
+							if (left_length)
+								memcpy(result, left_string, left_length);  // Not +1 because don't need the zero terminator.
+							memcpy(result + left_length, right_string, right_length + 1); // +1 to include its zero terminator.
+							output_var->Close(); // Mostly just to reset the VAR_ATTRIB_BINARY_CLIP attribute and for maintainability.
+							goto normal_end_skip_output_var; // Nothing more to do because it has even taken care of output_var already.
+						}
+						//else result==right_string (e.g. x := y . x).  Although this could be optimized by 
+						// moving memory around inside output_var (if it has enough capacity), it seems more
+						// complicated than it's worth given the rarity of this.  It probably wouldn't save
+						// much time anyway due to the memory-moves inside output_var.  So just fall through
+						// to the normal method.
+					}
+
 					// The following section is similar to the one for "symbol == SYM_FUNC", so they
 					// should be maintained together.
 					// Must cast to int to avoid loss of negative values:
@@ -1689,23 +2017,19 @@ skip_abort_udf:
 					// result of the operation is later used, it will be a real string even if pure numeric,
 					// which allows an exact string match to be specified even when the inputs are
 					// technically numeric; e.g. the following should be true only if (Var . 33 = "1133") 
-					this_token.symbol = (left.symbol == SYM_STRING || right.symbol == SYM_STRING) ? SYM_STRING: SYM_OPERAND;
-					goto push_this_token;
+					result_symbol = (left.symbol == SYM_STRING || right.symbol == SYM_STRING) ? SYM_STRING: SYM_OPERAND;
+					break;
 
 				default:
 					// Other operators do not support string operands, so the result is an empty string.
 					this_token.marker = "";
-					this_token.symbol = SYM_STRING;
-					goto push_this_token;
+					result_symbol = SYM_STRING;
 				}
-				// Since above didn't "goto":
-				this_token.symbol = SYM_INTEGER; // Boolean result is treated as an integer.  Must be done only after the switch() above.
+				this_token.symbol = result_symbol; // Must be done only after the switch() above.
 			}
 
 			else if (right_is_number == PURE_INTEGER && left_is_number == PURE_INTEGER && this_token.symbol != SYM_DIVIDE
-				|| (this_token.symbol == SYM_BITAND || this_token.symbol == SYM_BITOR
-				|| this_token.symbol == SYM_BITXOR || this_token.symbol == SYM_BITSHIFTLEFT
-				|| this_token.symbol == SYM_BITSHIFTRIGHT)) // The bitwise operators convert any floating points to integer prior to the calculation.
+				|| this_token.symbol <= SYM_BITSHIFTRIGHT && this_token.symbol >= SYM_BITOR) // Check upper bound first for short-circuit performance (because operators like +-*/ are much more frequently used).
 			{
 				// Because both are integers and the operation isn't division, the result is integer.
 				// The result is also an integer for the bitwise operations listed in the if-statement
@@ -1731,12 +2055,13 @@ skip_abort_udf:
 				// (otherwise an earlier "else if" would have executed instead of this one).
 				}
 
+				result_symbol = SYM_INTEGER; // Set default.
 				switch(this_token.symbol)
 				{
 				// The most common cases are kept up top to enhance performance if switch() is implemented as if-else ladder.
-				case SYM_PLUS:     this_token.value_int64 = left_int64 + right_int64; break;
-				case SYM_MINUS:	   this_token.value_int64 = left_int64 - right_int64; break;
-				case SYM_TIMES:    this_token.value_int64 = left_int64 * right_int64; break;
+				case SYM_ADD:      this_token.value_int64 = left_int64 + right_int64; break;
+				case SYM_SUBTRACT: this_token.value_int64 = left_int64 - right_int64; break;
+				case SYM_MULTIPLY: this_token.value_int64 = left_int64 * right_int64; break;
 				// A look at K&R confirms that relational/comparison operations and logical-AND/OR/NOT
 				// always yield a one or a zero rather than arbitrary non-zero values:
 				case SYM_EQUALCASE: // Same behavior as SYM_EQUAL for numeric operands.
@@ -1758,11 +2083,10 @@ skip_abort_udf:
 					if (right_int64 == 0) // Divide by zero produces blank result (perhaps will produce exception if script's ever support exception handlers).
 					{
 						this_token.marker = "";
-						this_token.symbol = SYM_STRING;
-						goto push_this_token;
+						result_symbol = SYM_STRING;
 					}
-					// Otherwise:
-					this_token.value_int64 = left_int64 / right_int64;
+					else
+						this_token.value_int64 = left_int64 / right_int64;
 					break;
 				case SYM_POWER:
 					// Note: The function pow() in math.h adds about 28 KB of code size (uncompressed)!
@@ -1772,24 +2096,23 @@ skip_abort_udf:
 					{
 						// Return a consistent result rather than something that varies:
 						this_token.marker = "";
-						this_token.symbol = SYM_STRING;
-						goto push_this_token;
+						result_symbol = SYM_STRING;
 					}
-					// Otherwise, we now have a valid base and exponent and both are integers. Thus, the calculation
-					// will always have a defined result.
-					if (left_was_negative = (left_int64 < 0))
-						left_int64 = -left_int64; // Force a positive due to the limitiations of qmathPow().
-					this_token.value_double = qmathPow((double)left_int64, (double)right_int64);
-					if (left_was_negative && right_int64 % 2) // Negative base and odd exponent (not zero or even).
-						this_token.value_double = -this_token.value_double;
-					if (right_int64 < 0)
-						this_token.symbol = SYM_FLOAT;  // Due to negative exponent, override to float like TRANS_CMD_POW.
-					else
-						this_token.value_int64 = (__int64)this_token.value_double;
+					else // We have a valid base and exponent and both are integers, so the calculation will always have a defined result.
+					{
+						if (left_was_negative = (left_int64 < 0))
+							left_int64 = -left_int64; // Force a positive due to the limitiations of qmathPow().
+						this_token.value_double = qmathPow((double)left_int64, (double)right_int64);
+						if (left_was_negative && right_int64 % 2) // Negative base and odd exponent (not zero or even).
+							this_token.value_double = -this_token.value_double;
+						if (right_int64 < 0)
+							result_symbol = SYM_FLOAT; // Due to negative exponent, override to float like TRANS_CMD_POW.
+						else
+							this_token.value_int64 = (__int64)this_token.value_double;
+					}
 					break;
 				}
-				if (this_token.symbol != SYM_FLOAT)  // It wasn't overridden by SYM_POWER.
-					this_token.symbol = SYM_INTEGER; // Must be done only after the switch() above.
+				this_token.symbol = result_symbol; // Must be done only after the switch() above.
 			}
 
 			else // Since one or both operands are floating point (or this is the division of two integers), the result will be floating point.
@@ -1812,23 +2135,25 @@ skip_abort_udf:
 				// It can't be SYM_STRING because in here, both right and left are known to be numbers.
 				}
 
+				result_symbol = SYM_FLOAT; // Set default.
 				switch(this_token.symbol)
 				{
-				case SYM_PLUS:     this_token.value_double = left_double + right_double; break;
-				case SYM_MINUS:	   this_token.value_double = left_double - right_double; break;
-				case SYM_TIMES:    this_token.value_double = left_double * right_double; break;
+				case SYM_ADD:      this_token.value_double = left_double + right_double; break;
+				case SYM_SUBTRACT: this_token.value_double = left_double - right_double; break;
+				case SYM_MULTIPLY: this_token.value_double = left_double * right_double; break;
 				case SYM_DIVIDE:
 				case SYM_FLOORDIVIDE:
 					if (right_double == 0.0) // Divide by zero produces blank result (perhaps will produce exception if script's ever support exception handlers).
 					{
 						this_token.marker = "";
-						this_token.symbol = SYM_STRING;
-						goto push_this_token;
+						result_symbol = SYM_STRING;
 					}
-					// Otherwise:
-					this_token.value_double = left_double / right_double;
-					if (this_token.symbol == SYM_FLOORDIVIDE) // Like Python, the result is floor()'d, moving to the nearest integer to the left on the number line.
-						this_token.value_double = qmathFloor(this_token.value_double); // Result is always a double when at least one of the inputs was a double.
+					else
+					{
+						this_token.value_double = left_double / right_double;
+						if (this_token.symbol == SYM_FLOORDIVIDE) // Like Python, the result is floor()'d, moving to the nearest integer to the left on the number line.
+							this_token.value_double = qmathFloor(this_token.value_double); // Result is always a double when at least one of the inputs was a double.
+					}
 					break;
 				case SYM_EQUALCASE: // Same behavior as SYM_EQUAL for numeric operands.
 				case SYM_EQUAL:    this_token.value_double = left_double == right_double; break;
@@ -1845,28 +2170,39 @@ skip_abort_udf:
 						|| left_was_negative && qmathFmod(right_double, 1.0) != 0.0) // Negative base, but exponent isn't close enough to being an integer: unsupported (to simplify code).
 					{
 						this_token.marker = "";
-						this_token.symbol = SYM_STRING;
-						goto push_this_token;
+						result_symbol = SYM_STRING;
 					}
-					// Otherwise:
-					if (left_was_negative)
-						left_double = -left_double; // Force a positive due to the limitiations of qmathPow().
-					this_token.value_double = qmathPow(left_double, right_double);
-					if (left_was_negative && qmathFabs(qmathFmod(right_double, 2.0)) == 1.0) // Negative base and exactly-odd exponent (otherwise, it can only be zero or even because if not it would have returned higher above).
-						this_token.value_double = -this_token.value_double;
+					else
+					{
+						if (left_was_negative)
+							left_double = -left_double; // Force a positive due to the limitiations of qmathPow().
+						this_token.value_double = qmathPow(left_double, right_double);
+						if (left_was_negative && qmathFabs(qmathFmod(right_double, 2.0)) == 1.0) // Negative base and exactly-odd exponent (otherwise, it can only be zero or even because if not it would have returned higher above).
+							this_token.value_double = -this_token.value_double;
+					}
 					break;
-				}
-				this_token.symbol = SYM_FLOAT; // Must be done only after the switch() above.
+				} // switch(this_token.symbol)
+				this_token.symbol = result_symbol; // Must be done only after the switch() above.
 			} // Result is floating point.
 		} // switch() operator type
 
+		if (sym_assign_var) // v1.0.46.
+		{
+			sym_assign_var->Assign(this_token); // Assign the result (based on its type) to the target variable.
+			this_token.var = sym_assign_var;    // Make the result a variable rather than a normal operand so that its
+			this_token.symbol = SYM_VAR;        // address can be taken, and it can be passed ByRef. e.g. &(x+=1)
+			// Now fall through and push this_token onto the stack as an operand for use by future operators.
+			// This is because by convention, an assignment like "x+=1" produces a usable operand.
+		}
+
 push_this_token:
 		if (!this_token.circuit_token) // It's not capable of short-circuit.
-			STACK_PUSH(this_token);    // Push the result onto the stack for use as an operand by a future operator.
-		else // This is the final result of a AND or OR's left branch.  Apply short-circuit boolean method to it.
+			STACK_PUSH(&this_token);   // Push the result onto the stack for use as an operand by a future operator.
+		else // This is the final result of an IFF's condition or a AND or OR's left branch.  Apply short-circuit boolean method to it.
 		{
+non_null_circuit_token:
 			// Cast this left-branch result to true/false, then determine whether it should cause its
-			// parent AND/OR to short-circuit.
+			// parent AND/OR/IFF to short-circuit.
 
 			// If its a function result or raw numeric literal such as "if (123 or false)", its type might
 			// still be SYM_OPERAND, so resolve that to distinguish between the any SYM_STRING "0"
@@ -1913,6 +2249,24 @@ push_this_token:
 				left_branch_is_true = (*right_contents != '\0');
 			}
 
+			if (this_token.circuit_token->symbol == SYM_IFF_THEN)
+			{
+				if (!left_branch_is_true) // The ternary's condition is false.
+				{
+					// Discard the entire "then" branch of this ternary operator, leaving only the
+					// "else" branch to be evaluated later as the result.
+					// Ternaries nested inside each other don't need to be considered special for the purpose
+					// of discarding ternary branches due to the very nature of postfix (i.e. it's already put
+					// nesting in the right postfix order to support this method of discarding a branch).
+					for (++i; postfix[i] != this_token.circuit_token; ++i); // Should always be found, so no need to check postfix_count.
+					// The outer loop will now do a ++i to discard the SYM_IFF_THEN itself.
+				}
+				//else the ternary's condition is true.  Do nothing; just let the next iteration evaluate the
+				// THEN portion and then treat the SYM_IFF_THEN it encounters as a unary operator (after that,
+				// it will discard the ELSE branch).
+				continue;
+			}
+			// Since above didn't "continue", this_token is the left branch of an AND/OR.  Check for short-circuit.
 			// The following loop exists to support cascading short-circuiting such as the following example:
 			// 2>3 and 2>3 and 2>3
 			// In postfix notation, the above looks like:
@@ -1926,13 +2280,27 @@ push_this_token:
 			// on the second iteration, which would then cause the first and's false value to be discarded
 			// (due to the loop ending without having PUSHed) because solely the right side of the "or" should
 			// determine the final result of the "or".
+			//
+			// The following code is probably equivalent to the loop below it.  However, it's only slightly
+			// smaller in code size when you examine what it actually does, and it almost certainly performs
+			// slightly worse because the "goto" incurs unnecessary steps such as recalculating left_branch_is_true.
+			// Therefore, it doesn't seem worth changing it:
+			//if (left_branch_is_true == (this_token.circuit_token->symbol == SYM_OR)) // If true, this AND/OR causes a short-circuit
+			//{
+			//	for (++i; postfix[i] != this_token.circuit_token; ++i); // Should always be found, so no need to check postfix_count.
+			//	this_token.symbol = SYM_INTEGER;
+			//	this_token.value_int64 = left_branch_is_true; // Assign a pure 1 (for SYM_OR) or 0 (for SYM_AND).
+			//	this_token.circuit_token = postfix[i]->circuit_token; // In case circuit_token == SYM_IFF_THEN.
+			//	goto push_this_token; // In lieu of STACK_PUSH(this_token) in case circuit_token == SYM_IFF_THEN.
+			//}
 			for (circuit_token = this_token.circuit_token
 				; left_branch_is_true == (circuit_token->symbol == SYM_OR);) // If true, this AND/OR causes a short-circuit
 			{
 				// Discard the entire right branch of this AND/OR:
 				for (++i; postfix[i] != circuit_token; ++i); // Should always be found, so no need to check postfix_count.
 				// Above loop is self-contained.
-				if (   !(circuit_token = postfix[i]->circuit_token)   ) // This value is also used by our loop's condition.
+				if (   !(circuit_token = postfix[i]->circuit_token) // This value is also used by our loop's condition. Relies on short-circuit boolean order with the below.
+					|| circuit_token->symbol == SYM_IFF_THEN   ) // Don't cascade from AND/OR into IFF because IFF requires a different cascade approach that's implemented only after its winning branch is evaluated.  Otherwise, things like "0 and 1 ? 3 : 4" wouldn't work.
 				{
 					// No more cascading is needed because this AND/OR isn't the left branch of another.
 					// This will be the final result of this AND/OR because it's right branch was discarded
@@ -1941,8 +2309,8 @@ push_this_token:
 					// member no longer matters:
 					this_token.symbol = SYM_INTEGER;
 					this_token.value_int64 = left_branch_is_true; // Assign a pure 1 (for SYM_OR) or 0 (for SYM_AND).
-					STACK_PUSH(this_token);
-					break; // Now the outer loop's ++i will discard this AND/OR token itself and continue onward.
+					this_token.circuit_token = circuit_token; // In case circuit_token == SYM_IFF_THEN.
+					goto push_this_token; // In lieu of STACK_PUSH(this_token) in case circuit_token == SYM_IFF_THEN.
 				}
 				//else there is more cascading to be checked, so continue looping.
 			}
@@ -1953,18 +2321,20 @@ push_this_token:
 		} // Short-circuit (left branch of an AND/OR).
 	} // For each item in the postfix array.
 
-	// Although ACT_FUNCTIONCALL was already checked higher above, it's checked again here for maintainability.
-	// Specifically, there might be ways the above didn't return if ACT_FUNCTIONCALL, such as when somehow there
-	// was more than one token on the stack even for the final function call, or maybe other unforseen ways.
+	// Although ACT_EXPRESSION was already checked higher above for function calls, there are other ways besides
+	// an isolated function call to have ACT_EXPRESSION.  For example: var&=3 (where &= is an operator that lacks
+	// a corresponding command).  Another example: true ? fn1() : fn2()
+	// Also, there might be ways the function-call section didn't return for ACT_EXPRESSION, such as when somehow
+	// there was more than one token on the stack even for the final function call, or maybe other unforeseen ways.
 	// It seems best to avoid any chance of looking at the result since it might be invalid due to the above
-	// having taken shortcuts (since it knew the result wouldn't be needed).
-	if (mActionType == ACT_FUNCTIONCALL) // A line consisting only of a function call (possibly with nested function calls): the end result doesn't matter, even if it's a failure.
+	// having taken shortcuts (since it knew the result would be discarded).
+	if (mActionType == ACT_EXPRESSION) // A stand-alone expression whose end result doesn't matter.
 		goto normal_end; // And leave result_to_return at its default of "".
 
-	if (stack_count != 1) // Stack should have only one item left on it: the result. If not, it's a syntax error.
-		goto abnormal_end; // This with these examples: 1) (); 2) x y; 3) (x + y) (x + z); etc.
+	if (stack_count != 1)  // Even for multi-statement expressions, the stack should have only one item left on it:
+		goto abnormal_end; // the overall result. Examples of errors include: () ... x y ... (x + y) (x + z) ... etc. (some of these might no longer produce this issue due to auto-concat).
 
-	ExprTokenType &result_token = *stack[0];  // For performance and convenience.
+	ExprTokenType &result_token = *stack[0];  // For performance and convenience.  Even for multi-statement, the bottommost item on the stack is the final result so that things like var1:=1,var2:=2 work.
 
 	// Store the result of the expression in the deref buffer for the caller.  It is stored in the current
 	// format in effect via SetFormat because:
@@ -1973,35 +2343,25 @@ push_this_token:
 	//    (i.e. it allows a way to do automatic rounding), without giving up too much.  Changing floating point
 	//    precision from the default of 6 decimal places is rare anyway, so as long as this behavior is documented,
 	//    it seems okay for the moment.
+	if (output_var)
+	{
+		// v1.0.45: Take a shortcut, which in the case of SYM_STRING/OPERAND/VAR avoids one memcpy
+		// (into the deref buffer).  In some cases, this also saves from having to expand the deref buffer.
+		output_var->Assign(result_token);
+		goto normal_end_skip_output_var;
+	}
 	switch (result_token.symbol)
 	{
-	// The numeric cases below will always fit into our deref buffer because an earlier stage has already ensured
-	// that the buffer is large enough to hold at least one number.  But a string/generic might not fit if it's
-	// a concatenation and/or a large string returned from a called function.
 	case SYM_INTEGER:
-		// To reduce code size, the following isn't done (it's unlikely to help performance anyway if you think
-		// about what steps it actually takes):
-		//if (output_var)
-		//{
-		//	output_var->Assign(result_token.value_int64);
-		//	goto normal_end_skip_output_var;
-		//}
-		//// Otherwise:
+		// SYM_INTEGER and SYM_FLOAT will fit into our deref buffer because an earlier stage has already ensured
+		// that the buffer is large enough to hold at least one number.  But a string/generic might not fit if it's
+		// a concatenation and/or a large string returned from a called function.
 		ITOA64(result_token.value_int64, aTarget); // Store in hex or decimal format, as appropriate.
 		break;
 	case SYM_FLOAT:
-		// To reduce code size, the following isn't done (it's unlikely to help performance anyway if you think
-		// about what steps it actually takes):
-		//if (output_var)
-		//{
-		//	output_var->Assign(result_token.value_double);
-		//	goto normal_end_skip_output_var;
-		//}
-		//// Otherwise:
 		// In case of float formats that are too long to be supported, use snprint() to restrict the length.
 		snprintf(aTarget, MAX_FORMATTED_NUMBER_LENGTH + 1, g.FormatFloat, result_token.value_double); // %f probably defaults to %0.6f.  %f can handle doubles in MSVC++.
 		break;
-
 	case SYM_STRING:
 	case SYM_OPERAND:
 	case SYM_VAR: // SYM_VAR is somewhat unusual at this late a stage.
@@ -2017,21 +2377,13 @@ push_this_token:
 		if (result_token.symbol == SYM_VAR)
 		{
 			result = result_token.var->Contents();
-            result_size = result_token.var->LengthIgnoreBinaryClip() + 1; // Ignore binary clipboard because it's documented that except for certain features, binary clipboard variables are seen only up to the first binary zero (mostly to simplify the code).
+            result_size = result_token.var->LengthIgnoreBinaryClip() + 1; // Ignore binary clipboard for anything other than ACT_ASSIGNEXPR (i.e. output_var!=NULL) because it's documented that except for certain features, binary clipboard variables are seen only up to the first binary zero (mostly to simplify the code).
 		}
 		else
 		{
 			result = result_token.marker;
 			result_size = strlen(result) + 1;
 		}
-		if (output_var)
-		{
-			// v1.0.45: Take a shortcut, which avoids one memcpy (into the deref buffer).  In some cases, this
-			// also saves from having to expand the deref buffer.
-			output_var->Assign(result, (VarSizeType)result_size - 1);
-			goto normal_end_skip_output_var;
-		}
-		// Otherwise:
 		// If result is the empty string or a number, it should always fit because the size estimation
 		// phase has ensured that capacity_of_our_buf_portion is large enough to hold those:
 		if (result_size > capacity_of_our_buf_portion)
