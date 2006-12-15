@@ -99,18 +99,19 @@ ResultType Var::Assign(ExprTokenType &aToken)
 // Returns OK or FAIL.
 // Writes aToken's value into aOutputVar based on the type of the token.
 // Caller must ensure that aToken.symbol is an operand (not an operator or other symbol).
-// Caller must ensure that if aToken.symbol==SYM_VAR, aToken.var->Type()==VAR_NORMAL, not the clipboard or any built-in var.
+// Caller must ensure that if aToken.symbol==SYM_VAR, aToken.var->Type()==VAR_NORMAL, not the clipboard or
+// any built-in var.  However, this->Type() can be VAR_CLIPBOARD.
 {
 	switch (aToken.symbol)
 	{
-	// Below: Caller has ensured that aToken.var's Type() is always VAR_NORMAL.
 	case SYM_INTEGER: return Assign(aToken.value_int64); // Listed first for performance because it's Likely the most common from our callers.
 	case SYM_VAR:
 	{
-		// Below relies on the fact that aliases can't point to other aliases (enforced by UpdateAlias()).
+		// Below: Caller has ensured that aToken.var's Type() is always VAR_NORMAL.
+		// Below also relies on the fact that aliases can't point to other aliases (enforced by UpdateAlias()).
 		Var &source_var = *(aToken.var->mType == VAR_ALIAS ? aToken.var->mAliasFor : aToken.var);
 		return (source_var.mAttrib & VAR_ATTRIB_BINARY_CLIP) // Caller has ensured that source_var's Type() is VAR_NORMAL.
-			? AssignBinaryClip(source_var)  // Caller wants a variable with binary contents assigned (copied) to another variable (usually VAR_CLIPBOARD).
+			? AssignBinaryClip(source_var) // Caller wants a variable with binary contents assigned (copied) to another variable (usually VAR_CLIPBOARD).
 			: Assign(source_var.mContents, source_var.mLength); // Pass length to improve performance.
 	}
 	case SYM_FLOAT:   return Assign(aToken.value_double); // Listed last because it's probably the least common.
@@ -1091,14 +1092,14 @@ void Var::Free(int aWhenToFree, bool aExcludeAliases)
 
 ResultType Var::AppendIfRoom(char *aStr, VarSizeType aLength)
 // Returns OK if there's room enough to append aStr and it succeeds.
-// Returns FAIL otherwise.
+// Returns FAIL otherwise (also returns FAIL for VAR_CLIPBOARD).
 {
-	if (!aLength) // Consider the appending of nothing (even onto unsupported things like clipboard) to be a success.
-		return OK;
 	// Relies on the fact that aliases can't point to other aliases (enforced by UpdateAlias()):
 	Var &var = *(mType == VAR_ALIAS ? mAliasFor : this);
-	if (var.mType != VAR_NORMAL) // e.g. VAR_CLIPBOARD. This is for maintainability since it currently isn't called this way.
-		return FAIL;
+	if (var.mType != VAR_NORMAL) // e.g. VAR_CLIPBOARD. Some callers do call it this way, but even if not it should be kept for maintainability.
+		return FAIL; // CHECK THIS FIRST, BEFORE BELOW, BECAUSE CALLERS ALWAYS WANT IT TO BE A FAILURE.
+	if (!aLength) // Consider the appending of nothing (even onto unsupported things like clipboard) to be a success.
+		return OK;
 	VarSizeType var_length = LengthIgnoreBinaryClip(); // Get the apparent length because one caller is a concat that wants consistent behavior of the .= operator regardless of whether this shortcut succeeds or not.
 	VarSizeType new_length = var_length + aLength;
 	if (new_length >= var.mCapacity) // Not enough room.

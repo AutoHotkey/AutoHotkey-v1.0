@@ -1860,10 +1860,19 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		// more friendly to omit them in the automatic-label label name.  Note that a button
 		// or menu item can contain a literal ampersand by using two ampersands, such as
 		// "Save && Exit" (in this example, the auto-label would be named "ButtonSaveExit").
+		// v1.0.46.01: tabs and accents are also removed since labels can't contain them.
+		// However, colons are NOT removed because labels CAN contain them (except at the very end;
+		// but due to rarity and backward compatibility, it doesn't seem worth adding code size for that).
+		StrReplace(label_name, "\r", "", SCS_SENSITIVE);
+		StrReplace(label_name, "\n", "", SCS_SENSITIVE);
+		StrReplace(label_name, "\t", "", SCS_SENSITIVE);
 		StrReplace(label_name, " ", "", SCS_SENSITIVE);
 		StrReplace(label_name, "&", "", SCS_SENSITIVE);
-		StrReplace(label_name, "\r", "", SCS_SENSITIVE); // Done separate from \n in case they're ever unpaired.
-		StrReplace(label_name, "\n", "", SCS_SENSITIVE);
+		StrReplace(label_name, "`", "", SCS_SENSITIVE);
+		// Alternate method, but seems considerably larger in code size based on OBJ size:
+		//char *string_list[] = {"\r", "\n", " ", "\t", "&", "`", NULL}; // \r is separate from \n in case they're ever unpaired. Last char must be NULL to terminate the list.
+		//for (char **cp = string_list; *cp; ++cp)
+		//	StrReplace(label_name, *cp, "", SCS_SENSITIVE);
 		control.jump_to_label = g_script.FindLabel(label_name);  // OK if NULL (the button will do nothing).
 	}
 
@@ -3262,6 +3271,8 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 	// Otherwise the above control creation succeeded.
 	++mControlCount;
 	mControlWidthWasSetByContents = control_width_was_set_by_contents; // Set for use by next control, if any.
+	if (opt.hwnd_output_var) // v1.0.46.01.
+		opt.hwnd_output_var->AssignHWND(control.hwnd);
 
 	if (control.type == GUI_CONTROL_RADIO)
 	{
@@ -4105,6 +4116,8 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 			if (adding) aOpt.style_add |= WS_GROUP; else aOpt.style_remove |= WS_GROUP;
 		else if (!stricmp(next_option, "Theme"))
 			aOpt.use_theme = adding;
+		else if (!strnicmp(next_option, "Hwnd", 4))
+			aOpt.hwnd_output_var = g_script.FindOrAddVar(next_option + 4, 0, ALWAYS_PREFER_LOCAL); // ALWAYS_PREFER_LOCAL is debatable, but for simplicity it seems best since it causes HwndOutputVar to behave the same as the vVar option.
 
 		// Picture / ListView
 		else if (!strnicmp(next_option, "Icon", 4)) // Caller should ignore aOpt.icon_number if it isn't applicable for this control type.
@@ -4878,8 +4891,8 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 				// Any local variable that match the name of the vVar global could be made into aliases so
 				// that they point to the global instead.  But that is pretty ugly and doesn't seem worth it.
 				candidate_var = candidate_var->ResolveAlias(); // Update it to its target if it's an alias.
-				if (candidate_var->IsLocal()) // Note that an alias can point to a local vs. global var.
-					return g_script.ScriptError("A control's variable must be global." ERR_ABORT, next_option - 1);
+				if (candidate_var->IsNonStaticLocal()) // Note that an alias can point to a local vs. global var.
+					return g_script.ScriptError("A control's variable must be global or static." ERR_ABORT, next_option - 1);
 				// Another reason that the above always resolves aliases is because it allows the next
 				// check below to find true duplicates, even if different aliases are used to create the
 				// controls (i.e. if two alias both point to the same global).

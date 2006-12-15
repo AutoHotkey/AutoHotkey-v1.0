@@ -254,9 +254,8 @@ Action g_act[] =
 	// Its name should be "" so that Line::ToText() will properly display it.
 	, {"", 1, 1, 1, {1, 0}}
 
-	// Subtraction (but not addition) allows 2nd to be blank due to 3rd param.
 	, {"+=", 2, 3, 3, {2, 0}}
-	, {"-=", 1, 3, 3, {2, 0}}
+	, {"-=", 1, 3, 3, {2, 0}} // Subtraction (but not addition) allows 2nd to be blank due to 3rd param.
 	, {"*=", 2, 2, 2, {2, 0}}
 	, {"/=", 2, 2, 2, {2, 0}}
 

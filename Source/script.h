@@ -306,19 +306,6 @@ struct DerefType
 	DerefLengthType length; // Listed only after byte-sized fields, due to it being a WORD.
 };
 
-struct map_item
-{
-	#define EXP_RAW          0  // The "5 + " in the following: 5 + y - %z% * Array%i%
-	#define EXP_DEREF_SINGLE 1  // The y in the above.
-	#define EXP_DEREF_DOUBLE 2  // The %z% and %i% in the above.
-	#define MAP_ITEM_IN_BUFFER(type) (type < 3) // Keep this in sync with the above.
-	#define EXP_DEREF_VAR    3  // A variable's contents.
-	#define EXP_DEREF_FUNC   4  // A function-call, such as fn(x), which means the deref member of the union is present.
-	int type;
-	union {char *marker; DerefType *deref; Var *var;}; // Depends on the value of type, above.
-	char *end;
-};
-
 typedef UCHAR ArgTypeType;  // UCHAR vs. an enum, to save memory.
 #define ARG_TYPE_NORMAL     (UCHAR)0
 #define ARG_TYPE_INPUT_VAR  (UCHAR)1
@@ -776,7 +763,7 @@ public:
 	#define EXPR_CORE "<>=/|^,:"
 	// The characters common to both EXPR_TELLTALES and EXPR_OPERAND_TERMINATORS:
 	#define EXPR_COMMON " \t" EXPR_CORE "*&~!()"  // Space and Tab are included at the beginning for performance.
-	#define EXPR_COMMON_FOR_BYREF "<>=/|^,*&~!" // No parentheses, space, tab, or colon (no colon because want to be able to pass a ternary byref).
+	#define EXPR_COMMON_FORBIDDEN_BYREF "<>=/|^,*&~!" // Omits space/tab because operators like := can have them. Omits colon because want to be able to pass a ternary byref. Omits parentheses because a variable or assignment can be enclosed in them even though they're redundant.
 	#define CONTINUATION_LINE_SYMBOLS EXPR_CORE ".+-*&!?~" // v1.0.46.
 	// Characters whose presence in a mandatory-numeric param make it an expression for certain.
 	// + and - are not included here because legacy numeric parameters can contain unary plus or minus,
@@ -785,9 +772,7 @@ public:
 	// Characters that mark the end of an operand inside an expression.  Double-quote must not be included:
 	#define EXPR_OPERAND_TERMINATORS EXPR_COMMON "+-"
 	#define EXPR_ALL_SYMBOLS EXPR_OPERAND_TERMINATORS "\"" // Excludes '.' and '?' since they need special treatment due to the present/future allowance of them inside the names of variable and functions.
-	#define EXPR_ALL_SYMBOLS_FOR_BYREF EXPR_COMMON_FOR_BYREF ".+-\"" // Dot is also included.
-	#define EXPR_ASSIGN1_SYMBOLS ":+-*.|&^/><" // The symbols used as the first character of an assignment operator.
-	#define EXPR_ASSIGN2_SYMBOLS "=+-/><"  // The symbols used as the second character: //=, >>=, .=, :=, +=, -=, *=, /=, ++, --, etc.
+	#define EXPR_FORBIDDEN_BYREF EXPR_COMMON_FORBIDDEN_BYREF ".+-\"" // Dot is also included.
 	#define EXPR_ILLEGAL_CHARS "'\\;`{}" // Characters illegal in an expression.
 	// The following HOTSTRING option recognizer is kept somewhat forgiving/non-specific for backward compatibility
 	// (e.g. scripts may have some invalid hotstring options, which are simply ignored).  This definition is here
@@ -801,6 +786,28 @@ public:
 		char end_flags[] = {' ', g_delimiter, '(', '\t', '<', '>', ':', '=', '+', '-', '*', '/', '!', '~', '&', '|', '^', '\0'}; // '\0' must be last.
 		// '?' and '.' are omitted from the above because they require special handling due to being permitted
 		// in the curruent or future names of variables and functions.
+	static bool StartsWithAssignmentOp(char *aStr) // RELATED TO ABOVE, so kept adjacent to it.
+	// Returns true if aStr begins with an assignment operator such as :=, >>=, ++, etc.
+	// For simplicity, this doesn't check that what comes AFTER an operator is valid.  For example,
+	// :== isn't valid, yet is reported as valid here because it starts with :=.
+	// Caller is responsible for having omitted leading whitespace, if desired.
+	{
+		if (!(*aStr && aStr[1])) // Relies on short-circuit boolean order.
+			return false;
+		char cp0 = *aStr;
+		switch(aStr[1])
+		{
+		// '=' is listed first for performance, since it's the most common.
+		case '=': return strchr(":+-*.|&^/", cp0); // Covers :=, +=, -=, *=, .=, |=, &=, ^=, /= (9 operators).
+		case '+': // Fall through to below. Covers ++.
+		case '-': return cp0 == aStr[1]; // Covers --.
+		case '/': // Fall through to below. Covers //=.
+		case '>': // Fall through to below. covers >>=.
+		case '<': return cp0 == aStr[1] && aStr[2] == '='; // Covers <<=.
+		}
+		// Otherwise:
+		return false;
+	}
 
 	Var *ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary = true);
 	ResultType ExpandArgs(VarSizeType aSpaceNeeded = VARSIZE_ERROR, Var *aArgVar[] = NULL);
@@ -2021,6 +2028,7 @@ struct GuiControlOptionsType
 	DWORD style_add, style_remove, exstyle_add, exstyle_remove, listview_style;
 	int listview_view; // Viewing mode, such as LVS_ICON, LVS_REPORT.  Int vs. DWORD to more easily use any negative value as "invalid".
 	HIMAGELIST himagelist;
+	Var *hwnd_output_var; // v1.0.46.01: Allows a script to retrieve the control's HWND upon creation of control.
 	int x, y, width, height;  // Position info.
 	float row_count;
 	int choice;  // Which item of a DropDownList/ComboBox/ListBox to initially choose.
@@ -2530,11 +2538,11 @@ public:
 void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_StrLen(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_SubStr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_InStr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_RegEx(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_Asc(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_Chr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_IsLabel(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
-void BIF_InStr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
-void BIF_RegEx(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_GetKeyState(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_VarSetCapacity(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_FileExist(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);

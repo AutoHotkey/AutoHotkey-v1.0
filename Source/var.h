@@ -33,12 +33,13 @@ EXTERN_CLIPBOARD;
 enum AllocMethod {ALLOC_NONE, ALLOC_SIMPLE, ALLOC_MALLOC};
 enum VarTypes
 {
-// The following values have a special nature unlike the other types. They need to be kept first for so that
-// VAR_FIRST_NON_BYREF can be used to determine whether a variable is BYREF or not.
-// VAR_BYREF is used when an ALIAS variable doesn't yet have a target, which avoids the need to check
-// whether mAliasFor is NULL in many places.  In other words, a var of type VAR_ALIAS always has a valid mAliasFor.
-  VAR_INVALID, VAR_BYREF, VAR_ALIAS, VAR_FIRST_NON_BYREF
-, VAR_NORMAL = VAR_FIRST_NON_BYREF  // Most variables are this type.
+  VAR_INVALID
+// VAR_BYREF is used when a VAR_ALIAS variable doesn't yet have a target, which avoids the need to check whether
+// mAliasFor is NULL in many places.  In other words, a var of type VAR_ALIAS always has a non-NULL mAliasFor.
+, VAR_BYREF // VAR_BYREF and VAR_ALIAS are for internal use (external users of variables never see them). VAR_BYREF is
+, VAR_ALIAS // never seen because it has always become VAR_ALIAS by the time anyone uses them.  ALIAS is never seen because external users call Var::Type(), which automatically resolves ALIAS to some other type.
+// ABOVE MUST BE KEPT FIRST AND MUST BE KEPT ADJACENT TO VAR_FIRST_NON_BYREF BELOW. 
+, VAR_FIRST_NON_BYREF, VAR_NORMAL = VAR_FIRST_NON_BYREF  // Most variables are this type.
 , VAR_CLIPBOARD
 , VAR_LAST_UNRESERVED = VAR_CLIPBOARD  // Keep this in sync with any changes to the set of unreserved variables.
 #define VAR_IS_RESERVED(var) ((var).Type() > VAR_LAST_UNRESERVED)
@@ -268,12 +269,13 @@ public:
 	}
 
 	VarSizeType LengthIgnoreBinaryClip()
+	// Returns 0 for types other than VAR_NORMAL and VAR_CLIPBOARD.
 	{
 		// Relies on the fact that aliases can't point to other aliases (enforced by UpdateAlias()).
 		Var &var = *(mType == VAR_ALIAS ? mAliasFor : this);
 		// Return the apparent length of the string (i.e. the position of its first binary zero).
 		return (var.mType == VAR_NORMAL && !(var.mAttrib & VAR_ATTRIB_BINARY_CLIP))
-			? var.mLength : strlen(var.mContents);
+			? var.mLength : strlen(var.Contents()); // Use Contents() vs. mContents to support VAR_CLIPBOARD.
 	}
 
 	char *Contents() // __forceinline() on Capacity, Length, and/or Contents bloats the code and reduces performance.

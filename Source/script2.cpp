@@ -6433,14 +6433,15 @@ ResultType Line::PerformAssign()
 	// necessary to check whether its the same variable as Arg#1 for this determination.
 	bool target_is_involved_in_source = false;
 	bool source_is_being_appended_to_target = false; // v1.0.25
-	if (output_var.Type() != VAR_CLIPBOARD && mArgc > 1) // If types is VAR_CLIPBOARD, it can be used in the source deref(s) while also being the target -- without having to use the deref buffer -- because the clipboard has it's own temp buffer: the memory area to which the result is written. The prior content of the clipboard remains available in its other memory area until Commit() is called (i.e. long enough for our purposes).
+	if (output_var.Type() != VAR_CLIPBOARD && mArgc > 1 // If types is VAR_CLIPBOARD, it can be used in the source deref(s) while also being the target -- without having to use the deref buffer -- because the clipboard has it's own temp buffer: the memory area to which the result is written. The prior content of the clipboard remains available in its other memory area until Commit() is called (i.e. long enough for our purposes).
+		&& mArg[1].deref) // ...and there's at least one deref in the arg.
 	{
 		// It has a second arg, which in this case is the value to be assigned to the var.
 		// Examine any derefs that the second arg has to see if output_var is mentioned.
 		// Also, calls to script functions aren't possible within these derefs because
 		// our caller has ensured there are no expressions, and thus no function calls,
 		// inside this line.
-		for (DerefType *deref = mArg[1].deref; deref && deref->marker; ++deref)
+		for (DerefType *deref = mArg[1].deref; deref->marker; ++deref)
 		{
 			if (deref->is_function) // Silent failure, for rare cases such ACT_ASSIGNEXPR calling us due to something like Clipboard:=SavedBinaryClipboard + fn(x) [which isn't valid for binary clipboard]
 				return FAIL;
@@ -10567,13 +10568,14 @@ void BIF_StrLen(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParam
 
 void BIF_SubStr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount) // Added in v1.0.46.
 {
-	// Get the first arg, which is the string used as the source of the extraction. Call it "haystack" for clarity.
-	char *haystack = ExprTokenToString(*aParam[0], aResultToken.buf); // Remember that aResultToken.buf is part of a union, though in this case there's no danger of overwriting it since our result will always be of STRING type (not int or float).
-	int haystack_length = (int)EXPR_TOKEN_LENGTH(aParam[0], haystack);
-
 	// Set default return value in case of early return.
 	aResultToken.symbol = SYM_STRING;
 	aResultToken.marker = "";
+
+	// Get the first arg, which is the string used as the source of the extraction. Call it "haystack" for clarity.
+	char haystack_buf[MAX_FORMATTED_NUMBER_LENGTH + 1]; // A separate buf because aResultToken.buf is sometimes used to store the result.
+	char *haystack = ExprTokenToString(*aParam[0], haystack_buf); // Remember that aResultToken.buf is part of a union, though in this case there's no danger of overwriting it since our result will always be of STRING type (not int or float).
+	int haystack_length = (int)EXPR_TOKEN_LENGTH(aParam[0], haystack);
 
 	// Load-time validation has ensured that at least the first two parameters are present:
 	int starting_offset = (int)ExprTokenToInt64(*aParam[1]) - 1; // The one-based starting position in haystack (if any).  Convert it to zero-based.
@@ -10613,56 +10615,22 @@ void BIF_SubStr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParam
 		aResultToken.marker = result; // No need for any copying or termination, just send back part of haystack.
 		return;                       // Caller and Var:Assign() know that overlap is possible, so this seems safe.
 	}
-
-	// Otherwise, validation higher above has ensured: extract_length < remaining_length_available.
-	// Caller has provided a NULL circuit_token as a means of passing back memory we allocate here.
-	// So if we change "result" to be non-NULL, the caller will take over responsibility for freeing that memory.
-	if (   !(aResultToken.circuit_token = (ExprTokenType *)malloc(extract_length + 1))   ) // Out of memory. Due to rarity, don't display an error dialog (there's currently no way for a built-in function to abort the current thread anyway?)
-		return; // Yield the empty string (a default set higher above).
-	aResultToken.marker = (char *)aResultToken.circuit_token; // Store the address of the result for the caller.
-	memcpy(aResultToken.marker, result, extract_length);
-	aResultToken.marker[extract_length] = '\0'; // Must be done separately from the memcpy() because the memcpy() might just be taking a substring (i.e. long before result's terminator).
-	aResultToken.buf = (char *)(size_t)extract_length; // MANDATORY FOR USERS OF CIRCUIT_TOKEN: "buf" is being overloaded to store the length for our caller.
-}
-
-
-
-void BIF_Asc(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
-{
-	// Result will always be an integer (this simplifies scripts that work with binary zeros since an
-	// empy string yields zero).
-	// Caller has set aResultToken.symbol to a default of SYM_INTEGER, so no need to set it here.
-	aResultToken.value_int64 = (UCHAR)*ExprTokenToString(*aParam[0], aResultToken.buf);
-}
-
-
-
-void BIF_Chr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
-{
-	int param1 = (int)ExprTokenToInt64(*aParam[0]); // Convert to INT vs. UINT so that negatives can be detected.
-	char *cp = aResultToken.buf; // If necessary, it will be moved to a persistent memory location by our caller.
-	if (param1 < 0 || param1 > 255)
-		*cp = '\0'; // Empty string indicates both Chr(0) and an out-of-bounds param1.
+	
+	// Otherwise, at least one character is being omitted from the end of haystack.  So need a more complex method.
+	if (extract_length <= MAX_FORMATTED_NUMBER_LENGTH) // v1.0.46.01: Avoid malloc() for small strings.  However, this improves speed by only 10% in a test where random 25-byte strings were extracted from a 700 KB string (probably because VC++'s malloc()/free() are very fast for small allocations).
+		aResultToken.marker = aResultToken.buf; // Store the address of the result for the caller.
 	else
 	{
-		cp[0] = param1;
-		cp[1] = '\0';
+		// Otherwise, validation higher above has ensured: extract_length < remaining_length_available.
+		// Caller has provided a NULL circuit_token as a means of passing back memory we allocate here.
+		// So if we change "result" to be non-NULL, the caller will take over responsibility for freeing that memory.
+		if (   !(aResultToken.circuit_token = (ExprTokenType *)malloc(extract_length + 1))   ) // Out of memory. Due to rarity, don't display an error dialog (there's currently no way for a built-in function to abort the current thread anyway?)
+			return; // Yield the empty string (a default set higher above).
+		aResultToken.marker = (char *)aResultToken.circuit_token; // Store the address of the result for the caller.
+		aResultToken.buf = (char *)(size_t)extract_length; // MANDATORY FOR USERS OF CIRCUIT_TOKEN: "buf" is being overloaded to store the length for our caller.
 	}
-	aResultToken.symbol = SYM_STRING;
-	aResultToken.marker = cp;
-}
-
-
-
-void BIF_IsLabel(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
-// For performance and code-size reasons, this function does not currently return what
-// type of label it is (hotstring, hotkey, or generic).  To preserve the option to do
-// this in the future, it has been documented that the function returns non-zero rather
-// than "true".  However, if performance is an issue (since scripts that use IsLabel are
-// often performance sensitive), it might be better to add a second parameter that tells
-// IsLabel to look up the type of label, and return it as a number or letter.
-{
-	aResultToken.value_int64 = g_script.FindLabel(ExprTokenToString(*aParam[0], aResultToken.buf)) ? 1 : 0;
+	memcpy(aResultToken.marker, result, extract_length);
+	aResultToken.marker[extract_length] = '\0'; // Must be done separately from the memcpy() because the memcpy() might just be taking a substring (i.e. long before result's terminator).
 }
 
 
@@ -11048,9 +11016,9 @@ void RegExReplace(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPar
 	aResultToken.marker = "";
 
 	// If an output variable was provided for the count, get it and initialize it in case of early return.
-	Var *output_var = (aParamCount > 3 && aParam[3]->symbol == SYM_VAR) ? aParam[3]->var : NULL; // SYM_VAR's Type() is always VAR_NORMAL.
-	if (output_var)
-		output_var->Assign(0); // In case of early return, set default as "zero replacements done".
+	Var *output_var_count;
+	if (output_var_count = (aParamCount > 3 && aParam[3]->symbol == SYM_VAR) ? aParam[3]->var : NULL) // SYM_VAR's Type() is always VAR_NORMAL.
+		output_var_count->Assign(0); // In case of early return, set default as "zero replacements done".
 
 	// Get the replacement text (if any) from the incoming parameters.  If it was omitted, treat it as "".
 	char repl_buf[MAX_FORMATTED_NUMBER_LENGTH + 1];
@@ -11110,8 +11078,8 @@ void RegExReplace(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPar
 				empty_string_is_not_a_match = 0; // Reset so that the next iteration starts off with the normal matching method.
 				continue; // i.e. we're not done yet because the "no match" above was a special one and there's still more haystack to check.
 			}
-			// Otherwise, there aren't any more matches, so just copy the last part of haystack into the result and
-			// end the loop.
+			// Otherwise, there aren't any more matches.  So we're all done except for copying the last part of
+			// haystack into the result (if applicable).
 			if (replacement_count) // And by definition, result!=NULL due in this case to prior iterations.
 			{
 				if (haystack_portion_length = aHaystackLength - aStartingOffset) // This is the remaining part of haystack that needs to be copied over as-is.
@@ -11133,6 +11101,8 @@ void RegExReplace(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPar
 
 				// Set RegExMatch()'s return value to be "result":
 				aResultToken.marker = result;  // Caller will take care of freeing result's memory.
+				if (output_var_count) // Override the default output-count of zero set earlier.
+					output_var_count->Assign(replacement_count);
 			}
 			else // No replacements were actually done, so just return the original string to avoid malloc+memcpy (in addition, returning the original might help the caller make other optimizations).
 			{
@@ -11143,10 +11113,8 @@ void RegExReplace(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPar
 				//	free(result);
 				//result = NULL; // This tells the caller that we already freed it (i.e. from its POV, we never allocated anything).
 			}
-			// All done, indicate success via ErrorLevel, and the count via output_var (if any).
+			// All done, indicate success via ErrorLevel.
 			g_ErrorLevel->Assign(ERRORLEVEL_NONE);
-			if (output_var)
-				output_var->Assign(replacement_count);
 			return;
 		}
 
@@ -11154,7 +11122,7 @@ void RegExReplace(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPar
 		if (captured_pattern_count < 0) // An error other than "no match". These seem very rare, so it seems best to abort rather than yielding a partially-converted result.
 		{
 			g_ErrorLevel->Assign(captured_pattern_count); // No error text is stored; just a negative integer (since these errors are pretty rare).
-			return; // Return vs. break to leave aResultToken.marker set to "" and output_var set to 0, and let ErrorLevel tell the story.
+			return; // Return vs. break to leave aResultToken.marker set to "" and output_var_count set to 0, and let ErrorLevel tell the story.
 		}
 
 		// Otherwise (since above didn't return, break, or continue), a match has been found (i.e. captured_pattern_count > 0;
@@ -11633,6 +11601,46 @@ void BIF_RegEx(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 			//else var couldn't be created: no error reporting currently, since it basically should never happen.
 		}
 	} // for() each subpattern.
+}
+
+
+
+void BIF_Asc(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+{
+	// Result will always be an integer (this simplifies scripts that work with binary zeros since an
+	// empy string yields zero).
+	// Caller has set aResultToken.symbol to a default of SYM_INTEGER, so no need to set it here.
+	aResultToken.value_int64 = (UCHAR)*ExprTokenToString(*aParam[0], aResultToken.buf);
+}
+
+
+
+void BIF_Chr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+{
+	int param1 = (int)ExprTokenToInt64(*aParam[0]); // Convert to INT vs. UINT so that negatives can be detected.
+	char *cp = aResultToken.buf; // If necessary, it will be moved to a persistent memory location by our caller.
+	if (param1 < 0 || param1 > 255)
+		*cp = '\0'; // Empty string indicates both Chr(0) and an out-of-bounds param1.
+	else
+	{
+		cp[0] = param1;
+		cp[1] = '\0';
+	}
+	aResultToken.symbol = SYM_STRING;
+	aResultToken.marker = cp;
+}
+
+
+
+void BIF_IsLabel(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+// For performance and code-size reasons, this function does not currently return what
+// type of label it is (hotstring, hotkey, or generic).  To preserve the option to do
+// this in the future, it has been documented that the function returns non-zero rather
+// than "true".  However, if performance is an issue (since scripts that use IsLabel are
+// often performance sensitive), it might be better to add a second parameter that tells
+// IsLabel to look up the type of label, and return it as a number or letter.
+{
+	aResultToken.value_int64 = g_script.FindLabel(ExprTokenToString(*aParam[0], aResultToken.buf)) ? 1 : 0;
 }
 
 
@@ -13653,15 +13661,17 @@ double ExprTokenToDouble(ExprTokenType &aToken)
 
 
 char *ExprTokenToString(ExprTokenType &aToken, char *aBuf)
-// Returns "" on failure to simplify logic in callers.  Otherwise, it returns either aBuf (if aBuf was needed for the
-// conversion) or the token's own string.  Caller has ensured that aBuf is at least MAX_FORMATTED_NUMBER_LENGTH+1 in size.
+// Caller has ensured that any SYM_VAR's Type() is VAR_NORMAL.
+// Returns "" on failure to simplify logic in callers.  Otherwise, it returns either aBuf (if aBuf was needed
+// for the conversion) or the token's own string.  Caller has ensured that aBuf is at least
+// MAX_FORMATTED_NUMBER_LENGTH+1 in size.
 {
 	switch (aToken.symbol)
 	{
 	case SYM_STRING:
 	case SYM_OPERAND:
 		return aToken.marker;
-	case SYM_VAR:
+	case SYM_VAR: // Caller has ensured that any SYM_VAR's Type() is VAR_NORMAL.
 		return aToken.var->Contents();
 	case SYM_INTEGER:
 		return ITOA64(aToken.value_int64, aBuf);

@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.46.00"
+#define NAME_VERSION "1.0.46.01"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -140,6 +140,7 @@ enum SymbolType // For use with ExpandExpression() and IsPureNumeric().
 #define IS_NUMERIC(symbol) ((symbol) == SYM_INTEGER || (symbol) == SYM_FLOAT) // Ordered for short-circuit performance.
 	, SYM_VAR // An operand that is a variable's contents.
 	, SYM_OPERAND // Generic/undetermined type of operand.
+	, SYM_DYNAMIC // An operand that needs further processing during the evaluation phase.
 	, SYM_OPERAND_END // Marks the symbol after the last operand.  This value is used below.
 	, SYM_BEGIN = SYM_OPERAND_END  // SYM_BEGIN is a special marker to simplify the code.
 #define IS_OPERAND(symbol) ((symbol) < SYM_OPERAND_END)
@@ -149,7 +150,8 @@ enum SymbolType // For use with ExpandExpression() and IsPureNumeric().
 	, SYM_ASSIGN, SYM_ASSIGN_ADD, SYM_ASSIGN_SUBTRACT, SYM_ASSIGN_MULTIPLY, SYM_ASSIGN_DIVIDE, SYM_ASSIGN_FLOORDIVIDE
 	, SYM_ASSIGN_BITOR, SYM_ASSIGN_BITXOR, SYM_ASSIGN_BITAND, SYM_ASSIGN_BITSHIFTLEFT, SYM_ASSIGN_BITSHIFTRIGHT
 	, SYM_ASSIGN_CONCAT // THIS MUST BE KEPT AS THE LAST (AND SYM_ASSIGN THE FIRST) BECAUSE THEY'RE USED IN A RANGE-CHECK.
-#define IS_ASSIGNMENT(symbol) (symbol <= SYM_ASSIGN_CONCAT && symbol >= SYM_ASSIGN) // Check upper bound first for short-circuit performance.
+#define IS_ASSIGNMENT_EXCEPT_POST_AND_PRE(symbol) (symbol <= SYM_ASSIGN_CONCAT && symbol >= SYM_ASSIGN) // Check upper bound first for short-circuit performance.
+#define IS_ASSIGNMENT_OR_POST_OP(symbol) (IS_ASSIGNMENT_EXCEPT_POST_AND_PRE(symbol) || symbol == SYM_POST_INCREMENT || symbol == SYM_POST_DECREMENT)
 	, SYM_IFF_ELSE, SYM_IFF_THEN // THESE TERNARY OPERATORS MUST BE KEPT IN THIS ORDER AND ADJACENT TO THE BELOW.
 	, SYM_OR, SYM_AND // MUST BE KEPT IN THIS ORDER AND ADJACENT TO THE ABOVE because infix-to-postfix is optimized to check a range rather than a series of equalities.
 	, SYM_LOWNOT  // LOWNOT is the word "not", the low precedence counterpart of !
@@ -169,6 +171,9 @@ enum SymbolType // For use with ExpandExpression() and IsPureNumeric().
 	, SYM_COUNT    // Must be last because it's the total symbol count for everything above.
 	, SYM_INVALID = SYM_COUNT
 };
+// These two are macros for maintainability (i.e. seeing them together here helps maintain them together).
+#define SYM_DYNAMIC_IS_DOUBLE_DEREF(token) (token.buf) // SYM_DYNAMICs other than doubles have NULL buf, at least at the stage this macro is called.
+#define SYM_DYNAMIC_IS_VAR_NORMAL_OR_CLIP(token) (!(token)->buf && ((token)->var->Type() == VAR_NORMAL || (token)->var->Type() == VAR_CLIPBOARD)) // i.e. it's an evironment variable or the clipboard, not a built-in variable or double-deref.
 
 struct DerefType; // Forward declarations for use below.
 class Var;        //
@@ -181,15 +186,22 @@ struct ExprTokenType  // Something in the compiler hates the name TokenType, so 
 	{
 		__int64 value_int64; // for SYM_INTEGER
 		double value_double; // for SYM_FLOAT
-		DerefType *deref;    // for SYM_FUNC
-		Var *var;            // for SYM_VAR
-		struct {char *marker; char *buf;};  // for SYM_STRING and SYM_OPERAND (buf is used by built-in functions).
+		struct
+		{
+			union // These nested structs and unions minimize the token size by overlapping data.
+			{
+				DerefType *deref; // for SYM_FUNC
+				Var *var;         // for SYM_VAR
+				char *marker;     // for SYM_STRING and SYM_OPERAND.
+			};
+			char *buf; // This doesn't increase the total size of the struct. It's Used by built-in functions and perhaps other misc. purposes.
+		};  
 	};
 	// Note that marker's str-length should not be stored in this struct, even though it might be readily
 	// available in places and thus help performance.  This is because if it were stored and the marker
 	// or SYM_VAR's var pointed to a location that was changed as a side effect of an expression's
 	// call to a script function, the length would then be invalid.
-	SymbolType symbol; // Short-circuit benchmark is currently much faster with this and the next beneath the union, but not sure why.
+	SymbolType symbol; // Short-circuit benchmark is currently much faster with this and the next beneath the union, perhaps due to CPU optimizations for 8-byte alignment.
 	ExprTokenType *circuit_token; // Facilitates short-circuit boolean evaluation.
 	// The above two probably need to be adjacent to each other to conserve memory due to 8-byte alignment,
 	// which is the default alignment (for performance reasons) in any struct that contains 8-byte members
@@ -304,6 +316,7 @@ enum enum_act_old {
 	|| ActionType == ACT_LISTLINES || ActionType == ACT_LISTVARS || ActionType == ACT_LISTHOTKEYS)
 #define ACT_IS_ASSIGN(ActionType) (ActionType >= ACT_ASSIGN_FIRST && ActionType <= ACT_ASSIGN_LAST)
 #define ACT_IS_IF(ActionType) (ActionType >= ACT_FIRST_IF && ActionType <= ACT_LAST_IF)
+#define ACT_IS_IF_OR_ELSE_OR_LOOP(ActionType) (ACT_IS_IF(ActionType) || ActionType == ACT_ELSE || ActionType == ACT_LOOP)
 #define ACT_IS_IF_OLD(ActionType, OldActionType) (ActionType >= ACT_FIRST_IF_ALLOWING_SAME_LINE_ACTION && ActionType <= ACT_LAST_IF) \
 	&& (ActionType < ACT_IFEQUAL || ActionType > ACT_IFLESSOREQUAL || (OldActionType >= OLD_IFEQUAL && OldActionType <= OLD_IFLESSOREQUAL))
 	// All the checks above must be done so that cmds such as IfMsgBox (which are both "old" and "new")

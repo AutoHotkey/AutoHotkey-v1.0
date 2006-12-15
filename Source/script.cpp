@@ -1311,7 +1311,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 						// could never be a continuation line due to ambiguity).
 						if ((*next_buf == ':' || *next_buf == '+' || *next_buf == '-') && next_buf[1] == *next_buf // See above.
 							|| (*next_buf == '.' || *next_buf == '?') && !IS_SPACE_OR_TAB_OR_NBSP(next_buf[1]) // The "." and "?" operators require a space or tab after them to be legitimate.  For ".", this is done in case period is ever a legal character in var names, such as struct support.  For "?", it's done for backward compatibility since variable names can contain question marks (though "?" by itself is not considered a variable in v1.0.46).
-								&& next_buf[1] != '=' // But allow ".=" (and "?=" too for code simplicity), since ".=" is to concat-assign operator.
+								&& next_buf[1] != '=' // But allow ".=" (and "?=" too for code simplicity), since ".=" is the concat-assign operator.
 							|| !strchr(CONTINUATION_LINE_SYMBOLS, *next_buf)) // Line doesn't start with a continuation char.
 							break;
 						// Some of the above checks must be done before the next ones.
@@ -3113,9 +3113,13 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 			// local, inversion is necessary only if the current mode isn't LOCAL:
 			bool is_already_exception, is_exception = (declare_type != VAR_DECLARE_STATIC
 				|| g.CurrentFunc->mDefaultVarType == VAR_ASSUME_GLOBAL); // Above has ensured that NONE can't be in effect by the time we reach the first static.
+			bool open_brace_was_added, belongs_to_if_or_else_or_loop;
 			VarSizeType var_name_length;
+			char *item;
 
-			for (char *item = cp; *item;)
+			for (belongs_to_if_or_else_or_loop = ACT_IS_IF_OR_ELSE_OR_LOOP(mLastLine->mActionType)
+				, open_brace_was_added = false, item = cp
+				; *item;) // FOR EACH COMMA-SEPARATED ITEM IN THE DECLARATION LIST.
 			{
 				char *item_end = StrChrAny(item, ", \t=:");  // Comma, space or tab, equal-sign, colon.
 				if (!item_end) // This is probably the last/only variable in the list; e.g. the "x" in "local x"
@@ -3272,6 +3276,12 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 					}
 					else
 						line_to_add = item;
+					if (belongs_to_if_or_else_or_loop && !open_brace_was_added) // v1.0.46.01: Put braces to allow initializers to work even directly under an IF/ELSE/LOOP.  Note that the braces aren't added or needed for static initializers.
+					{
+						if (!AddLine(ACT_BLOCK_BEGIN))
+							return FAIL;
+						open_brace_was_added = true;
+					}
 					// Call Parse() vs. AddLine() because it detects and optimizes simple assignments into
 					// non-exprssions for faster runtime execution.
 					if (!ParseAndAddLine(line_to_add)) // For simplicity and maintainability, call self rather than trying to set things up properly to stay in self.
@@ -3284,6 +3294,9 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 					? omit_leading_whitespace(item_end + 1)
 					: item_end; // It's the terminator, so let the loop detect that to finish.
 			} // for() each item in the declaration list.
+			if (open_brace_was_added)
+				if (!AddLine(ACT_BLOCK_END))
+					return FAIL;
 			return OK;
 		} // single-iteration for-loop
 
@@ -3611,11 +3624,26 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 				}
 				else if (aActionType != ACT_EXPRESSION) // i.e. it's ACT_ASSIGN/ASSIGNEXPR/ADD/SUB/MULT/DIV
 				{
-					if (aActionType == ACT_ADD || aActionType == ACT_SUB)
+					if (aActionType != ACT_ASSIGN) // i.e. it's ACT_ASSIGNEXPR/ADD/SUB/MULT/DIV
 					{
-						// Find the time units arg, if it's present, so that compound statements can be
-						// distinguished from date/time math; e.g. "x+=1, y+=2" should be marked as
-						// a stand-alone expression.
+						// Find the first non-function comma, which in the case of ACT_ADD/SUB can be
+						// either a statement-separator comma (expression) or the time units arg.
+						// Reasons for this:
+						// 1) ACT_ADD/SUB: Need to distinguish compound statements from date/time math;
+						//    e.g. "x+=1, y+=2" should be marked as a stand-alone expression, not date math.
+						// 2) ACT_ASSIGNEXPR/MULT/DIV (and ACT_ADD/SUB for that matter): Need to make
+						//    comma-separated sub-expressions into one big ACT_EXPRESSION so that the
+						//    leftmost sub-expression will get evaluated prior to the others (for consistency
+						//    and as documented).  However, this has some side-effects, such as making
+						//    the leftmost /= operator into true division rather than ENV_DIV behavior,
+						//    and treating blanks as errors in math expressions when otherwise ENV_MULT
+						//    would treat them as zero.
+						// ALSO: ACT_ASSIGNEXPR/ADD/SUB/MULT/DIV are made into ACT_EXPRESSION *only* when multi-
+						// statement commas are present because the following legacy behaviors must be retained:
+						// 1) Math treatment of blanks as zero in ACT_ADD/SUB/etc.
+						// 2) EnvDiv's special behavior, which is different than both true divide and floor divide.
+						// 3) Possibly add/sub's date/time math.
+						// 4) For performance, don't want trivial assignments to become ACT_EXPRESSION.
 						char *cp;
 						for (in_quotes = false, open_parens = 0, cp = action_args + 2; *cp; ++cp)
 						{
@@ -3635,27 +3663,34 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 							}
 							if (*cp == g_delimiter && !in_quotes && open_parens < 1) // A delimiting comma other than one in a sub-statement or function. Shouldn't need to worry about unquoted escaped commas since they don't make sense with += and -=.
 							{
-								cp = omit_leading_whitespace(cp + 1);
-								if (StrChrAny(cp, EXPR_ALL_SYMBOLS ".")) // Don't need strstr(cp, " ?") because the search already looks for ':'.
-									aActionType = ACT_EXPRESSION; // It's clearly an expression not a word like Days or %VarContainingTheWordDays%.
+								if (aActionType == ACT_ADD || aActionType == ACT_SUB)
+								{
+									cp = omit_leading_whitespace(cp + 1);
+									if (StrChrAny(cp, EXPR_ALL_SYMBOLS ".")) // Don't need strstr(cp, " ?") because the search already looks for ':'.
+										aActionType = ACT_EXPRESSION; // It's clearly an expression not a word like Days or %VarContainingTheWordDays%.
+									//else it's probably date/time math, so leave it as-is.
+								}
+								else // ACT_ASSIGNEXPR/MULT/DIV, for which any non-function comma qualifies it as multi-statement.
+									aActionType = ACT_EXPRESSION;
 								break;
 							}
 						}
 					}
-					if (aActionType != ACT_EXPRESSION) // The above didn't make ADD/SUB a stand-alone expression.
+					if (aActionType != ACT_EXPRESSION) // The above didn't make it a stand-alone expression.
 					{
 						// The following converts:
 						// x+=2 -> ACT_ADD x, 2.
+						// x:=2 -> ACT_ASSIGNEXPR, x, 2
+						// etc.
 						// But post-inc/dec are recognized only after we check for a command name to cut down on ambiguity
 						*action_args = g_delimiter; // Replace the =,+,-,:,*,/ with a delimiter for later parsing.
-						if (aActionType != ACT_ASSIGN)
+						if (aActionType != ACT_ASSIGN) // i.e. it's not just a plain equal-sign (which has no 2nd char).
 							action_args[1] = ' '; // Remove the "=" from consideration.
-						//else the operator is '=' so it has no second character.
 					}
 				}
-				//else it's an isolated expression so no changes are desired.
+				//else it's already an isolated expression, so no changes are desired.
 				action_args = aLineText; // Since this is an assignment and/or expression, use the line's full text for later parsing.
-			}
+			} // if (aActionType)
 		} // Handling of assignments and other operators.
 	}
 	//else aActionType was already determined by the caller.
@@ -4304,6 +4339,8 @@ inline char *Script::ParseActionType(char *aBufTarget, char *aBufSource, bool aD
 	char *end_marker = StrChrAny(aBufSource, end_flags);
 	if (end_marker) // Found a delimiter.
 	{
+		if (*end_marker == '=' && end_marker > aBufSource && end_marker[-1] == '.') // Relies on short-circuit boolean order.
+			--end_marker; // v1.0.46.01: Support .=, but not any use of '.' because that is reserved as a struct/member operator.
 		if (end_marker > aBufSource) // The delimiter isn't very first char in aBufSource.
 			--end_marker;
 		// else we allow it to be the first char to support "++i" etc.
@@ -4660,6 +4697,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				// of variables.
 				for (op_begin = this_new_arg.text; *op_begin; op_begin = op_end)
 				{
+					if (*op_begin == '.' && op_begin[1] == '=') // v1.0.46.01: Support .=, but not any use of '.' because that is reserved as a struct/member operator.
+						op_begin += 2;
 					for (; *op_begin && strchr(EXPR_OPERAND_TERMINATORS, *op_begin); ++op_begin); // Skip over whitespace, operators, and parentheses.
 					if (!*op_begin) // The above loop reached the end of the string: No operands remaining.
 						break;
@@ -4689,12 +4728,14 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					
 					// Find the end of this operand (if *op_end is '\0', strchr() will find that too):
 					for (op_end = op_begin + 1; !strchr(EXPR_OPERAND_TERMINATORS, *op_end); ++op_end); // Find first whitespace, operator, or paren.
+					if (*op_end == '=' && op_end[-1] == '.') // v1.0.46.01: Support .=, but not any use of '.' because that is reserved as a struct/member operator.
+						--op_end;
 					// Now op_end marks the end of this operand.  The end might be the zero terminator, an operator, etc.
 
 					// Must be done only after op_end has been set above (since loop uses op_end):
 					if (*op_begin == '.' && strchr(" \t=", op_begin[1])) // If true, it can't be something like "5." because the dot inside would never be parsed separately in that case.  Also allows ".=" operator.
 						continue;
-					//else any '.' not followed by a space or tab is likely a number without a leading zero,
+					//else any '.' not followed by a space, tab, or '=' is likely a number without a leading zero,
 					// so continue on below to process it.
 
 					operand_length = op_end - op_begin;
@@ -4890,11 +4931,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					// is already boosted by the fact that it's exempt from automatic ExpandArgs() in
 					// ExecUntil().
 					this_new_arg.is_expression = false;
-					// The following is needed to allow "Var := ClipboardAll" to work because that
-					// method is handled correctly only by ACT_ASSIGN. Everything else is left as
-					// ACT_ASSIGNEXPR because it probably performs better than ACT_ASSIGN in these cases:
-					if (aActionType == ACT_ASSIGNEXPR && !deref[0].is_function && deref[0].var->Type() == VAR_CLIPBOARDALL)
-						aActionType = ACT_ASSIGN;
+					// But aActionType is left as ACT_ASSIGNEXPR because it probably performs better than
+					// ACT_ASSIGN in these cases.
 				}
 				else if (deref_count && !StrChrAny(this_new_arg.text, EXPR_OPERAND_TERMINATORS)) // No spaces, tabs, etc.
 				{
@@ -6012,8 +6050,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_DIV:
-		if (!line.ArgHasDeref(2)) // i.e. if it's a deref, we won't try to validate it now.
-			if (!ATOF(new_raw_arg2))
+		if (!line.ArgHasDeref(2) && !new_arg[1].is_expression) // i.e. don't validate the following until runtime:
+			if (!ATOF(new_raw_arg2))                           // x/=y ... x/=(4/4)/4 (v1.0.46.01: added is_expression check for expressions with no variables or function-calls).
 				return ScriptError(ERR_DIVIDEBYZERO, new_raw_arg2);
 		break;
 #endif  // The above section is in place only if when not AUTOHOTKEYSC.
@@ -6720,52 +6758,54 @@ Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 
 	// At this point, we know the requested arg is a variable that must be dynamically resolved.
 	// This section is similar to that in ExpandArg(), so they should be maintained together:
-	char *pText;
-	DerefType *deref;
-	int vni;
+	char *pText = this_arg.text; // Start at the begining of this arg's text.
+	int var_name_length = 0;
 
-	// Caller has ensured that none of these derefs are function calls (i.e. deref->is_function is alway false).
-	for (vni = 0, pText = this_arg.text  // Start at the begining of this arg's text.
-		, deref = this_arg.deref  // Start off by looking for the first deref.
-		; deref && deref->marker; ++deref)  // A deref with a NULL marker terminates the list.
+	if (this_arg.deref) // There's at least one deref.
 	{
-		// FOR EACH DEREF IN AN ARG (if we're here, there's at least one):
-		// Copy the chars that occur prior to deref->marker into the buffer:
-		for (; pText < deref->marker && vni < MAX_VAR_NAME_LENGTH; sVarName[vni++] = *pText++);
-		if (vni >= MAX_VAR_NAME_LENGTH && pText < deref->marker) // The variable name would be too long!
+		// Caller has ensured that none of these derefs are function calls (i.e. deref->is_function is alway false).
+		for (DerefType *deref = this_arg.deref  // Start off by looking for the first deref.
+			; deref->marker; ++deref)  // A deref with a NULL marker terminates the list.
 		{
-			// This type of error is just a warning because this function isn't set up to cause a true
-			// failure.  This is because the use of dynamically named variables is rare, and only for
-			// people who should know what they're doing.  In any case, when the caller of this
-			// function called it to resolve an output variable, it will see tha the result is
-			// NULL and terminate the current subroutine.
-			#define DYNAMIC_TOO_LONG "This dynamically built variable name is too long." \
-				"  If this variable was not intended to be dynamic, remove the % symbols from it."
-			LineError(DYNAMIC_TOO_LONG, FAIL, this_arg.text);
-			return NULL;
+			// FOR EACH DEREF IN AN ARG (if we're here, there's at least one):
+			// Copy the chars that occur prior to deref->marker into the buffer:
+			for (; pText < deref->marker && var_name_length < MAX_VAR_NAME_LENGTH; sVarName[var_name_length++] = *pText++);
+			if (var_name_length >= MAX_VAR_NAME_LENGTH && pText < deref->marker) // The variable name would be too long!
+			{
+				// This type of error is just a warning because this function isn't set up to cause a true
+				// failure.  This is because the use of dynamically named variables is rare, and only for
+				// people who should know what they're doing.  In any case, when the caller of this
+				// function called it to resolve an output variable, it will see tha the result is
+				// NULL and terminate the current subroutine.
+				#define DYNAMIC_TOO_LONG "This dynamically built variable name is too long." \
+					"  If this variable was not intended to be dynamic, remove the % symbols from it."
+				LineError(DYNAMIC_TOO_LONG, FAIL, this_arg.text);
+				return NULL;
+			}
+			// Now copy the contents of the dereferenced var.  For all cases, aBuf has already
+			// been verified to be large enough, assuming the value hasn't changed between the
+			// time we were called and the time the caller calculated the space needed.
+			if (deref->var->Get() > (VarSizeType)(MAX_VAR_NAME_LENGTH - var_name_length)) // The variable name would be too long!
+			{
+				LineError(DYNAMIC_TOO_LONG, FAIL, this_arg.text);
+				return NULL;
+			}
+			var_name_length += deref->var->Get(sVarName + var_name_length);
+			// Finally, jump over the dereference text. Note that in the case of an expression, there might not
+			// be any percent signs within the text of the dereference, e.g. x + y, not %x% + %y%.
+			pText += deref->length;
 		}
-		// Now copy the contents of the dereferenced var.  For all cases, aBuf has already
-		// been verified to be large enough, assuming the value hasn't changed between the
-		// time we were called and the time the caller calculated the space needed.
-		if (deref->var->Get() > (VarSizeType)(MAX_VAR_NAME_LENGTH - vni)) // The variable name would be too long!
-		{
-			LineError(DYNAMIC_TOO_LONG, FAIL, this_arg.text);
-			return NULL;
-		}
-		vni += deref->var->Get(sVarName + vni);
-		// Finally, jump over the dereference text. Note that in the case of an expression, there might not
-		// be any percent signs within the text of the dereference, e.g. x + y, not %x% + %y%.
-		pText += deref->length;
 	}
+
 	// Copy any chars that occur after the final deref into the buffer:
-	for (; *pText && vni < MAX_VAR_NAME_LENGTH; sVarName[vni++] = *pText++);
-	if (vni >= MAX_VAR_NAME_LENGTH && *pText) // The variable name would be too long!
+	for (; *pText && var_name_length < MAX_VAR_NAME_LENGTH; sVarName[var_name_length++] = *pText++);
+	if (var_name_length >= MAX_VAR_NAME_LENGTH && *pText) // The variable name would be too long!
 	{
 		LineError(DYNAMIC_TOO_LONG, FAIL, this_arg.text);
 		return NULL;
 	}
 	
-	if (!vni)
+	if (!var_name_length)
 	{
 		LineError("This dynamic variable is blank. If this variable was not intended to be dynamic,"
 			" remove the % symbols from it.", FAIL, this_arg.text);
@@ -6773,7 +6813,7 @@ Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 	}
 
 	// Terminate the buffer, even if nothing was written into it:
-	sVarName[vni] = '\0';
+	sVarName[var_name_length] = '\0';
 
 	static Var empty_var(sVarName, VAR_NORMAL, false); // Must use sVarName here.  See comment above for why.
 
@@ -6787,7 +6827,7 @@ Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 			return NULL; // Above already displayed error for us.
 		// The use of ALWAYS_PREFER_LOCAL below improves flexibility of assume-global functions
 		// by allowing this command to resolve to a local first if such a local exists:
-		if (found_var = g_script.FindVar(sVarName, 0, NULL, ALWAYS_PREFER_LOCAL)) // Assign.
+		if (found_var = g_script.FindVar(sVarName, var_name_length, NULL, ALWAYS_PREFER_LOCAL)) // Assign.
 			return found_var;
 		// At this point, this is either a non-existent variable or a reserved/built-in variable
 		// that was never statically referenced in the script (only dynamically), e.g. A_IPAddress%A_Index%
@@ -6804,7 +6844,7 @@ Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 	// reason described above.  ALWAYS_PREFER_LOCAL is used so that any existing local variable will
 	// take precedence over a global of the same name when assume-global is in effect.  If neither type
 	// of variable exists, a global variable will be created if assume-global is in effect.
-	if (   !(found_var = g_script.FindOrAddVar(sVarName, 0, ALWAYS_PREFER_LOCAL))   )
+	if (   !(found_var = g_script.FindOrAddVar(sVarName, var_name_length, ALWAYS_PREFER_LOCAL))   )
 		return NULL;  // Above will already have displayed the error.
 	if (this_arg.type == ARG_TYPE_OUTPUT_VAR && VAR_IS_RESERVED(*found_var))
 	{
@@ -6825,8 +6865,8 @@ Var *Script::FindOrAddVar(char *aVarName, size_t aVarNameLength, int aAlwaysUse,
 		return NULL;
 	int insert_pos;
 	bool is_local; // Used to detect which type of var should be added in case the result of the below is NULL.
-	Var *var = FindVar(aVarName, aVarNameLength, &insert_pos, aAlwaysUse, apIsException, &is_local);
-	if (var)
+	Var *var;
+	if (var = FindVar(aVarName, aVarNameLength, &insert_pos, aAlwaysUse, apIsException, &is_local))
 		return var;
 	// Otherwise, no match found, so create a new var.  This will return NULL if there was a problem,
 	// in which case AddVar() will already have displayed the error:
@@ -7551,9 +7591,10 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 			ArgStruct &this_arg = line->mArg[i]; // For performance and convenience.
 			// Exclude the derefs of output and input vars from consideration, since they can't
 			// be function calls:
-			if (!this_arg.is_expression) // For now, only expressions are capable of calling functions. If ever change this, might want to add a check here for this_arg.type != ARG_TYPE_NORMAL (for performance).
+			if (!this_arg.is_expression // For now, only expressions are capable of calling functions. If ever change this, might want to add a check here for this_arg.type != ARG_TYPE_NORMAL (for performance).
+				|| !this_arg.deref) // No function-calls present.
 				continue;
-			for (deref = this_arg.deref; deref && deref->marker; ++deref) // For each deref.
+			for (deref = this_arg.deref; deref->marker; ++deref) // For each deref.
 			{
 				if (!deref->is_function)
 					continue;
@@ -7654,13 +7695,13 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 						// as required by ByRef:
 						for (cp = param_start, param_last_char = omit_trailing_whitespace(param_start, param_end - 1)
 							; cp <= param_last_char; ++cp)
-							if (strchr(EXPR_ALL_SYMBOLS_FOR_BYREF, *cp)) // i.e. don't forbid parentheses because a variable or assignment can be enclosed in them even though they're redundant.  Don't forbid space/tab because operators like := can have them.
+							if (strchr(EXPR_FORBIDDEN_BYREF, *cp)) // This character isn't allowed in something passed ByRef unless it's an assignment (which is checked below).
 							{
-								if (strchr(EXPR_ASSIGN1_SYMBOLS, *cp) && strchr(EXPR_ASSIGN2_SYMBOLS, cp[1])) // Relies on short-circuit boolean order.
+								if (Line::StartsWithAssignmentOp(cp))
 								{
 									// Skip over :=, +=, -=, *=, /=, ++, -- ... because they can be passed ByRef.
 									// In fact, don't even continue the loop because any assignment can be followed
-									// by an arbitrarily complex sub-expression which shouldn't disqualify ByRef.
+									// by an arbitrarily complex sub-expression that shouldn't disqualify ByRef.
 									break;
 								}
 								abort = true; // So that the caller doesn't also report an error.
@@ -7674,7 +7715,7 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 						// common syntax errors such as passing a literal number or string to a ByRef
 						// parameter.  Note that there can be more than one for something like Array%i%_%j%
 						// or a ternary like true ? x : y.
-						for (found = false, deref2 = deref + 1; deref2 && deref2->marker; ++deref2)
+						for (found = false, deref2 = deref + 1; deref2->marker; ++deref2)
 							if (deref2->marker >= param_start && deref2->marker < param_end)
 							{
 								found = true;
@@ -7715,8 +7756,7 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 		if (line->mParentLine == NULL) // i.e. don't do it if it's already "owned" by an IF or ELSE.
 			line->mParentLine = aParentLine; // Can be NULL.
 
-		if (ACT_IS_IF(line->mActionType) || line->mActionType == ACT_ELSE
-			|| line->mActionType == ACT_LOOP || line->mActionType == ACT_REPEAT)
+		if (ACT_IS_IF_OR_ELSE_OR_LOOP(line->mActionType) || line->mActionType == ACT_REPEAT)
 		{
 			// Make the line immediately following each ELSE, IF or LOOP be enclosed by that stmt.
 			// This is done to make it illegal for a Goto or Gosub to jump into a deeper layer,
@@ -9836,8 +9876,8 @@ __forceinline ResultType Line::Perform() // __forceinline() currently boosts per
 		return PerformAssign();  // It will report any errors for us.
 
 	case ACT_ASSIGNEXPR:
-		// Currently, this can occur even when mArg[1].is_expression==false, such as things like var:=5 and
-		// maybe var:=Array%i%.  Search on "is_expression = " to find such cases in the script-loading/parsing
+		// Currently, ACT_ASSIGNEXPR can occur even when mArg[1].is_expression==false, such as things like var:=5
+		// and var:=Array%i%.  Search on "is_expression = " to find such cases in the script-loading/parsing
 		// routines.
 		if (mArgc > 1)
 		{
@@ -9849,12 +9889,17 @@ __forceinline ResultType Line::Perform() // __forceinline() currently boosts per
 			// previously by ExpandArgs()) just to find out if it's IsBinaryClip()).
 			if (ARGVARRAW2) // RAW is safe due to the above check of mArgc > 1.
 			{
-				if (ARGVARRAW2->IsBinaryClip()) // This is true via things like: x := %binary_clip%
-					return output_var->AssignBinaryClip(*ARGVARRAW2); // ARG2 must be VAR_NORMAL due to IsBinaryClip() check above (it can't even be VAR_CLIPBOARDALL).
+				if (ARGVARRAW2->IsBinaryClip()) // This can be reached via things like: x := binary_clip
 					// Performance should be good in this case since IsBinaryClip() implies a single isolated deref,
 					// which would never have been copied into the deref buffer.
-				if (ARGVARRAW2->Type() == VAR_CLIPBOARDALL) // Probably never called this way due to load-time
-					return output_var->AssignClipboardAll(); // conversion to ACT_ASSIGN.  But kept in case it can be.
+					return output_var->AssignBinaryClip(*ARGVARRAW2); // ARG2 must be VAR_NORMAL due to IsBinaryClip() check above (it can't even be VAR_CLIPBOARDALL).
+				// v1.0.46.01: The following can be reached because loadtime no longer translates such statements
+				// into ACT_ASSIGN vs. ACT_ASSIGNEXPR.  Even without that change, it can also be reached by
+				// something like:
+				//    DynClipboardAll = ClipboardAll
+				//    ClipSaved := %DynClipboardAll%
+				if (ARGVARRAW2->Type() == VAR_CLIPBOARDALL)
+					return output_var->AssignClipboardAll();
 			}
 		}
 		// Note that simple assignments such as Var:="xyz" or Var:=Var2 are resolved to be
@@ -9867,7 +9912,7 @@ __forceinline ResultType Line::Perform() // __forceinline() currently boosts per
 		// been evaluated and its functions and subfunctions called.  Examples:
 		//    fn(123, "string", var, fn2(y))
 		//    x&=3
-		//    var ? fn1() : fn2()
+		//    var ? func() : x:=y
 		return OK;
 
 	// Like AutoIt2, if either output_var or ARG1 aren't purely numeric, they

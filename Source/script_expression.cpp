@@ -58,169 +58,22 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 // 2) The constant empty string (""), in which case we do not alter aTarget for our caller.
 // 3) Some persistent location not in aDerefBuf, namely the mContents of a variable or a literal string/number,
 //    such as a function-call that returns "abc", 123, or a variable.
-// 4) At the offset aTarget minus aDerefBuf inside aDerefBuf (note that aDerefBuf might have been reallocated by us).
+// 4) At position aTarget inside aDerefBuf (note that aDerefBuf might have been reallocated by us).
 // aTarget is left unchnaged except in case #4, in which case aTarget has been adjusted to the position after our
 // result-string's terminator.  In addition, in case #4, aDerefBuf, aDerefBufSize, and aArgDeref[] have been adjusted
 // for our caller if aDerefBuf was too small and needed to be enlarged.
+//
 // Thanks to Joost Mulders for providing the expression evaluation code upon which this function is based.
 {
-	// This is the location in aDerefBuf the caller told us is ours.  Caller has already ensured that
-	// our part of the buffer is large enough for our first stage expansion, but not necessarily
-	// for our final result (if too large, we will expand the buffer to handle the result).
-	char *target = aTarget;
+	char *target = aTarget; // "target" is used to track our usage (current position) within the aTarget buffer.
 
 	// The following must be defined early so that mem_count is initialized and the array is guaranteed to be
-	// "in scope" in case of early "goto end/fail".
+	// "in scope" in case of early "goto" (goto substantially boosts performance and reduces code size here).
 	#define MAX_EXPR_MEM_ITEMS 100 // Hard to imagine using even a few in a typical script, let alone 100.
 	char *mem[MAX_EXPR_MEM_ITEMS]; // No init necessary.  In most cases, it will never be used.
 	int mem_count = 0; // The actual number of items in use in the above array.
 	char *result_to_return = ""; // By contrast, NULL is used to tell the caller to abort the current thread.  That isn't done for normal syntax errors, just critical conditions such as out-of-memory.
 	Var *output_var = (mActionType == ACT_ASSIGNEXPR) ? OUTPUT_VAR : NULL; // Resolve early because it's similar in usage/scope to the above.  Plus MUST be resolved prior to calling any script-functions since they could change the values in sArgVar[].
-
-	map_item map[MAX_DEREFS_PER_ARG*2 + 1];
-	int map_count = 0;
-	// Above sizes the map to "times 2 plus 1" to handle worst case, which is -y + 1 (raw+deref+raw).
-	// Thus, if this particular arg has the maximum number of derefs, the number of map markers
-	// needed would be twice that, plus one for the last raw text's marker.
-
-	///////////////////////////////////////////////////////////////////////////////////////
-	// EXPAND DEREFS and make a map that indicates the positions in the buffer where derefs
-	// vs. raw text begin and end.
-	///////////////////////////////////////////////////////////////////////////////////////
-	char *pText, *this_marker;
-	DerefType *deref;
-	for (pText = mArg[aArgIndex].text  // Start at the begining of this arg's text.
-		, deref = mArg[aArgIndex].deref  // Start off by looking for the first deref.
-		; deref && deref->marker; ++deref)  // A deref with a NULL marker terminates the list.
-	{
-		// FOR EACH DEREF IN AN ARG:
-		DerefType &this_deref = *deref; // For performance.
-		if (pText < this_deref.marker)
-		{
-			map[map_count].type = EXP_RAW;
-			map[map_count].marker = target;  // Indicate its position in the buffer.
-			// Copy the chars that occur prior to this_deref.marker into the buffer:
-			for (this_marker = this_deref.marker; pText < this_marker; *target++ = *pText++); // this_marker is used to help performance.
-			map[map_count].end = target; // Since RAWS are never empty due to the check above, this will always be the character after the last.
-			++map_count;
-		}
-
-		// Known issue: If something like %A_Space%String exists in the script (or any variable containing
-		// spaces), the expression will yield inconsistent results.  Since I haven't found an easy way
-		// to fix that, not fixing it seems okay in this case because it's not a correct way to be using
-		// dynamically built variable names in the first place.  In case this will be fixed in the future,
-		// either directly or as a side-effect of other changes, here is a test script that illustrates
-		// the inconsistency:
-		//vText = ABC 
-		//vNum = 1 
-		//result1 := (vText = %A_space%ABC) AND (vNum = 1)
-		//result2 := vText = %A_space%ABC AND vNum = 1
-		//MsgBox %result1%`n%result2%
-
-		map_item &this_map_item = map[map_count]; // For performance, but be careful not to use after ++map_count, etc.
-		if (this_deref.is_function)
-		{
-			this_map_item.type = EXP_DEREF_FUNC;
-			this_map_item.deref = deref;
-			// But nothing goes into target, so this is an invisible item of sorts.
-			// However, everything after the function's name, starting at its open-paren, will soon be
-			// put in as a collection of normal items (raw text and derefs).
-		}
-		else
-		{
-			// GetExpandedArgSize() relies on the fact that we only expand the following items into
-			// the deref buffer:
-			// 1) Derefs whose var type isn't VAR_NORMAL or who have zero length (since they might be env. vars).
-			// 2) Derefs that are enclosed by the g_DerefChar character (%), which in expressions means that
-			//    must be copied into the buffer to support double references such as Array%i%.
-			// Now copy the contents of the dereferenced var.  For all cases, the target buf has already
-			// been verified to be large enough, assuming the value hasn't changed between the time we
-			// were called and the time the caller calculated the space needed.
-			if (*this_deref.marker == g_DerefChar)
-				this_map_item.type = EXP_DEREF_DOUBLE;
-			else // SINGLE or VAR.  Set initial guess to possibly be overridden later:
-				this_map_item.type = (this_deref.var->Type() == VAR_NORMAL) ? EXP_DEREF_VAR : EXP_DEREF_SINGLE;
-
-			if (this_map_item.type == EXP_DEREF_VAR)
-			{
-				// Need to distinguish between empty variables and environment variables because the former
-				// we want to pass by reference into functions but the latter need to go into the deref buffer.
-				// So if this deref's variable is of zero length: if Get() actually retrieves anything, it's
-				// an environment variable rather than a zero-length normal variable. The size estimator knew
-				// that and already provided space for it in the buffer.  But if it returns an empty string,
-				// it's a normal empty variable and thus it stays of type EXP_DEREF_VAR.
-				if (g_NoEnv || this_deref.var->Length()) // v1.0.43.08: Added g_NoEnv.
-					this_map_item.var = this_deref.var;
-				else // Auto-env retrieval is in effect and this var is zero-length, so check if it's an environment variable.
-				{
-					this_map_item.marker = target;  // Indicate its position in the buffer.
-					target += this_deref.var->Get(target);
-					if (this_map_item.marker == target) // Empty string, so it's not an environment variable.
-						this_map_item.var = this_deref.var;
-					else // Override it's original EXP_DEREF_VAR type.
-					{
-						this_map_item.end = target;
-						this_map_item.type = EXP_DEREF_SINGLE;
-					}
-				}
-			}
-			else // SINGLE or DOUBLE, both of which need to go into the buffer.
-			{
-				this_map_item.marker = target;  // Indicate its position in the buffer.
-				target += this_deref.var->Get(target);
-				this_map_item.end = target;
-				// For performance reasons, the expression parser relies on an extra space to the right of each
-				// single deref.  For example, (x=str), which is seen as (x_contents=str_contents) during
-				// evaluation, would instead me seen as (x_contents =str_contents ), which allows string
-				// terminators to be put in place of those two spaces in case either or both contents-items
-				// are strings rather than numbers (such termination also simplifies number recognition).
-				// GetExpandedArgSize() has already ensured there is enough room in the deref buffer for these:
-			}
-			// Fix for v1.0.35.04: Each EXP_DEREF_VAR now gets a corresponding empty string in the buffer
-			// as a placeholder, which prevents an expression such as x*y*z from being seen as having
-			// two adjacent asterisks, which prevents it from being seen as SYM_POWER and other mistakes.
-			// This could have also been solved by having SYM_POWER and other double-symbol operators
-			// check to ensure the second symbol isn't at or beyond map[].end, but that would complicate
-			// the code and decrease maintainability, so this method seems better.  Also note that this
-			// fix isn't needed for EXP_DEREF_FUNC because the functions parentheses and arg list are
-			// always present in the deref buffer, which prevents SYM_POWER and similar from seeing
-			// the character after the first operator symbol as something that changes the operator.
-			if (this_map_item.type != EXP_DEREF_DOUBLE) // EXP_DEREF_VAR or EXP_DEREF_SINGLE.
-				*target++ = '\0'; // Always terminated since they can't form a part of a double-deref.
-			// For EXP_DEREF_VAR, if our caller will be assigning the result of our expression to
-			// one of the variables involved in the expression, that should be okay because:
-			// 1) The expression's result is normally not EXP_DEREF_VAR because any kind of operation
-			//    that is performed, such as addition or concatenation, would have transformed it into
-			//    SYM_OPERAND, SYM_STRING, SYM_INTEGER, or SYM_FLOAT.
-			// 2) If the result of the expression is the exact same address as the contents of the
-			//    variable our caller is assigning to (which can happen from something like
-			//    GlobalVar := YieldGlobalVar()), Var::Assign() handles that by checking if they're
-			//    the same and also using memmove(), at least when source and target overlap.
-		} // Not a function.
-		++map_count; // i.e. don't increment until after we're done using the old value.
-		// Finally, jump over the dereference text. Note that in the case of an expression, there might not
-		// be any percent signs within the text of the dereference, e.g. x + y, not %x% + %y%.
-		pText += this_deref.length;
-	}
-	// Copy any chars that occur after the final deref into the buffer:
-	if (*pText)
-	{
-		map[map_count].type = EXP_RAW;
-		map[map_count].marker = target;  // Indicate its position in the buffer.
-		for (; *pText; *target++ = *pText++);
-		map[map_count].end = target;
-		++map_count;
-	}
-
-	// Terminate the buffer, even if nothing was written into it:
-	*target++ = '\0'; // Target must be incremented to point to the next available position (if any) for use further below.
-	// The following is conservative because the original size estimate for our portion might have
-	// been inflated due to:
-	// 1) Falling back to MAX_FORMATTED_NUMBER_LENGTH as the estimate because the other was smaller.
-	// 2) Some of the derefs being smaller than their estimate (which is a documented possibility for some built-in variables).
-	size_t capacity_of_our_buf_portion = target - aTarget + aExtraSize; // The initial amount of size available to write our final result.
-
-/////////////////////////////////////////
 
 	// Having a precedence array is required at least for SYM_POWER (since the order of evaluation
 	// of something like 2**1**2 does matter).  It also helps performance by avoiding unnecessary pushing
@@ -228,18 +81,18 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 	// Also, dimensioning explicitly by SYM_COUNT helps enforce that at compile-time:
 	static UCHAR sPrecedence[SYM_COUNT] =  // Performance: UCHAR vs. INT benches a little faster, perhaps due to the slight reduction in code size it causes.
 	{
-		0, 0, 0, 0, 0, 0 // SYM_STRING, SYM_INTEGER, SYM_FLOAT, SYM_VAR, SYM_OPERAND, SYM_BEGIN (SYM_BEGIN must be lowest precedence).
+		0,0,0,0,0,0,0    // SYM_STRING, SYM_INTEGER, SYM_FLOAT, SYM_VAR, SYM_OPERAND, SYM_DYNAMIC, SYM_BEGIN (SYM_BEGIN must be lowest precedence).
 		, 82, 82         // SYM_POST_INCREMENT, SYM_POST_DECREMENT: Highest precedence operator so that it will work even though it comes *after* a variable name (unlike other unaries, which come before).
 		, 4, 4           // SYM_CPAREN, SYM_OPAREN (to simplify the code, parentheses must be lower than all operators in precedence).
 		, 6              // SYM_COMMA -- Must be just above SYM_OPAREN so it doesn't pop OPARENs off the stack.
 		, 7,7,7,7,7,7,7,7,7,7,7,7  // SYM_ASSIGN_*. THESE HAVE AN ODD NUMBER to indicate right-to-left evaluation order, which is necessary for cascading assignments such as x:=y:=1 to work.
-//		, 8              // This value must be left unused so that the one above can be promoted to it by the infix-to-postfix routine.
+//		, 8              // THIS VALUE MUST BE LEFT UNUSED so that the one above can be promoted to it by the infix-to-postfix routine.
 		, 11, 11         // SYM_IFF_ELSE, SYM_IFF_THEN (ternary conditional).  HAS AN ODD NUMBER to indicate right-to-left evaluation order, which is necessary for ternaries to perform traditionally when nested in each other without parentheses.
 //		, 12             // THIS VALUE MUST BE LEFT UNUSED so that the one above can be promoted to it by the infix-to-postfix routine.
 		, 16             // SYM_OR
 		, 20             // SYM_AND
 		, 25             // SYM_LOWNOT (the word "NOT": the low precedence version of logical-not).  HAS AN ODD NUMBER to indicate right-to-left evaluation order so that things like "not not var" are supports (which can be used to convert a variable into a pure 1/0 boolean value).
-//		, 26             // This value must be left unused so that the one above can be promoted to it by the infix-to-postfix routine.
+//		, 26             // THIS VALUE MUST BE LEFT UNUSED so that the one above can be promoted to it by the infix-to-postfix routine.
 		, 30, 30, 30     // SYM_EQUAL, SYM_EQUALCASE, SYM_NOTEQUAL (lower prec. than the below so that "x < 5 = var" means "result of comparison is the boolean value in var".
 		, 34, 34, 34, 34 // SYM_GT, SYM_LT, SYM_GTOE, SYM_LTOE
 		, 38             // SYM_CONCAT
@@ -280,609 +133,519 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 	// TOKENIZE THE INFIX EXPRESSION INTO AN INFIX ARRAY: Avoids the performance overhead of having
 	// to re-detect whether each symbol is an operand vs. operator at multiple stages.
 	///////////////////////////////////////////////////////////////////////////////////////////////
+	// In v1.0.46.01, this section was simplified to avoid transcribing the entire expression into the
+	// deref buffer.  In addition to improving performance and reducing code size, this also solves
+	// obscure timing bugs caused by functions that have side-effects, especially in comma-separated
+	// sub-expressions.  In these cases, one part of an expression could change a built-in variable
+	// (indirectly or in the case of Clipboard, directly), an environment variable, or a double-def.
+	// For example the dynamic components of a double-deref can be changed by other parts of an
+	// expression, even one without commas.  Another example is: fn(clipboard, func_that_changes_clip()).
+	// So now, built-in & environment variables and double-derefs are resolve when they're actually
+	// encountered during the final/evaluation phase.
+	// Another benefit to deferring the resolution of these types of items is that they become eligible
+	// for short-circuiting, which further helps performance (they're quite similar to built-in
+	// functions in this respect).
 	SymbolType sym_prev;
-	char *op_end, *cp, *terminate_string_here;
-	UINT op_length;
-	Var *found_var;
-	size_t literal_string_length;
+	char *op_end, *cp;
+	DerefType *deref, *this_deref, *deref_start, *deref_alloca;
+	int derefs_in_this_double;
+	char cp1;
 
-	for (int map_index = 0; map_index < map_count; ++map_index) // For each deref and raw item in map.
+	for (cp = mArg[aArgIndex].text, deref = mArg[aArgIndex].deref // Start at the begining of this arg's text and look for the next deref.
+		;; ++deref, ++infix_count) // FOR EACH DEREF IN AN ARG:
 	{
-		// Because neither the postfix array nor the stack can ever wind up with more tokens than were
-		// contained in the original infix array, only the infix array need be checked for overflow:
-		if (infix_count >= MAX_TOKENS) // No room for this operator or operand to be added.
-			goto abnormal_end;
+		this_deref = deref && deref->marker ? deref : NULL; // A deref with a NULL marker terminates the list (i.e. the final deref isn't a deref, merely a terminator of sorts.
 
-		map_item &this_map_item = map[map_index];
-
-		switch (this_map_item.type)
+		// BEFORE PROCESSING "this_deref" ITSELF, MUST FIRST PROCESS ANY LITERAL/RAW TEXT THAT LIES TO ITS LEFT.
+		if (this_deref && cp < this_deref->marker // There's literal/raw text to the left of the next deref.
+			|| !this_deref && *cp) // ...or there's no next deref, but there's some literal raw text remaining to be processed.
 		{
-		case EXP_DEREF_VAR:
-		case EXP_DEREF_FUNC:
-		case EXP_DEREF_SINGLE:
+			for (;; ++infix_count) // FOR EACH TOKEN INSIDE THIS RAW/LITERAL TEXT SECTION.
+			{
+				// Because neither the postfix array nor the stack can ever wind up with more tokens than were
+				// contained in the original infix array, only the infix array need be checked for overflow:
+				if (infix_count > MAX_TOKENS - 1) // No room for this operator or operand to be added.
+					goto abnormal_end;
+
+				// Only spaces and tabs are considered whitespace, leaving newlines and other whitespace characters
+				// for possible future use:
+				cp = omit_leading_whitespace(cp);
+				if (!*cp // Very end of expression...
+					|| this_deref && cp >= this_deref->marker) // ...or no more literal/raw text left to process at the left side of this_deref.
+					break; // Break out of inner loop so that bottom of the outer loop will process this_deref itself.
+
+				ExprTokenType &this_infix_item = infix[infix_count]; // Might help reduce code size since it's referenced many places below.
+
+				// CHECK IF THIS CHARACTER IS AN OPERATOR.
+				cp1 = cp[1]; // Improves performance by nearly 5% and appreciably reduces code size (at the expense of being less maintainable).
+				switch (*cp)
+				{
+				// The most common cases are kept up top to enhance performance if switch() is implemented as if-else ladder.
+				case '+':
+					if (cp1 == '=')
+					{
+						++cp; // An additional increment to have loop skip over the operator's second symbol.
+						this_infix_item.symbol = SYM_ASSIGN_ADD;
+					}
+					else
+					{
+						sym_prev = infix_count ? infix[infix_count - 1].symbol : SYM_OPAREN; // OPARAN is just a placeholder.
+						if (YIELDS_AN_OPERAND(sym_prev))
+						{
+							if (cp1 == '+')
+							{
+								// For consistency, assume that since the previous item is an operand (even if it's
+								// ')'), this is a post-op that applies to that operand.  For example, the following
+								// are all treated the same for consistency (implicit concatention where the '.'
+								// is omitted is rare anyway).
+								// x++ y
+								// x ++ y
+								// x ++y
+								++cp; // An additional increment to have loop skip over the operator's second symbol.
+								this_infix_item.symbol = SYM_POST_INCREMENT;
+							}
+							else
+								this_infix_item.symbol = SYM_ADD;
+						}
+						else if (cp1 == '+') // Pre-increment.
+						{
+							++cp; // An additional increment to have loop skip over the operator's second symbol.
+							this_infix_item.symbol = SYM_PRE_INCREMENT;
+						}
+						else // Remove unary pluses from consideration since they do not change the calculation.
+							--infix_count; // Counteract the loop's increment.
+					}
+					break;
+				case '-':
+					if (cp1 == '=')
+					{
+						++cp; // An additional increment to have loop skip over the operator's second symbol.
+						this_infix_item.symbol = SYM_ASSIGN_SUBTRACT;
+						break;
+					}
+					// Otherwise (since above didn't "break"):
+					sym_prev = infix_count ? infix[infix_count - 1].symbol : SYM_OPAREN; // OPARAN is just a placeholder.
+					// Must allow consecutive unary minuses because otherwise, the following example
+					// would not work correctly when y contains a negative value: var := 3 * -y
+					if (YIELDS_AN_OPERAND(sym_prev))
+					{
+						if (cp1 == '-')
+						{
+							// See comments at SYM_POST_INCREMENT about this section.
+							++cp; // An additional increment to have loop skip over the operator's second symbol.
+							this_infix_item.symbol = SYM_POST_DECREMENT;
+						}
+						else
+							this_infix_item.symbol = SYM_SUBTRACT;
+					}
+					else if (cp1 == '-') // Pre-decrement.
+					{
+						++cp; // An additional increment to have loop skip over the operator's second symbol.
+						this_infix_item.symbol = SYM_PRE_DECREMENT;
+					}
+					else // Unary minus.
+					{
+						// Set default for cases where the processing below this line doesn't determine
+						// it's a negative numeric literal:
+						this_infix_item.symbol = SYM_NEGATIVE;
+						// v1.0.40.06: The smallest signed 64-bit number (-0x8000000000000000) wasn't properly
+						// supported in previous versions because its unary minus was being seen as an operator,
+						// and thus the raw number was being passed as a positive to _atoi64() or _strtoi64(),
+						// neither of which would recognize it as a valid value.  To correct this, a unary
+						// minus followed by a raw numeric literal is now treated as a single literal number
+						// rather than unary minus operator followed by a positive number.
+						//
+						// To be a valid "literal negative number", the character immediately following
+						// the unary minus must not be:
+						// 1) Whitespace (atoi() and such don't support it, nor is it at all conventional).
+						// 2) An open-parenthesis such as the one in -(x).
+						// 3) Another unary minus or operator such as --x (which is the pre-decrement operator).
+						// To cover the above and possibly other unforeseen things, insist that the first
+						// character be a digit (even a hex literal must start with 0).
+						if ((cp1 >= '0' && cp1 <= '9') || cp1 == '.') // v1.0.46.01: Recognize dot too, to support numbers like -.5.
+						{
+							for (op_end = cp + 2; !strchr(EXPR_OPERAND_TERMINATORS, *op_end); ++op_end); // Find the end of this number (can be '\0').
+							if (!this_deref || op_end < this_deref->marker) // Detect numeric double derefs such as one created via "12%i% = value".
+							{
+								// Because the power operator takes precedence over unary minus, don't collapse
+								// unary minus into a literal numeric literal if the number is immediately
+								// followed by the power operator.  This is correct behavior even for
+								// -0x8000000000000000 because -0x8000000000000000**2 would in fact be undefined
+								// because ** is higher precedence than unary minus and +0x8000000000000000 is
+								// beyond the signed 64-bit range.  SEE ALSO the comments higher above.
+								// Use a temp variable because numeric_literal requires that op_end be set properly:
+								char *pow_temp = omit_leading_whitespace(op_end);
+								if (!(pow_temp[0] == '*' && pow_temp[1] == '*'))
+									goto numeric_literal; // Goto is used for performance and also as a patch to minimize the chance of breaking other things via redesign.
+								//else it's followed by pow.  Since pow is higher precedence than unary minus,
+								// leave this unary minus as an operator so that it will take effect after the pow.
+							}
+							//else possible double deref, so leave this unary minus as an operator.
+						}
+					} // Unary minus.
+					break;
+				case ',':
+					this_infix_item.symbol = SYM_COMMA; // Used to separate sub-statements and function parameters.
+					break;
+				case '/':
+					if (cp1 == '=')
+					{
+						++cp; // An additional increment to have loop skip over the operator's second symbol.
+						this_infix_item.symbol = SYM_ASSIGN_DIVIDE;
+					}
+					else if (cp1 == '/')
+					{
+						if (cp[2] == '=')
+						{
+							cp += 2; // An additional increment to have loop skip over the operator's 2nd & 3rd symbols.
+							this_infix_item.symbol = SYM_ASSIGN_FLOORDIVIDE;
+						}
+						else
+						{
+							++cp; // An additional increment to have loop skip over the second '/' too.
+							this_infix_item.symbol = SYM_FLOORDIVIDE;
+						}
+					}
+					else
+						this_infix_item.symbol = SYM_DIVIDE;
+					break;
+				case '*':
+					if (cp1 == '=')
+					{
+						++cp; // An additional increment to have loop skip over the operator's second symbol.
+						this_infix_item.symbol = SYM_ASSIGN_MULTIPLY;
+					}
+					else if (cp1 == '*') // Python, Perl, and other languages also use ** for power.
+					{
+						++cp; // An additional increment to have loop skip over the second '*' too.
+						this_infix_item.symbol = SYM_POWER;
+					}
+					else
+					{
+						// Differentiate between unary dereference (*) and the "multiply" operator:
+						// See '-' above for more details:
+						this_infix_item.symbol = YIELDS_AN_OPERAND(infix_count ? infix[infix_count - 1].symbol : SYM_OPAREN)
+							? SYM_MULTIPLY : SYM_DEREF;
+					}
+					break;
+				case '!':
+					if (cp1 == '=') // i.e. != is synonymous with <>, which is also already supported by legacy.
+					{
+						++cp; // An additional increment to have loop skip over the '=' too.
+						this_infix_item.symbol = SYM_NOTEQUAL;
+					}
+					else
+						// If what lies to its left is a CPARAN or OPERAND, SYM_CONCAT is not auto-inserted because:
+						// 1) Allows ! and ~ to potentially be overloaded to become binary and unary operators in the future.
+						// 2) Keeps the behavior consistent with unary minus, which could never auto-concat since it would
+						//    always be seen as the binary subtract operator in such cases.
+						// 3) Simplifies the code.
+						this_infix_item.symbol = SYM_HIGHNOT; // High-precedence counterpart of the word "not".
+					break;
+				case '(':
+					// The below should not hurt any future type-casting feature because the type-cast can be checked
+					// for prior to checking the below.  For example, if what immediately follows the open-paren is
+					// the string "int)", this symbol is not open-paren at all but instead the unary type-cast-to-int
+					// operator.
+					if (infix_count && YIELDS_AN_OPERAND(infix[infix_count - 1].symbol)) // If it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
+					{
+						if (infix_count > MAX_TOKENS - 2) // -2 to ensure room for this operator and the operand further below.
+							goto abnormal_end;
+						this_infix_item.symbol = SYM_CONCAT;
+						++infix_count;
+					}
+					infix[infix_count].symbol = SYM_OPAREN; // MUST NOT REFER TO this_infix_item IN CASE ABOVE DID ++infix_count.
+					break;
+				case ')':
+					this_infix_item.symbol = SYM_CPAREN;
+					break;
+				case '=':
+					if (cp1 == '=')
+					{
+						++cp; // An additional increment to have loop skip over the other '=' too.
+						this_infix_item.symbol = SYM_EQUALCASE;
+					}
+					else
+						this_infix_item.symbol = SYM_EQUAL;
+					break;
+				case '>':
+					switch (cp1)
+					{
+					case '=':
+						++cp; // An additional increment to have loop skip over the '=' too.
+						this_infix_item.symbol = SYM_GTOE;
+						break;
+					case '>':
+						if (cp[2] == '=')
+						{
+							cp += 2; // An additional increment to have loop skip over the operator's 2nd & 3rd symbols.
+							this_infix_item.symbol = SYM_ASSIGN_BITSHIFTRIGHT;
+						}
+						else
+						{
+							++cp; // An additional increment to have loop skip over the second '>' too.
+							this_infix_item.symbol = SYM_BITSHIFTRIGHT;
+						}
+						break;
+					default:
+						this_infix_item.symbol = SYM_GT;
+					}
+					break;
+				case '<':
+					switch (cp1)
+					{
+					case '=':
+						++cp; // An additional increment to have loop skip over the '=' too.
+						this_infix_item.symbol = SYM_LTOE;
+						break;
+					case '>':
+						++cp; // An additional increment to have loop skip over the '>' too.
+						this_infix_item.symbol = SYM_NOTEQUAL;
+						break;
+					case '<':
+						if (cp[2] == '=')
+						{
+							cp += 2; // An additional increment to have loop skip over the operator's 2nd & 3rd symbols.
+							this_infix_item.symbol = SYM_ASSIGN_BITSHIFTLEFT;
+						}
+						else
+						{
+							++cp; // An additional increment to have loop skip over the second '<' too.
+							this_infix_item.symbol = SYM_BITSHIFTLEFT;
+						}
+						break;
+					default:
+						this_infix_item.symbol = SYM_LT;
+					}
+					break;
+				case '&':
+					if (cp1 == '&')
+					{
+						++cp; // An additional increment to have loop skip over the second '&' too.
+						this_infix_item.symbol = SYM_AND;
+					}
+					else if (cp1 == '=')
+					{
+						++cp; // An additional increment to have loop skip over the operator's second symbol.
+						this_infix_item.symbol = SYM_ASSIGN_BITAND;
+					}
+					else
+					{
+						// Differentiate between unary "take the address of" and the "bitwise and" operator:
+						// See '-' above for more details:
+						this_infix_item.symbol = YIELDS_AN_OPERAND(infix_count ? infix[infix_count - 1].symbol : SYM_OPAREN)
+							? SYM_BITAND : SYM_ADDRESS;
+					}
+					break;
+				case '|':
+					if (cp1 == '|')
+					{
+						++cp; // An additional increment to have loop skip over the second '|' too.
+						this_infix_item.symbol = SYM_OR;
+					}
+					else if (cp1 == '=')
+					{
+						++cp; // An additional increment to have loop skip over the operator's second symbol.
+						this_infix_item.symbol = SYM_ASSIGN_BITOR;
+					}
+					else
+						this_infix_item.symbol = SYM_BITOR;
+					break;
+				case '^':
+					if (cp1 == '=')
+					{
+						++cp; // An additional increment to have loop skip over the operator's second symbol.
+						this_infix_item.symbol = SYM_ASSIGN_BITXOR;
+					}
+					else
+						this_infix_item.symbol = SYM_BITXOR;
+					break;
+				case '~':
+					// If what lies to its left is a CPARAN or OPERAND, SYM_CONCAT is not auto-inserted because:
+					// 1) Allows ! and ~ to potentially be overloaded to become binary and unary operators in the future.
+					// 2) Keeps the behavior consistent with unary minus, which could never auto-concat since it would
+					//    always be seen as the binary subtract operator in such cases.
+					// 3) Simplifies the code.
+					this_infix_item.symbol = SYM_BITNOT;
+					break;
+				case '?':
+					this_infix_item.symbol = SYM_IFF_THEN;
+					break;
+				case ':':
+					if (cp1 == '=')
+					{
+						++cp; // An additional increment to have loop skip over the second '|' too.
+						this_infix_item.symbol = SYM_ASSIGN;
+					}
+					else
+						this_infix_item.symbol = SYM_IFF_ELSE;
+					break;
+
+				case '"': // QUOTED/LITERAL STRING.
+					// Note that single and double-derefs are impossible inside string-literals
+					// because the load-time deref parser would never detect anything inside
+					// of quotes -- even non-escaped percent signs -- as derefs.
+					if (infix_count && YIELDS_AN_OPERAND(infix[infix_count - 1].symbol)) // If it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
+					{
+						if (infix_count > MAX_TOKENS - 2) // -2 to ensure room for this operator and the operand further below.
+							goto abnormal_end;
+						this_infix_item.symbol = SYM_CONCAT;
+						++infix_count;
+					}
+					// MUST NOT REFER TO this_infix_item IN CASE ABOVE DID ++infix_count:
+					infix[infix_count].symbol = SYM_STRING; // Marked explicitly as string vs. SYM_OPERAND to prevent it from being seen as a number, e.g. if (var == "12.0") would be false if var contains "12" with no trailing ".0".
+					infix[infix_count].marker = target; // Point it to its position in the buffer (populated below).
+					// Find the end of this string literal, noting that a pair of double quotes is
+					// a literal double quote inside the string:
+					for (++cp;;) // Omit the starting-quote from consideration, and from the resulting/built string.
+					{
+						if (!*cp) // No matching end-quote. Probably impossible due to load-time validation.
+							goto abnormal_end;
+						if (*cp == '"') // And if it's not followed immediately by another, this is the end of it.
+						{
+							++cp;
+							if (*cp != '"') // String terminator or some non-quote character.
+								break;  // The previous char is the ending quote.
+							//else a pair of quotes, which resolves to a single literal quote. So fall through
+							// to the below, which will copy of quote character to the buffer. Then this pair
+							// is skipped over and the loop continues until the real end-quote is found.
+						}
+						//else some character other than '\0' or '"'.
+						*target++ = *cp++;
+					}
+					*target++ = '\0'; // Terminate it in the buffer.
+					continue; // Continue vs. break to avoid the ++cp at the bottom. Above has already set cp to be the character after this literal string's close-quote.
+
+				default: // NUMERIC-LITERAL, DOUBLE-DEREF, RELATIONAL OPERATOR SUCH AS "NOT", OR UNRECOGNIZED SYMBOL.
+					if (*cp == '.') // This one must be done here rather than as a "case".  See comment below.
+					{
+						if (cp1 == '=')
+						{
+							++cp; // An additional increment to have loop skip over the operator's second symbol.
+							this_infix_item.symbol = SYM_ASSIGN_CONCAT;
+							break;
+						}
+						if (IS_SPACE_OR_TAB(cp1))
+						{
+							this_infix_item.symbol = SYM_CONCAT;
+							break;
+						}
+						//else this is a '.' that isn't followed by a space, tab, or '='.  So it's probably
+						// a number without a leading zero like .2, so continue on below to process it.
+					}
+
+					// Find the end of this operand or keyword, even if that end extended into the next deref.
+					// StrChrAny() is not used because if *op_end is '\0', the strchr() below will find it too:
+					for (op_end = cp + 1; !strchr(EXPR_OPERAND_TERMINATORS, *op_end); ++op_end);
+					// Now op_end marks the end of this operand or keyword.  That end might be the zero terminator
+					// or the next operator in the expression, or just a whitespace.
+					if (this_deref && op_end >= this_deref->marker)
+						goto double_deref; // This also serves to break out of the inner for(), equivalent to a break.
+					// Otherwise, this operand is a normal raw numeric-literal or a word-operator (and/or/not).
+					// The section below is very similar to the one used at load-time to recognize and/or/not,
+					// so it should be maintained with that section.  UPDATE for v1.0.45: The load-time parser
+					// now resolves "OR" to || and "AND" to && to improve runtime performance and reduce code size here.
+					// However, "NOT" but still be parsed here at runtime because it's not quite the same as the "!"
+					// operator (different precedence), and it seemed too much trouble to invent some special
+					// operator symbol for load-time to insert as a placeholder/substitute (especially since that
+					// symbol would appear in ListLines).
+					if (op_end-cp == 3
+						&& (cp[0] == 'n' || cp[0] == 'N')
+						&& (  cp1 == 'o' ||   cp1 == 'O')
+						&& (cp[2] == 't' || cp[2] == 'T')) // "NOT" was found.
+					{
+						this_infix_item.symbol = SYM_LOWNOT;
+						cp = op_end; // Have the loop process whatever lies at op_end and beyond.
+						continue; // Continue vs. break to avoid the ++cp at the bottom (though it might not matter in this case).
+					}
+numeric_literal:
+					// Since above didn't "continue", this item is probably a raw numeric literal (either SYM_FLOAT
+					// or SYM_INTEGER, to be differentiated later) because just about every other possibility has
+					// been ruled out above.  For example, unrecognized symbols should be impossible at this stage
+					// because load-time validation would have caught them.  And any kind of unquoted alphanumeric
+					// characters (other than "NOT", which was detected above) wouldn't have reached this point
+					// because load-time pre-parsing would have marked it as a deref/var, not raw/literal text.
+					if (infix_count && YIELDS_AN_OPERAND(infix[infix_count - 1].symbol)) // If it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
+					{
+						if (infix_count > MAX_TOKENS - 2) // -2 to ensure room for this operator and the operand further below.
+							goto abnormal_end;
+						this_infix_item.symbol = SYM_CONCAT;
+						++infix_count;
+					}
+					// MUST NOT REFER TO this_infix_item IN CASE ABOVE DID ++infix_count:
+					infix[infix_count].symbol = SYM_OPERAND;
+					infix[infix_count].marker = target; // Point it to its position in the buffer (populated below).
+					memcpy(target, cp, op_end - cp);
+					target += op_end - cp;
+					*target++ = '\0'; // Terminate it in the buffer.
+					cp = op_end; // Have the loop process whatever lies at op_end and beyond.
+					continue; // "Continue" to avoid the ++cp at the bottom.
+				} // switch() for type of symbol/operand.
+				++cp; // i.e. increment only if a "continue" wasn't encountered somewhere above. Although maintainability is reduced to do this here, it avoids dozens of ++cp in other places.
+			} // for each token in this section of raw/literal text.
+		} // End of processing of raw/literal text (such as operators) that lie to the left of this_deref.
+
+		if (!this_deref) // All done because the above just processed all the raw/literal text (if any) that
+			break;       // lay to the right of the last deref.
+
+		// THE ABOVE HAS NOW PROCESSED ANY/ALL RAW/LITERAL TEXT THAT LIES TO THE LEFT OF this_deref.
+		// SO NOW PROCESS THIS_DEREF ITSELF.
+		if (infix_count > MAX_TOKENS - 1) // No room for the deref item below to be added.
+			goto abnormal_end;
+		DerefType &this_deref_ref = *this_deref; // Boosts performance slightly.
+		if (this_deref_ref.is_function) // Above has ensured that at this stage, this_deref!=NULL.
+		{
 			if (infix_count && YIELDS_AN_OPERAND(infix[infix_count - 1].symbol)) // If it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
 			{
 				if (infix_count > MAX_TOKENS - 2) // -2 to ensure room for this operator and the operand further below.
 					goto abnormal_end;
 				infix[infix_count++].symbol = SYM_CONCAT;
 			}
-			switch (this_map_item.type)
-			{
-			case EXP_DEREF_VAR: // DllCall() and possibly others rely on this having been done to support changing the value of a parameter (similar to by-ref).
-				infix[infix_count].symbol = SYM_VAR; // Type() is always VAR_NORMAL as verified earlier. This is relied upon in several places such as built-in functions.
-				infix[infix_count].var = this_map_item.var;
-				break;
-			case EXP_DEREF_FUNC:
-				infix[infix_count].symbol = SYM_FUNC;
-				infix[infix_count].deref = this_map_item.deref;
-				break;
-			default: // EXP_DEREF_SINGLE
-				// At this stage, an EXP_DEREF_SINGLE item is seen as a numeric literal or a string-literal
-				// (without enclosing double quotes, since those are only needed for raw string literals).
-				// An EXP_DEREF_SINGLE item cannot extend beyond into the map item to its right, since such
-				// a condition can never occur due to load-time preparsing (e.g. the x and y in x+y are two
-				// separate items because there's an operator between them). Even a concat expression such as
-				// (x y) would still have x and y separate because the space between them counts as a raw
-				// map item, which keeps them separate.
-				infix[infix_count].symbol = SYM_OPERAND; // Generic string so that it can later be interpreted as a number (if it's numeric).
-				infix[infix_count].marker = this_map_item.marker; // This operand has already been terminated above.
-			}
-			// This map item has been fully processed.  A new loop iteration will be started to move onto
-			// the next, if any:
-			++infix_count;
-			continue;
+			infix[infix_count].symbol = SYM_FUNC;
+			infix[infix_count].deref = deref;
 		}
-		
-		// Since the above didn't continue, it's either DOUBLE or RAW.
-
-		// An EXP_DEREF_DOUBLE item must be a isolated double-reference or one that extends to the right
-		// into other map item(s).  If not, a previous iteration would have merged it in with a previous
-		// EXP_RAW item and we could never reach this point.
-		// At this stage, an EXP_DEREF_DOUBLE looks like one of the following: abc, 33, abcArray (via
-		// extending into an item to its right), or 33Array (overlap).  It can also consist more than
-		// two adjacent items as in this example: %ArrayName%[%i%][%j%].  That example would appear as
-		// MyArray[33][44] here because the first dereferences have already been done.  MyArray[33][44]
-		// (and all the other examples here) are not yet operands because the need a second dereference
-		// to resolve them into a number or string.
-		if (this_map_item.type == EXP_DEREF_DOUBLE)
+		else // this_deref is a variable.
 		{
-			// Find the end of this operand.  StrChrAny() is not used because if *op_end is '\0'
-			// (i.e. this_map_item is the last operand), the strchr() below will find that too:
-			for (op_end = this_map_item.marker; !strchr(EXPR_OPERAND_TERMINATORS, *op_end); ++op_end);
-			// Note that above has deteremined op_end correctly because any expression, even those not
-			// properly formatted, will have an operator or whitespace between each operand and the next.
-			// In the following example, let's say var contains the string -3:
-			// %Index%Array var
-			// The whitespace-char between the two operands above is a member of EXPR_OPERAND_TERMINATORS,
-			// so it (and not the minus inside "var") marks the end of the first operand. If there were no
-			// space, the entire thing would be one operand so it wouldn't matter (though in this case, it
-			// would form an invalid var-name since dashes can't exist in them, which is caught later).
-			cp = this_map_item.marker; // Set for use by the label below.
-			goto double_deref;
-		}
-
-		// RAW is of lower precedence than the above, so is checked last.  For example, if a single
-		// or double deref's contents contain double quotes, those quotes do not delimit a string literal.
-		// Instead, the quotes themselves are part of the string.  Similarly, a single or double
-		// deref containing as string such as 5+3 is a string, not a subexpression to be evaluated.
-		// Since the above didn't "goto" or "continue", this map item is EXP_RAW, which is the only type
-		// that can contain operators and raw literal numbers and strings (which are double-quoted when raw).
-		for (cp = this_map_item.marker;; ++infix_count) // For each token inside this map item.
-		{
-			// Because neither the postfix array nor the stack can ever wind up with more tokens than were
-			// contained in the original infix array, only the infix array need be checked for overflow:
-			if (infix_count > MAX_TOKENS - 1) // No room for this operator or operand to be added.
-				goto abnormal_end;
-
-			// Only spaces and tabs are considered whitespace, leaving newlines and other whitespace characters
-			// for possible future use:
-			cp = omit_leading_whitespace(cp);
-			if (cp >= this_map_item.end)
-				break; // End of map item (or entire expression if this is the last map item) has been reached.
-
-			terminate_string_here = cp; // See comments below, near other uses of terminate_string_here.
-
-			ExprTokenType &this_infix_item = infix[infix_count]; // Might help reduce code size since it's referenced many places below.
-
-			// Check if it's an operator.
-			switch (*cp)
+			if (*this_deref_ref.marker == g_DerefChar) // A double-deref because normal derefs don't start with '%'.
 			{
-			// The most common cases are kept up top to enhance performance if switch() is implemented as if-else ladder.
-			case '+':
-				if (cp[1] == '=')
-				{
-					++cp; // An additional increment to have loop skip over the operator's second symbol.
-					this_infix_item.symbol = SYM_ASSIGN_ADD;
-				}
-				else
-				{
-					sym_prev = infix_count ? infix[infix_count - 1].symbol : SYM_OPAREN; // OPARAN is just a placeholder.
-					if (YIELDS_AN_OPERAND(sym_prev))
-					{
-						if (cp[1] == '+')
-						{
-							// For consistency, assume that since the previous item is an operand (even if it's
-							// ')'), this is a post-op that applies to that operand.  For example, the following
-							// are all treated the same for consistency (implicit concatention where the '.'
-							// is omitted is rare anyway).
-							// x++ y
-							// x ++ y
-							// x ++y
-							++cp; // An additional increment to have loop skip over the operator's second symbol.
-							this_infix_item.symbol = SYM_POST_INCREMENT;
-						}
-						else
-							this_infix_item.symbol = SYM_ADD;
-					}
-					else if (cp[1] == '+') // Pre-increment.
-					{
-						++cp; // An additional increment to have loop skip over the operator's second symbol.
-						this_infix_item.symbol = SYM_PRE_INCREMENT;
-					}
-					else // Remove unary pluses from consideration since they do not change the calculation.
-						--infix_count; // Counteract the loop's increment.
-				}
-				break;
-			case '-':
-				if (cp[1] == '=')
-				{
-					++cp; // An additional increment to have loop skip over the operator's second symbol.
-					this_infix_item.symbol = SYM_ASSIGN_SUBTRACT;
-					break;
-				}
-				// Otherwise (since above didn't "break"):
-				sym_prev = infix_count ? infix[infix_count - 1].symbol : SYM_OPAREN; // OPARAN is just a placeholder.
-				// Must allow consecutive unary minuses because otherwise, the following example
-				// would not work correctly when y contains a negative value: var := 3 * -y
-				if (YIELDS_AN_OPERAND(sym_prev))
-				{
-					if (cp[1] == '-')
-					{
-						// See comments at SYM_POST_INCREMENT about this section.
-						++cp; // An additional increment to have loop skip over the operator's second symbol.
-						this_infix_item.symbol = SYM_POST_DECREMENT;
-					}
-					else
-						this_infix_item.symbol = SYM_SUBTRACT;
-				}
-				else if (cp[1] == '-') // Pre-decrement.
-				{
-					++cp; // An additional increment to have loop skip over the operator's second symbol.
-					this_infix_item.symbol = SYM_PRE_DECREMENT;
-				}
-				else // Unary minus.
-				{
-					// Set default for cases where the processing below this line doesn't determine
-					// it's a negative numeric literal:
-					this_infix_item.symbol = SYM_NEGATIVE;
-					// v1.0.40.06: The smallest signed 64-bit number (-0x8000000000000000) wasn't properly
-					// supported in previous versions because its unary minus was being seen as an operator,
-					// and thus the raw number was being passed as a positive to _atoi64() or _strtoi64(),
-					// neither of which would recognize it as a valid value.  To correct this, a unary
-					// minus followed by a raw numeric literal is now treated as a single literal number
-					// rather than unary minus operator followed by a positive number.
-					//
-					// To be a valid "literal negative number", the character immediately following
-					// the unary minus must not be:
-					// 1) Whitespace (atoi() and such don't support it, nor is it at all conventional).
-					// 2) An open-parenthesis such as the one in -(x).
-					// 3) Another unary minus or operator such as --2 (which should evaluate to 2).
-					// To cover the above and possibly other unforeseen things, insist that the first
-					// character be a digit (even a hex literal must start with 0).
-					if (cp[1] >= '0' && cp[1] <= '9')
-					{
-						// Find the end of this number (this also sets op_end correctly for use by
-						// "goto numeric_literal"):
-						for (op_end = cp + 2; !strchr(EXPR_OPERAND_TERMINATORS, *op_end); ++op_end);
-						if (op_end < this_map_item.end) // Detect numeric double derefs such as one created via "12%i% = value".
-						{
-							// Because the power operator takes precedence over unary minus, don't collapse
-							// unary minus into a literal numeric literal if the number is immediately
-							// followed by the power operator.  This is correct behavior even for
-							// -0x8000000000000000 because -0x8000000000000000**2 would in fact be undefined
-							// because +0x8000000000000000 is beyond the signed 64-bit range.
-							// Use a temp variable because numeric_literal requires that op_end be set properly:
-							char *pow_temp = omit_leading_whitespace(op_end);
-							if (!(pow_temp[0] == '*' && pow_temp[1] == '*'))
-								goto numeric_literal; // Goto is used for performance and also as a patch to minimize the chance of breaking other things via redesign.
-							//else leave this unary minus as an operator.
-						}
-						//else possible double deref, so leave this unary minus as an operator.
-					}
-				} // Unary minus.
-				break;
-			case ',':
-				this_infix_item.symbol = SYM_COMMA; // Used to separate sub-statements and function parameters.
-				break;
-			case '/':
-				if (cp[1] == '=')
-				{
-					++cp; // An additional increment to have loop skip over the operator's second symbol.
-					this_infix_item.symbol = SYM_ASSIGN_DIVIDE;
-				}
-				else if (cp[1] == '/')
-				{
-					if (cp[2] == '=')
-					{
-						cp += 2; // An additional increment to have loop skip over the operator's 2nd & 3rd symbols.
-						this_infix_item.symbol = SYM_ASSIGN_FLOORDIVIDE;
-					}
-					else
-					{
-						++cp; // An additional increment to have loop skip over the second '/' too.
-						this_infix_item.symbol = SYM_FLOORDIVIDE;
-					}
-				}
-				else
-					this_infix_item.symbol = SYM_DIVIDE;
-				break;
-			case '*':
-				if (cp[1] == '=')
-				{
-					++cp; // An additional increment to have loop skip over the operator's second symbol.
-					this_infix_item.symbol = SYM_ASSIGN_MULTIPLY;
-				}
-				else if (cp[1] == '*') // Python, Perl, and other languages also use ** for power.
-				{
-					++cp; // An additional increment to have loop skip over the second '*' too.
-					this_infix_item.symbol = SYM_POWER;
-				}
-				else
-				{
-					// Differentiate between unary dereference (*) and the "multiply" operator:
-					// See '-' above for more details:
-					this_infix_item.symbol = YIELDS_AN_OPERAND(infix_count ? infix[infix_count - 1].symbol : SYM_OPAREN)
-						? SYM_MULTIPLY : SYM_DEREF;
-				}
-				break;
-			case '!':
-				if (cp[1] == '=') // i.e. != is synonymous with <>, which is also already supported by legacy.
-				{
-					++cp; // An additional increment to have loop skip over the '=' too.
-					this_infix_item.symbol = SYM_NOTEQUAL;
-				}
-				else
-					// If what lies to its left is a CPARAN or OPERAND, SYM_CONCAT is not auto-inserted because:
-					// 1) Allows ! and ~ to potentially be overloaded to become binary and unary operators in the future.
-					// 2) Keeps the behavior consistent with unary minus, which could never auto-concat since it would
-					//    always be seen as the binary subtract operator in such cases.
-					// 3) Simplifies the code.
-					this_infix_item.symbol = SYM_HIGHNOT; // High-precedence counterpart of the word "not".
-				break;
-			case '(':
-				// The below should not hurt any future type-casting feature because the type-cast can be checked
-				// for prior to checking the below.  For example, if what immediately follows the open-paren is
-				// the string "int)", this symbol is not open-paren at all but instead the unary type-cast-to-int
-				// operator.
-				if (infix_count && YIELDS_AN_OPERAND(infix[infix_count - 1].symbol)) // If it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
-				{
-					if (infix_count > MAX_TOKENS - 2) // -2 to ensure room for this operator and the operand further below.
-						goto abnormal_end;
-					this_infix_item.symbol = SYM_CONCAT;
-					++infix_count;
-				}
-				infix[infix_count].symbol = SYM_OPAREN; // Must not refer to "this_infix_item" in case the above did ++infix_count.
-				break;
-			case ')':
-				this_infix_item.symbol = SYM_CPAREN;
-				break;
-			case '=':
-				if (cp[1] == '=')
-				{
-					// In this case, it's not necessary to check cp >= this_map_item.end prior to ++cp,
-					// since symbols such as > and = can't appear in a double-deref, which at
-					// this stage must be a legal variable name:
-					++cp; // An additional increment to have loop skip over the other '=' too.
-					this_infix_item.symbol = SYM_EQUALCASE;
-				}
-				else
-					this_infix_item.symbol = SYM_EQUAL;
-				break;
-			case '>':
-				switch (cp[1])
-				{
-				case '=':
-					++cp; // An additional increment to have loop skip over the '=' too.
-					this_infix_item.symbol = SYM_GTOE;
-					break;
-				case '>':
-					if (cp[2] == '=')
-					{
-						cp += 2; // An additional increment to have loop skip over the operator's 2nd & 3rd symbols.
-						this_infix_item.symbol = SYM_ASSIGN_BITSHIFTRIGHT;
-					}
-					else
-					{
-						++cp; // An additional increment to have loop skip over the second '>' too.
-						this_infix_item.symbol = SYM_BITSHIFTRIGHT;
-					}
-					break;
-				default:
-					this_infix_item.symbol = SYM_GT;
-				}
-				break;
-			case '<':
-				switch (cp[1])
-				{
-				case '=':
-					++cp; // An additional increment to have loop skip over the '=' too.
-					this_infix_item.symbol = SYM_LTOE;
-					break;
-				case '>':
-					++cp; // An additional increment to have loop skip over the '>' too.
-					this_infix_item.symbol = SYM_NOTEQUAL;
-					break;
-				case '<':
-					if (cp[2] == '=')
-					{
-						cp += 2; // An additional increment to have loop skip over the operator's 2nd & 3rd symbols.
-						this_infix_item.symbol = SYM_ASSIGN_BITSHIFTLEFT;
-					}
-					else
-					{
-						++cp; // An additional increment to have loop skip over the second '<' too.
-						this_infix_item.symbol = SYM_BITSHIFTLEFT;
-					}
-					break;
-				default:
-					this_infix_item.symbol = SYM_LT;
-				}
-				break;
-			case '&':
-				if (cp[1] == '&')
-				{
-					++cp; // An additional increment to have loop skip over the second '&' too.
-					this_infix_item.symbol = SYM_AND;
-				}
-				else if (cp[1] == '=')
-				{
-					++cp; // An additional increment to have loop skip over the operator's second symbol.
-					this_infix_item.symbol = SYM_ASSIGN_BITAND;
-				}
-				else
-				{
-					// Differentiate between unary "take the address of" and the "bitwise and" operator:
-					// See '-' above for more details:
-					this_infix_item.symbol = YIELDS_AN_OPERAND(infix_count ? infix[infix_count - 1].symbol : SYM_OPAREN)
-						? SYM_BITAND : SYM_ADDRESS;
-				}
-				break;
-			case '|':
-				if (cp[1] == '|')
-				{
-					++cp; // An additional increment to have loop skip over the second '|' too.
-					this_infix_item.symbol = SYM_OR;
-				}
-				else if (cp[1] == '=')
-				{
-					++cp; // An additional increment to have loop skip over the operator's second symbol.
-					this_infix_item.symbol = SYM_ASSIGN_BITOR;
-				}
-				else
-					this_infix_item.symbol = SYM_BITOR;
-				break;
-			case '^':
-				if (cp[1] == '=')
-				{
-					++cp; // An additional increment to have loop skip over the operator's second symbol.
-					this_infix_item.symbol = SYM_ASSIGN_BITXOR;
-				}
-				else
-					this_infix_item.symbol = SYM_BITXOR;
-				break;
-			case '~':
-				// If what lies to its left is a CPARAN or OPERAND, SYM_CONCAT is not auto-inserted because:
-				// 1) Allows ! and ~ to potentially be overloaded to become binary and unary operators in the future.
-				// 2) Keeps the behavior consistent with unary minus, which could never auto-concat since it would
-				//    always be seen as the binary subtract operator in such cases.
-				// 3) Simplifies the code.
-				this_infix_item.symbol = SYM_BITNOT;
-				break;
-			case '?':
-				this_infix_item.symbol = SYM_IFF_THEN;
-				break;
-			case ':':
-				if (cp[1] == '=')
-				{
-					++cp; // An additional increment to have loop skip over the second '|' too.
-					this_infix_item.symbol = SYM_ASSIGN;
-				}
-				else
-					this_infix_item.symbol = SYM_IFF_ELSE;
-				break;
-
-			case '"': // Raw string literal.
-				// Note that single and double-derefs are impossible inside string-literals
-				// because the load-time deref parser would never detect anything inside
-				// of quotes -- even non-escaped percent signs -- as derefs.
-				// Find the end of this string literal, noting that a pair of double quotes is
-				// a literal double quote inside the string:
-				++cp; // Omit the starting-quote from consideration, and from the operand's eventual contents.
-				for (op_end = cp;; ++op_end)
-				{
-					if (!*op_end) // No matching end-quote. Probably impossible due to load-time validation.
-						goto abnormal_end;
-					if (*op_end == '"') // If not followed immediately by another, this is the end of it.
-					{
-						++op_end;
-						if (*op_end != '"') // String terminator or some non-quote character.
-							break;  // The previous char is the ending quote.
-						//else a pair of quotes, which resolves to a single literal quote.
-						// This pair is skipped over and the loop continues until the real end-quote is found.
-					}
-				}
-				// op_end is now the character after the first literal string's ending quote, which might be the terminator.
-				*(--op_end) = '\0'; // Remove the ending quote.
-				// Convert all pairs of quotes inside into single literal quotes:
-				literal_string_length = op_end - cp;
-				StrReplace(cp, "\"\"", "\"", SCS_SENSITIVE, UINT_MAX, -1, NULL, &literal_string_length); // PERFORMANCE: Combining this with the loop above isn't trival due to the fact that the terminator isn't added until after that loop.  Another loop could be done here, but it's unlikely to improve perf. much since literal strings tend to be short.
-				// Above relies on the fact that StrReplace() does not do cascading replacements,
-				// meaning that a series of characters such as """" would be correctly converted into
-				// two double quotes rather than just collapsing into one.
-				// For the below, see comments at (this_map_item.type == EXP_DEREF_SINGLE) above.
-				if (infix_count && YIELDS_AN_OPERAND(infix[infix_count - 1].symbol)) // If it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
-				{
-					if (infix_count > MAX_TOKENS - 2) // -2 to ensure room for this operator and the operand further below.
-						goto abnormal_end;
-					this_infix_item.symbol = SYM_CONCAT;
-					++infix_count;
-				}
-				// Must not refer to "this_infix_item" in case the above did ++infix_count.
-				infix[infix_count].symbol = SYM_STRING; // Marked explicitly as string vs. SYM_OPERAND to prevent it from being seen as a number, e.g. if (var == "12.0") would be false if var has no decimal point.
-				infix[infix_count].marker = cp; // This string-operand has already been terminated above.
-				cp = op_end + 1;  // Set it up for the next iteration (terminate_string_here is not needed in this case).
-				continue;
-
-			default: // Numeric-literal, relational operator such as and/or/not, or unrecognized symbol.
-				// Unrecognized symbols should be impossible at this stage because load-time validation
-				// would have caught them.  Also, a non-pure-numeric operand should also be impossible
-				// because string-literals were handled above, and the load-time validator would not
-				// have let any raw non-numeric operands get this far (such operands would have been
-				// converted to single or double derefs at load-time, in which case they wouldn't be
-				// raw and would never reach this point in the code).
-				// To conform to the way the load-time pre-parser recognizes and/or/not, and to support
-				// things like (x=3)and(5=4) or even "x and!y", the and/or/not operators are processed
-				// here with the numeric literals since we want to find op_end the same way.
-
-				if (*cp == '.') // This one must be done here rather than as a "case".  See comment below.
-				{
-					if (cp[1] == '=')
-					{
-						++cp; // An additional increment to have loop skip over the operator's second symbol.
-						this_infix_item.symbol = SYM_ASSIGN_CONCAT;
-						break;
-					}
-					if (IS_SPACE_OR_TAB(cp[1]))
-					{
-						this_infix_item.symbol = SYM_CONCAT;
-						break;
-					}
-				}
-				// Since above didn't "break", this is a '.' not followed by a space, tab, or '='.  So it's
-				// likely a number without a leading zero like .2, so continue on below to process it.
-
-				// Find the end of this operand or keyword, even if that end is beyond this_map_item.end.
+				// Find the end of this operand, even if that end extended into the next deref.
 				// StrChrAny() is not used because if *op_end is '\0', the strchr() below will find it too:
-				for (op_end = cp + 1; !strchr(EXPR_OPERAND_TERMINATORS, *op_end); ++op_end);
-numeric_literal:
-				// Now op_end marks the end of this operand or keyword.  That end might be the zero terminator
-				// or the next operator in the expression, or just a whitespace.
-				if (op_end >= this_map_item.end // This must be true to qualify as a double deref.
-					&& (*this_map_item.end // If this is true, it's enough to know that it's a double deref.
-					// But if not, and all three of the following are true, it's a double deref anyway
-					// to support the correct result in something like: Var := "x" . Array%BlankVar%
-					|| (map_index != map_count - 1 && MAP_ITEM_IN_BUFFER(map[map_index + 1].type)
-						&& map[map_index + 1].marker == op_end)))
-					goto double_deref; // This also serves to break out of this for(), equivalent to a break.
-				// Otherwise, this operand is a normal raw numeric-literal or a word-operator (and/or/not).
-				// The section below is very similar to the one used at load-time to recognize and/or/not,
-				// so it should be maintained with that section.  UPDATE for v1.0.45: The load-time parser
-				// now resolves "OR" to || and "AND" to && to improve runtime performance and reduce code size here.
-				// However, "NOT" but still be parsed here at runtime because it's not quite the same as the "!"
-				// operator (different precedence), and it seemed too much trouble to invent some special
-				// operator symbol for load-time to insert as a placeholder/substitute (especially since that
-				// symbol would appear in ListLines).
-				if (op_end-cp == 3
-					&& (cp[0] == 'n' || cp[0] == 'N')
-					&& (cp[1] == 'o' || cp[1] == 'O')
-					&& (cp[2] == 't' || cp[2] == 'T')) // "NOT" was found.
-				{
-					this_infix_item.symbol = SYM_LOWNOT;
-					*cp = '\0';  // Terminate any previous raw numeric-literal such as "1 not (x < 3)" (even though "not" would be invalid if used this way)
-					cp = op_end; // Have the loop process whatever lies at op_end and beyond.
-					continue;
-				}
-				// Since above didn't "continue", this item is a raw numeric literal, either SYM_FLOAT or
-				// SYM_INTEGER (to be differentiated later).
-				// For the below, see comments at (this_map_item.type == EXP_DEREF_SINGLE) above.
+				for (op_end = this_deref_ref.marker + this_deref_ref.length; !strchr(EXPR_OPERAND_TERMINATORS, *op_end); ++op_end);
+				goto double_deref;
+			}
+			else
+			{
 				if (infix_count && YIELDS_AN_OPERAND(infix[infix_count - 1].symbol)) // If it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
 				{
 					if (infix_count > MAX_TOKENS - 2) // -2 to ensure room for this operator and the operand further below.
 						goto abnormal_end;
-					this_infix_item.symbol = SYM_CONCAT;
-					++infix_count;
+					infix[infix_count++].symbol = SYM_CONCAT;
 				}
-				// Must not refer to "this_infix_item" in case above did ++infix_count:
-				infix[infix_count].symbol = SYM_OPERAND;
-				infix[infix_count].marker = cp; // This numeric operand will be terminated later via terminate_string_here.
-				cp = op_end; // Have the loop process whatever lies at op_end and beyond.
-				// The below is necessary to support an expression such as (1 "" 0), which
-				// would otherwise result in 1"0 instead of 10 because the 1 was lazily
-				// terminated by the next iteration rather than our iteration at it's
-				// precise viewed-as-string ending point.  It might also be needed for
-				// the same reason for concatenating things like (1 var).
-				if (IS_SPACE_OR_TAB(*cp))
-					*cp++ = '\0';
-				continue; // i.e. don't do the terminate_string_here and ++cp steps below.
-			} // switch() for type of symbol/operand.
-
-			// If the above didn't "continue", it just processed a non-operand symbol.  So terminate
-			// the string at the first character of that symbol (e.g. the first character of <=).
-			// This sets up raw operands to be always-terminated, such as the ones in 5+10+20.  Note
-			// that this is not done for operator-words (and/or/not) since it's not valid to write
-			// something like 1and3 (such a thing would be considered a variable and converted into
-			// a single-deref by the load-time pre-parser).  It's done this way because we don't
-			// want to convert these raw operands into numbers yet because their original strings
-			// might be needed in the case where this operand will be involved in an operation with
-			// another string operand, in which case both are treated as strings:
-			if (terminate_string_here)
-				*terminate_string_here = '\0';
-			++cp; // i.e. increment only if a "continue" wasn't encountered somewhere above.
-		} // for each token
-		continue;  // To avoid falling into the label below.
-
-double_deref:
-		// The only purpose of the following loop is to increase map_index if one or more of the map items
-		// to the right of this_map_item are to be merged with this_map_item to construct a double deref
-		// such as Array%i%.
-		for (++map_index;; ++map_index)
-		{
-			if (map_index == map_count || !MAP_ITEM_IN_BUFFER(map[map_index].type)
-				|| (op_end <= map[map_index].marker  // Since above line didn't short-circuit, it's safe to reference map[map_index].marker.
-					&& map[map_index].end > map[map_index].marker))
-				// The final line above serves to merge empty items (which must be doubles since RAWs are never
-				// empty) in with this one.  Although everything might work correctly without this, it's more
-				// proper to get rid of these empty items now since they should "belong" to this item.
-			{
-				// The map item to the right of the one containg the end of this operand has been found.
-				--map_index;
-				// If the loop had only one iteration, the above restores the original value of map_index.
-				// In other words, this map item doesn't stretch into others to its right, so it's just a
-				// naked double-deref such as %DynVar%.
-				break;
+				if (this_deref_ref.var->Type() == VAR_NORMAL // VAR_ALIAS is taken into account (and resolved) by Type().
+					&& (g_NoEnv || this_deref_ref.var->Length())) // v1.0.43.08: Added g_NoEnv.  Relies on short-circuit boolean order.
+					// "!this_deref_ref.var->Get()" isn't checked here.  See comments in SYM_DYNAMIC evaluation.
+				{
+					// DllCall() and possibly others rely on this having been done to support changing the
+					// value of a parameter (similar to by-ref).
+					infix[infix_count].symbol = SYM_VAR; // Type() is always VAR_NORMAL as verified above. This is relied upon in several places such as built-in functions.
+				}
+				else // It's either a built-in variable (including clipboard) OR a possible environment variable.
+				{
+					infix[infix_count].symbol = SYM_DYNAMIC;
+					infix[infix_count].buf = NULL; // SYM_DYNAMIC requires that buf be set to NULL for vars (since there are two different types of SYM_DYNAMIC).
+				}
+				infix[infix_count].var = this_deref_ref.var;
 			}
-		}
-		// If the map_item[map_index] item isn't fully consumed by this operand, alter the map item to contain
-		// only the part left to be processed and then have the loop process this same map item again.
-		// For example, in Array[%i%]/3, the final map item is ]/3, of which only the ] is consumed by the
-		// Array[%i%] operand.
-		if (op_end < map[map_index].end)
-		{
-			if (map[map_index].type == EXP_RAW)
-			{
-				map[map_index].marker = op_end;
-				--map_index;  // Compensate for the loop's ++map_index.
-			}
-			else // DOUBLE or something else that shouldn't be allowed to be partially processed such as the above.
-			{
-				// The above EXP_RAW method is not done of the map item is a double deref, since it's not
-				// currently valid to do something like Var:=%VarContainingSpaces% + 1.  Example:
-				//var = test
-				//x = var 11
-				//y := %x% + 1  ; Add 1 to force it to stay an expression rather than getting simplified at loadtime.
-				// In such cases, force it to handle this entire double as a unit, since other usages are invalid.
-				op_end = map[map_index].end; // Force the entire map item to be processed/consumed here.
-			}
-		}
-		//else do nothing since map_index is now set to the final map item of this operand, and that
-		// map item is fully consumed by this operand and needs no further processing.
+		} // Handling of the var or function in this_deref.
 
-		// UPDATE: The following is now supported in v1.0.31, so this old comment is kept only for background:
-		// Check if this double is being concatenated onto a previous operand.  If so, it is not
-		// currently supported so this double-deref will be treated as an empty string, as documented.
-		// Example 1: Var := "abc" %naked_double_ref%
-		// Example 2: Var := "abc" Array%Index%
-		// UPDATE: Here is the means by which the above is now supported:
+		// Finally, jump over the dereference text. Note that in the case of an expression, there might not
+		// be any percent signs within the text of the dereference, e.g. x + y, not %x% + %y% (unless they're
+		// deliberately double-derefs).
+		cp += this_deref_ref.length;
+		// The outer loop will now do ++infix for us.
+
+continue;     // To avoid falling into the label below. The label below is only reached by explicit goto.
+double_deref: // Caller has set cp to be start and op_end to be the character after the last one of the double deref.
 		if (infix_count && YIELDS_AN_OPERAND(infix[infix_count - 1].symbol)) // If it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
 		{
 			if (infix_count > MAX_TOKENS - 2) // -2 to ensure room for this operator and the operand further below.
@@ -890,66 +653,40 @@ double_deref:
 			infix[infix_count++].symbol = SYM_CONCAT;
 		}
 
-		if (   !(op_length = (UINT)(op_end - cp))   )
-		{
-			// Var is not found, not a normal var, or it *is* an environment variable.
-			infix[infix_count].symbol = SYM_OPERAND;
-			infix[infix_count].marker = "";
-		}
-		else // This operand becomes the variable's contents.
-		{
-			// Callers of this label have set cp to the start of the variable name and op_end to the
-			// position of the character after the last one in the name.
-			// In v1.0.31, FindOrAddVar() vs. FindVar() is called below to support the passing of non-existent
-			// array elements ByRef, e.g. Var:=MyFunc(Array%i%) where the MyFunc function's parameter is
-			// defined as ByRef, would effectively create the new element Array%i% if it doesn't already exist.
-			// Since at this stage we don't know whether this particular double deref is to be sent as a param
-			// to a function, or whether it will be byref, this is done unconditionally for all double derefs
-			// since it seems relatively harmless to create a blank variable in something like var := Array%i%
-			// (though it will produce a runtime error if the double resolves to an illegal variable name such
-			// as one containing spaces).
-			// The use of ALWAYS_PREFER_LOCAL below improves flexibility of assume-global functions
-			// by allowing this command to resolve to a local first if such a local exists:
-			if (   !(found_var = g_script.FindOrAddVar(cp, op_length, ALWAYS_PREFER_LOCAL))   ) // i.e. don't call FindOrAddVar with zero for length, since that's a special mode.
-			{
-				// Above already displayed the error.  As of v1.0.31, this type of error is displayed and
-				// causes the current thread to terminate, which seems more useful than the old behavior
-				// that tolerated anything in expressions.
-				goto abort;
-			}
-			// Otherwise, var was found or created.
-			if (found_var->Type() != VAR_NORMAL)
-			{
-				// Non-normal variables such as Clipboard and A_ScriptFullPath are not allowed to be
-				// generated from a double-deref such as A_Script%VarContainingFullPath% because:
-				// 1) Anything that needed their contents would have to find memory in which to store
-				//    the result of Var::Get(), which would complicate the code since that would have
-				//    to be added 
-				// 2) It doesn't appear to have much use, not even for passing them as a ByRef parameter
-				// to a function (since they're read-only [except Clipboard, but temporary memory would be
-				// needed somewhere if the clipboard contains files that need to be expanded to text] and
-				// essentially global by their very nature), and the value of catching unintended usages
-				// seems more important than any flexibilty that might add.
-				infix[infix_count].symbol = SYM_OPERAND;
-				infix[infix_count].marker = "";
-			}
-			else
-			{
-				// Even if it's an environment variable, it gets added as SYM_VAR.  However, unlike other
-				// aspects of the program, double-derefs that resolve to environment variables will be seen
-				// as always-blank due to the use of Var::Contents() vs. Var::Get() in various places below.
-				// This seems okay due to the extreme rarity of anyone intentionally wanting a double
-				// reference such as Array%i% to resolve to the name of an environment variable.
-				infix[infix_count].symbol = SYM_VAR; // The fact that a SYM_VAR operand is always VAR_NORMAL is relied upon in several places such as built-in functions.
-				infix[infix_count].var = found_var;
-			}
-		} // Double-deref section.
-		++infix_count; // This is done here rather than in the loop's control statement because there's currently at least one "continue" above that doesn't do the increment.
-	} // for each map item
+		infix[infix_count].symbol = SYM_DYNAMIC;
+		infix[infix_count].buf = target; // Point it to its position in the buffer (populated below).
+		memcpy(target, cp, op_end - cp); // "target" is incremented and string-terminated later below.
 
-	if (infix_count >= MAX_TOKENS) // No room for this operator or operand to be added.
+		// Set "deref" properly for the loop to resume processing at the item after this double deref.
+		// Callers of double_deref have ensured that deref!=NULL and deref->marker!=NULL (because it
+		// doesn't make sense to have a double-deref unless caller discovered the first deref that
+		// belongs to this double deref, such as the "i" in Array%i%).
+		for (deref_start = deref, ++deref; deref->marker && deref->marker < op_end; ++deref);
+		derefs_in_this_double = (int)(deref - deref_start);
+		--deref; // Compensate for the outer loop's ++deref.
+
+		// There's insufficient room to shoehorn all the necessary data into the token (since circuit_token probably
+		// can't be safely overloaded at this stage), so allocate a little bit of stack memory, just enough for the
+		// number of derefs (variables) whose contents comprise the name of this double-deref variable (typically
+		// there's only one; e.g. the "i" in Array%i%).
+		deref_alloca = (DerefType *)_alloca((derefs_in_this_double + 1) * sizeof(DerefType)); // Provides one extra at the end as a terminator.
+		memcpy(deref_alloca, deref_start, derefs_in_this_double * sizeof(DerefType));
+		deref_alloca[derefs_in_this_double].marker = NULL; // Put a NULL in the last item, which terminates the array.
+		for (deref_start = deref_alloca; deref_start->marker; ++deref_start)
+			deref_start->marker = target + (deref_start->marker - cp); // Point each to its position in the *new* buf.
+		infix[infix_count].var = (Var *)deref_alloca; // Postfix evaluation uses this to build the variable's name dynamically.
+
+		target += op_end - cp; // Must be done only after the above, since it uses the old value of target.
+		*target++ = '\0'; // Terminate the name, which looks something like "Array%i%".
+		cp = op_end; // Must be done only after above is done using cp: Set things up for the next iteration.
+		// The outer loop will now do ++infix for us.
+	} // For each deref in this expression, and also for the final literal/raw text to the right of the last deref.
+
+	// Terminate the array with a special item.  This allows infix-to-postfix conversion to do a faster
+	// traversal of the infix array.
+	if (infix_count > MAX_TOKENS - 1) // No room for the following symbol to be added.
 		goto abnormal_end;
-	infix[infix_count].symbol = SYM_INVALID; // Terminate the array with a special item.  This allows infix-to-postfix conversion to do a faster traversal of the infix array.
+	infix[infix_count].symbol = SYM_INVALID;
 
 	////////////////////////////
 	// CONVERT INFIX TO POSTFIX.
@@ -962,17 +699,51 @@ double_deref:
 	STACK_PUSH(&token_begin);
 
 	SymbolType stack_symbol, infix_symbol;
-	ExprTokenType *this_infix = infix;
+	ExprTokenType *fwd_infix, *this_infix = infix;
 	int functions_on_stack = 0;
 
 	for (;;) // While SYM_BEGIN is still on the stack, continue iterating.
 	{
 		ExprTokenType *&this_postfix = postfix[postfix_count]; // Resolve early, especially for use by "goto". Reduces code size a bit, though it doesn't measurably help performance.
 		infix_symbol = this_infix->symbol;                     //
+		stack_symbol = stack[stack_count - 1]->symbol; // Frequently used, so resolve only once to help performance.
 
 		// Put operands into the postfix array immediately, then move on to the next infix item:
 		if (IS_OPERAND(infix_symbol)) // At this stage, operands consist of only SYM_OPERAND and SYM_STRING.
 		{
+			if (infix_symbol == SYM_DYNAMIC && SYM_DYNAMIC_IS_VAR_NORMAL_OR_CLIP(this_infix)) // Ordered for short-circuit performance.
+			{
+				// v1.0.46.01: If an environment variable is being used as an lvalue -- regardless
+				// of whether that variable is blank in the environment -- treat it as a normal
+				// variable instead.  This is because most people would want that, and also because
+				// it's tranditional not to directly support assignments to environment variables
+				// (only EnvSet can do that, mostly for code simplicity).  So convert this variable
+				// to a normal variable so that it can be seen as a valid lvalue.
+				// IMPORTANT: VAR_CLIPBOARD is made into SYM_VAR here, but only for assignments.
+				// This allows built-in functions and other places in the code to treat SYM_VAR
+				// as though its always VAR_NORMAL, which reduces code size and improves maintainability.
+				sym_prev = this_infix[1].symbol; // Resolve to help macro code size and performance.
+				if (IS_ASSIGNMENT_OR_POST_OP(sym_prev) // Post-op must be checked for VAR_CLIPBOARD (by contrast, it seems unnecessary to check it for others; see comments below).
+					|| stack_symbol == SYM_PRE_INCREMENT || stack_symbol == SYM_PRE_DECREMENT) // Stack *not* infix.
+					this_infix->symbol = SYM_VAR;
+				// POST-INC/DEC: It seems unnecessary to check for these except for VAR_CLIPBOARD because
+				// those assignments (and indeed any assignment other than .= and :=) will have no effect
+				// on a ON A SYM_DYNAMIC environment variable.  This is because by definition, such
+				// variables have an empty Var::Contents(), and AutoHotkey v1 does not allow
+				// math operations on blank variables.  Thus, the result of doing a math-assignment
+				// operation on a blank lvalue is almost the same as doing it on an invalid lvalue.
+				// The main difference is that with the exception of post-inc/dec, assignments
+				// wouldn't produce an lvalue unless we explicitly check for them all above.
+				// An lvalue should be produced so that the following features are consistent
+				// even for variables whose names happen to match those of environment variables:
+				// - Pass an assignment byref or takes its address; e.g. &(++x).
+				// - Cascading assigments; e.g. (++var) += 4 (rare to be sure).
+				// - Possibly other lvalue behaviors that rely on SYM_VAR being present.
+				// Above logic might not be perfect because it doesn't check for parens such as (var):=x,
+				// and possibly other obscure types of assignments.  However, it seems adequate given
+				// the rarity of such things and also because env vars are being phased out (scripts can
+				// use #NoEnv to avoid all such issues).
+			}
 			this_postfix = this_infix++;
 			this_postfix->circuit_token = NULL; // Set default. It's only ever overridden after it's in the postfix array.
 			++postfix_count;
@@ -980,7 +751,6 @@ double_deref:
 		}
 
 		// Since above didn't "continue", the current infix symbol is not an operand, but an operator or other symbol.
-		stack_symbol = stack[stack_count - 1]->symbol; // Frequently used, so resolve only once to help performance.
 
 		switch(infix_symbol)
 		{
@@ -1058,12 +828,12 @@ double_deref:
 			// Note: BEGIN and OPAREN are the lowest precedence items ever to appear on the stack (CPAREN
 			// never goes on the stack, so can't be encountered there).
 			if (   sPrecedence[stack_symbol] < sPrecedence[infix_symbol] + (sPrecedence[infix_symbol] % 2) // Performance: An sPrecedence2[] array could be made in lieu of the extra add+indexing+modulo, but it benched only 0.3% faster, so the extra code size it caused didn't seem worth it.
-				|| IS_ASSIGNMENT(infix_symbol) && stack_symbol != SYM_DEREF // See note 1 below. Ordered for short-circuit performance.
+				|| IS_ASSIGNMENT_EXCEPT_POST_AND_PRE(infix_symbol) && stack_symbol != SYM_DEREF // See note 1 below. Ordered for short-circuit performance.
 				|| stack_symbol == SYM_POWER && (infix_symbol >= SYM_NEGATIVE && infix_symbol <= SYM_DEREF // See note 2 below. Check lower bound first for short-circuit performance.
 					|| infix_symbol == SYM_LOWNOT)   )
 			{
-				// Note 1: v1.0.46: The IS_ASSIGNMENT line above was added in conjunction with the new
-				// assignment operators (e.g. := and +=). Here's what it does: Normally, the assignment
+				// NOTE 1: v1.0.46: The IS_ASSIGNMENT_EXCEPT_POST_AND_PRE line above was added in conjunction with
+				// the new assignment operators (e.g. := and +=). Here's what it does: Normally, the assignment
 				// operators have the lowest precedence of all (except for commas) because things that lie
 				// to the *right* of them in the infix expression should be evaluated first to be stored
 				// as the assignment's result.  However, if what lies to the *left* of the assignment
@@ -1094,7 +864,7 @@ double_deref:
 				// Performance: Adding the above behavior reduced the expressions benchmark by only 0.6%; so
 				// it seems worth it.
 				//
-				// Note 2: The SYM_POWER line above is a workaround to allow 2**-2 (and others in v1.0.45) to be
+				// NOTE 2: The SYM_POWER line above is a workaround to allow 2**-2 (and others in v1.0.45) to be
 				// evaluated as 2**(-2) rather than being seen as an error.  However, as of v1.0.46, consecutive
 				// unary operators are supported via the right-to-left evaluation flag above (formerly, consecutive
 				// unaries produced a failure [blank value]).  For example:
@@ -1122,10 +892,64 @@ double_deref:
 				// operand itself.
 				if (infix_symbol <= SYM_AND && infix_symbol >= SYM_IFF_THEN && postfix_count) // Check upper bound first for short-circuit performance.
 					postfix[postfix_count - 1]->circuit_token = this_infix; // In the case of IFF, this points the final result of the IFF's condition to its SYM_IFF_THEN (a different stage points the THEN to its ELSE).
-				if (infix_symbol != SYM_COMMA || !functions_on_stack) // Omit function commas from the stack because they're not needed and they would probably prevent proper evaluation.  Only statement-separator commas need to go onto the stack (see SYM_COMMA further below for comments).
+				if (infix_symbol != SYM_COMMA)
 					STACK_PUSH(this_infix);
-				//else it's a function comma, so don't put it in postfix; but still continue on via the line below.
-				++this_infix;
+				else // infix_symbol == SYM_COMMA, but which type of comma (function vs. statement-separator).
+				{
+					// KNOWN LIMITATION: Although the functions_on_stack method is simple and efficient, it isn't
+					// capable of detecting commas that separate statements inside a function call such as:
+					//    fn(x, (y:=2, fn2()))
+					// Thus, such attempts will cause the expression as a whole to fail and evaluate to ""
+					// (though individual parts of the expression may execute before it fails).
+					// C++ and possibly other C-like languages seem to allow such expressions as shown by the
+					// following simple example: MsgBox((1, 2)); // In which MsgBox sees (1, 2) as a single arg.
+					// Perhaps this could be solved someday by checking/tracking whether there is a non-function
+					// open-paren on the stack above/prior to the first function-call-open-paren on the stack.
+					// That rule seems flexible enough to work even for things like f1((f2(), X)).  Perhaps a
+					// simple stack traversal could be done to find the first OPAREN.  If it's a function's OPAREN,
+					// this is a function-comma.  Otherwise, this comma is a statement-separator nested inside a
+					// function call.  But the performance impact of that doesn't seem worth it given rarity of use.
+					if (!functions_on_stack) // This comma separates statements rather than function parameters.
+					{
+						STACK_PUSH(this_infix);
+						// v1.0.46.01: Treat ", var = expr" as though the "=" is ":=", even if there's a ternary
+						// on the right side (for consistency and since such a ternary would be stand-alone,
+						// which is a rare use for ternary).  Also cascade to the right to treat things like
+						// x=y=z as assignments because its intuitiveness seems to outweigh other considerations.
+						// In a future version, these transformations could be done at loadtime to improve runtime
+						// performance; but currently that seems more complex than it's worth (and loadtime
+						// performance and code size shouldn't be entirely ignored).
+						for (fwd_infix = this_infix + 1;; fwd_infix += 2)
+						{
+							// The following is checked first to simplify things and avoid any chance of reading
+							// beyond the last item in the array. This relies on the fact that a SYM_INVALID token
+							// exists at the end of the array as a terminator.
+							if (fwd_infix->symbol == SYM_INVALID || fwd_infix[1].symbol != SYM_EQUAL) // Relies on short-circuit boolean order.
+								break; // No further checking needed because there's no qualified equal-sign.
+							// Otherwise, check what lies to the left of the equal-sign.
+							if (fwd_infix->symbol == SYM_VAR)
+							{
+								fwd_infix[1].symbol = SYM_ASSIGN;
+								continue; // Cascade to the right until the last qualified '=' operator is found.
+							}
+							// Otherwise, it's not a pure/normal variable.  But check if it's an environment var.
+							if (fwd_infix->symbol != SYM_DYNAMIC || !SYM_DYNAMIC_IS_VAR_NORMAL_OR_CLIP(fwd_infix))
+								break; // It qualifies as neither SYM_DYNAMIC nor SYM_VAR.
+							// Otherwise, this is an environment variable being assigned something, so treat
+							// it as a normal variable rather than an environment variable. This is because
+							// by tradition (and due to the fact that not many people would want it),
+							// direct assignment to environment variables isn't supported by anything other
+							// than EnvSet.
+							fwd_infix->symbol = SYM_VAR; // Convert dynamic to a normal variable, see above.
+							fwd_infix[1].symbol = SYM_ASSIGN;
+							// And now cascade to the right until the last qualified '=' operator is found.
+						}
+					}
+					//else it's a function comma, so don't put it in stack because function commas aren't
+					// needed and they would probably prevent proper evaluation.  Only statement-separator
+					// commas need to go onto the stack (see SYM_COMMA further below for comments).
+				}
+				++this_infix; // Regardless of the outcome above, move rightward to the next infix item.
 			}
 			else // Stack item's precedence >= infix's (if equal, left-to-right evaluation order is in effect).
 				goto standard_pop_into_postfix;
@@ -1149,18 +973,27 @@ end_of_infix_to_postfix:
 	char *right_string, *left_string;
 	char *right_contents, *left_contents;
 	size_t right_length, left_length;
-	char left_buf[MAX_FORMATTED_NUMBER_LENGTH + 1];  // BIF_OnMessage relies on this one being large enough to hold MAX_VAR_NAME_LENGTH.
+	char left_buf[MAX_FORMATTED_NUMBER_LENGTH + 1];  // BIF_OnMessage and SYM_DYNAMIC rely on this one being large enough to hold MAX_VAR_NAME_LENGTH.
 	char right_buf[MAX_FORMATTED_NUMBER_LENGTH + 1]; // Only needed for holding numbers
 	int j, s, actual_param_count, delta;
 	Func *prev_func;
 	char *result; // "result" is used for return values and also the final result.
 	size_t result_size, alloca_usage = 0; // v1.0.45: Track amount of alloca mem to avoid stress on stack from extreme expressions (mostly theoretical).
-	bool done, udf_is_final_action, make_result_persistent, early_return, left_branch_is_true, left_was_negative
-		, is_pre_op;
+	bool done, make_result_persistent, early_return, left_branch_is_true, left_was_negative, is_pre_op;
 	ExprTokenType *circuit_token;
-	Var *sym_assign_var;
+	Var *sym_assign_var, *temp_var;
 	VarBkp *var_backup = NULL;  // If needed, it will hold an array of VarBkp objects. v1.0.40.07: Initialized to NULL to facilitate an approach that's more maintainable.
 	int var_backup_count; // The number of items in the above array (when it's non-NULL).
+
+	// v1.0.44.06: EXPR_SMALL_MEM_LIMIT is the means by which _alloca() is used to boost performance a
+	// little by avoiding the overhead of malloc+free for small strings.  The limit should be something
+	// small enough that the chance that even 10 of them would cause stack overflow is vanishingly small
+	// (the program is currently compiled to allow stack to expand anyway).  Even in a worst-case
+	// scenario where an expression is composed entirely of functions and they all need to use this
+	// limit of stack space, there's a practical limit on how many functions you can call in an
+	// expression due to MAX_TOKENS (probably around MAX_TOKENS / 3).
+	#define EXPR_SMALL_MEM_LIMIT 4097
+	#define EXPR_ALLOCA_LIMIT 40000  // v1.0.45: Just as an extra precaution against stack stress in extreme/theoretical cases.
 
 	// For each item in the postfix array: if it's an operand, push it onto stack; if it's an operator or
 	// function call, evaluate it and push its result onto the stack.
@@ -1171,7 +1004,157 @@ end_of_infix_to_postfix:
 		// At this stage, operands in the postfix array should be either SYM_OPERAND or SYM_STRING.
 		// But all are checked since that operation is just as fast:
 		if (IS_OPERAND(this_token.symbol)) // If it's an operand, just push it onto stack for use by an operator in a future iteration.
+		{
+			if (this_token.symbol == SYM_DYNAMIC) // CONVERTED HERE/EARLY TO SOMETHING *OTHER* THAN SYM_DYNAMIC so that no later stages need any handling for them as operands. SYM_DYNAMIC is quite similar to SYM_FUNC/BIF in this respect.
+			{
+				if (!SYM_DYNAMIC_IS_DOUBLE_DEREF(this_token)) // It's an environment variable or built-in variable.
+				{
+					result_size = this_token.var->Get() + 1; // Get() is used even for environment vars because it has a cache that improves their performance.
+					if (result_size == 1)
+					{
+						if (this_token.var->Type() == VAR_NORMAL)
+						{
+							// The following is done here rather than during infix creation/tokenizing because
+							// 1) It's more correct because it's conceivable that some part of the expression
+							//    that has already been evaluated before this_token has newly made an environment
+							//    variable blank or non-blank, which should be detected here (i.e. only at the
+							//    last possible moment).  For example, a function might have the side-effect of
+							//    altering an environment variable.
+							// 2) It performs better because Get()'s environment variable cache is most effective
+							//    when each size-Get() is followed immediately by a contents-Get() for the same
+							//    variable.
+							// Must make empty variables that aren't environment variables into SYM_VAR so that
+							// they can be passed by reference into functions, their address can be taken with
+							// the '&' operator, and so that they can be the lvalue for an assignment.
+							// Environment variables aren't supported for any of that because it would be silly
+							// in most cases, and would probably complicate the code far more than its worth.
+							this_token.symbol = SYM_VAR; // The fact that a SYM_VAR operand is always VAR_NORMAL (with one limited exception) is relied upon in several places such as built-in functions.
+						}
+						else // It's a built-in variable that's blank.
+						{
+							this_token.marker = "";
+							this_token.symbol = SYM_STRING;
+						}
+						goto push_this_token;
+					}
+					// Otherwise, it's not an empty string, so need some memory to store it.
+					// The following section is similar to that in the make_result_persistent section further
+					// below.  So maintain them together and see it for more comments.
+					// Must cast to int to avoid loss of negative values:
+					if (result_size <= (int)(aDerefBufSize - (target - aDerefBuf))) // There is room at the end of our deref buf, so use it.
+					{
+						// Point result to its new, more persistent location:
+						result = target;
+						target += result_size; // Point it to the location where the next string would be written.
+					}
+					else if (result_size < EXPR_SMALL_MEM_LIMIT && alloca_usage < EXPR_ALLOCA_LIMIT) // See comments at EXPR_SMALL_MEM_LIMIT.
+					{
+						result = (char *)_alloca(result_size);
+						alloca_usage += result_size; // This might put alloca_usage over the limit by as much as EXPR_SMALL_MEM_LIMIT, but that is fine because it's more of a guideline than a limit.
+					}
+					else // Need to create some new persistent memory for our temporary use.
+					{
+						if (mem_count == MAX_EXPR_MEM_ITEMS // No more slots left (should be nearly impossible).
+							|| !(mem[mem_count] = (char *)malloc(result_size)))
+						{
+							LineError(ERR_OUTOFMEM ERR_ABORT, FAIL, this_token.var->mName);
+							goto abort;
+						}
+						// Point result to its new, more persistent location:
+						result = mem[mem_count];
+						++mem_count; // Must be done last.
+					}
+					this_token.var->Get(result); // MUST USE "result" TO AVOID OVERWRITING MARKER/VAR UNION.
+					this_token.marker = result;  // Must be done last because marker and var overlap in union.
+					this_token.symbol = SYM_OPERAND; // Generic operand so that it can later be interpreted as a number (if it's numeric).
+				}
+				else // Double-deref such as Array%i%.
+				{
+					// Start off by looking for the first deref.
+					deref = (DerefType *)this_token.var; // MUST BE DONE PRIOR TO OVERWRITING MARKER/UNION BELOW.
+					cp = this_token.buf; // Start at the begining of this arg's text.
+					int var_name_length = 0;
+
+					this_token.marker = "";         // Set default in case of early goto.  Must be done after above.
+					this_token.symbol = SYM_STRING; //
+
+					// Loadtime validation has ensured that none of these derefs are function-calls
+					// (i.e. deref->is_function is alway false).  Loadtime logic seems incapable of
+					// producing function-derefs inside something that would later be interpreted
+					// as a double-deref.
+					for (; deref->marker; ++deref)  // A deref with a NULL marker terminates the list. "deref" was initialized higher above.
+					{
+						// FOR EACH DEREF IN AN ARG (if we're here, there's at least one):
+						// Copy the chars that occur prior to deref->marker into the buffer:
+						for (; cp < deref->marker && var_name_length < MAX_VAR_NAME_LENGTH; left_buf[var_name_length++] = *cp++);
+						if (var_name_length >= MAX_VAR_NAME_LENGTH && cp < deref->marker) // The variable name would be too long!
+							goto push_this_token; // For simplicity and in keeping with the tradition that expressions generally don't display runtime errors, just treat it as a blank.
+						// Now copy the contents of the dereferenced var.  For all cases, aBuf has already
+						// been verified to be large enough, assuming the value hasn't changed between the
+						// time we were called and the time the caller calculated the space needed.
+						if (deref->var->Get() > (VarSizeType)(MAX_VAR_NAME_LENGTH - var_name_length)) // The variable name would be too long!
+							goto push_this_token; // For simplicity and in keeping with the tradition that expressions generally don't display runtime errors, just treat it as a blank.
+						var_name_length += deref->var->Get(left_buf + var_name_length);
+						// Finally, jump over the dereference text. Note that in the case of an expression, there might not
+						// be any percent signs within the text of the dereference, e.g. x + y, not %x% + %y%.
+						cp += deref->length;
+					}
+
+					// Copy any chars that occur after the final deref into the buffer:
+					for (; *cp && var_name_length < MAX_VAR_NAME_LENGTH; left_buf[var_name_length++] = *cp++);
+					if (var_name_length >= MAX_VAR_NAME_LENGTH && *cp // The variable name would be too long!
+						|| !var_name_length) // It resolves to an empty string (e.g. a simple dynamic var like %Var% where Var is blank).
+						goto push_this_token; // For simplicity and in keeping with the tradition that expressions generally don't display runtime errors, just treat it as a blank.
+
+					// Terminate the buffer, even if nothing was written into it:
+					left_buf[var_name_length] = '\0';
+
+					// In v1.0.31, FindOrAddVar() vs. FindVar() is called below to support the passing of non-existent
+					// array elements ByRef, e.g. Var:=MyFunc(Array%i%) where the MyFunc function's parameter is
+					// defined as ByRef, would effectively create the new element Array%i% if it doesn't already exist.
+					// Since at this stage we don't know whether this particular double deref is to be sent as a param
+					// to a function, or whether it will be byref, this is done unconditionally for all double derefs
+					// since it seems relatively harmless to create a blank variable in something like var := Array%i%
+					// (though it will produce a runtime error if the double resolves to an illegal variable name such
+					// as one containing spaces).
+					// The use of ALWAYS_PREFER_LOCAL below improves flexibility of assume-global functions
+					// by allowing this command to resolve to a local first if such a local exists:
+					if (   !(temp_var = g_script.FindOrAddVar(left_buf, var_name_length, ALWAYS_PREFER_LOCAL))   )
+					{
+						// Above already displayed the error.  As of v1.0.31, this type of error is displayed and
+						// causes the current thread to terminate, which seems more useful than the old behavior
+						// that tolerated anything in expressions.
+						goto abort;
+					}
+					// Otherwise, var was found or created.
+					if (temp_var->Type() != VAR_NORMAL)
+					{
+						// Non-normal variables such as Clipboard and A_ScriptFullPath are not allowed to be
+						// generated from a double-deref such as A_Script%VarContainingFullPath% because:
+						// Update: The only good reason now is code simplicity.  Reason #1 below could probably
+						// be solved via SYM_DYNAMIC.
+						// 1) Anything that needed their contents would have to find memory in which to store
+						//    the result of Var::Get(), which would complicate the code since such handling would have
+						//    to be added.
+						// 2) It doesn't appear to have much use, not even for passing them as a ByRef parameter to
+						//    a function (since they're read-only [except Clipboard, but temporary memory would be
+						//    needed somewhere if the clipboard contains files that need to be expanded to text] and
+						//    essentially global by their very nature), and the value of catching unintended usages
+						//    seems more important than any flexibilty that might add.
+						goto push_this_token; // For simplicity and in keeping with the tradition that expressions generally don't display runtime errors, just treat it as a blank.
+					}
+					// Otherwise:
+					// Even if it's an environment variable, it gets added as SYM_VAR.  However, unlike other
+					// aspects of the program, double-derefs that resolve to environment variables will be seen
+					// as always-blank due to the use of Var::Contents() vs. Var::Get() in various places.
+					// This seems okay due to the extreme rarity of anyone intentionally wanting a double
+					// reference such as Array%i% to resolve to the name of an environment variable.
+					this_token.symbol = SYM_VAR; // The fact that a SYM_VAR operand is always VAR_NORMAL (with one limited exception) is relied upon in several places such as built-in functions.
+					this_token.var = temp_var;
+				} // Double-deref.
+			} // if (this_token.symbol == SYM_DYNAMIC)
 			goto push_this_token;
+		} // if (IS_OPERAND(this_token.symbol))
 
 		if (this_token.symbol == SYM_FUNC) // A call to a function (either built-in or defined by the script).
 		{
@@ -1191,31 +1174,63 @@ end_of_infix_to_postfix:
 				this_token.marker = func.mName;  // Inform function of which built-in function called it (allows code sharing/reduction). Can't use circuit_token because it's value is still needed later below.
 				this_token.buf = left_buf;       // mBIF() can use this to store a string result, and for other purposes.
 
-				// BACK UP THE CIRCUIT TOKEN:
-				circuit_token = this_token.circuit_token; // Backup the current circuit_token, which can be non-NULL (verified through code review).
+				// BACK UP THE CIRCUIT TOKEN (it's saved because it can be non-NULL at this point (verified
+				// through code review).
+				circuit_token = this_token.circuit_token;
 				this_token.circuit_token = NULL; // Init to detect whether the called function allocates it (i.e. we're overloading it with a new purpose).
+				// RESIST TEMPTATIONS TO OPTIMIZE CIRCUIT_TOKEN by passing output_var as circuit_token
+				// when done==true (i.e. the built-in function could then assign directly to output_var).
+				// It doesn't help performance at all except for a mere 10% or less in certain fairly rare cases.
+				// More importantly, it hurts maintainability because it makes RegExReplace() more complicated
+				// than it already is, and worse: each BIF would have to check that output_var doesn't overlap
+				// with its input/source strings because if it does, the function must not initialize a default
+				// in output_var before starting (and avoiding this would further complicate the code).
+				// Here is the crux of the abandoned approach: Any function that wishes to pass memory back to
+				// us via circuit_token: When circuit_token!=NULL, that function MUST INSTEAD: 1) Turn that
+				// memory over to output_var via AcceptNewMem(); 2) Set circuit_token to NULL to indicate to
+				// us that it is a user of circuit_token.
 
 				// CALL THE FUNCTION:
 				func.mBIF(this_token, stack + stack_count, actual_param_count);
 
-				// RESTORE IT (after handling what came back inside it):
-				#define EXPR_IS_DONE (!stack_count && i == postfix_count - 1) // True if we've used up the last of the operators & operands.
+				// RESTORE THE CIRCUIT TOKEN (after handling what came back inside it):
+				#define EXPR_IS_DONE (!stack_count && i == postfix_count-1) // True if we've used up the last of the operators & operands.
 				done = output_var && EXPR_IS_DONE; // i.e. this is ACT_ASSIGNEXPR and we've now produced the final result.
-				if (this_token.circuit_token) // The called function allocated some memory here and turned it over to us.
+				if (this_token.circuit_token) // The called function allocated some memory here (to facilitate returning long strings) and turned it over to us.
 				{
 					// In most cases, the string stored in circuit_token is the same address as this_token.marker
 					// (i.e. what is named "result" further below), because that's what the built-in functions
 					// are normally using the memory for.
-					if (done && (char *)this_token.circuit_token == this_token.marker) // circuit_token is checked in case caller alloc'd mem but didn't use it as its actual result.
+					if ((char *)this_token.circuit_token == this_token.marker) // circuit_token is checked in case caller alloc'd mem but didn't use it as its actual result.
 					{
-						// v1.0.45: Take a shortcut for performance.  Doing it this way saves at least two
-						// memcpy's (one into deref buffer and then another back into the output_var by
-						// ACT_ASSIGNEXPR itself).  In some cases is also saves from having to expand the deref buffer
-						// as well as the output_var (since it's current memory might be too small to hold the
-						// new memory block). Thus we give it a new block directly to avoid all of that.
+						// v1.0.45: If possible, take a shortcut for performance.  Doing it this way saves at least
+						// two memcpy's (one into deref buffer and then another back into the output_var by
+						// ACT_ASSIGNEXPR itself).  In some cases is also saves from having to expand the deref
+						// buffer as well as the output_var (since it's current memory might be too small to hold
+						// the new memory block). Thus we give it a new block directly to avoid all of that.
 						// This should be a big boost to performance when long strings are involved.
-						output_var->AcceptNewMem((char *)this_token.circuit_token, (VarSizeType)(size_t)this_token.buf); // The called function is responsible for having stored the length as an overload of this_token.buf.
-						goto normal_end_skip_output_var; // No need to restore circuit_token because the expression is finished.
+						// So now, turn over responsibility for this memory to the variable. The called function
+						// is responsible for having stored the length of what's in the memory as an overload
+						// of this_token.buf.
+						if (done)
+						{
+							output_var->AcceptNewMem((char *)this_token.circuit_token, (VarSizeType)(size_t)this_token.buf);
+							goto normal_end_skip_output_var; // No need to restore circuit_token because the expression is finished.
+						}
+						if (i < postfix_count-1 && postfix[i+1]->symbol == SYM_ASSIGN // Next operation is ":=".
+							&& stack_count && stack[stack_count-1]->symbol == SYM_VAR // i.e. let the next iteration handle it instead of doing it here.  Further below relies on this having been checked.
+							&& stack[stack_count-1]->var->Type() == VAR_NORMAL) // Don't do clipboard here because: 1) AcceptNewMem() doesn't support it; 2) Could probably use Assign() and then make its result be a newly added mem_count item, but the code complexity doesn't seem worth it given the rarity.
+						{
+							// This section is an optimization that avoids memory allocation and an extra memcpy()
+							// whenever this result is going to be assigned to a variable as the very next step.
+							// See the comment section higher above for examples.
+							ExprTokenType &left = *STACK_POP; // Above has already confirmed that it's SYM_VAR and VAR_NORMAL.
+							left.var->AcceptNewMem((char *)this_token.circuit_token, (VarSizeType)(size_t)this_token.buf);
+							this_token.circuit_token = postfix[++i]->circuit_token; // Must be done AFTER above. this_token.circuit_token should have been NULL prior to this because the final right-side result of an assignment shouldn't be the last item of an AND/OR/IFF's left branch. The assignment itself would be that.
+							this_token.var = left.var;   // Make the result a variable rather than a normal operand so that its
+							this_token.symbol = SYM_VAR; // address can be taken, and it can be passed ByRef. e.g. &(x:=1)
+							goto push_this_token;
+						}
 					}
 					// Otherwise, not done yet; so handle this memory the normal way: Mark it to be freed at the
 					// time we return.
@@ -1229,7 +1244,7 @@ end_of_infix_to_postfix:
 				this_token.circuit_token = circuit_token; // Restore it to its original value.
 
 				// HANDLE THE RESULT (unless it was already handled above due to an optimization):
-				if (IS_NUMERIC(this_token.symbol)) // Any numeric result can be considered final because it's already stored in permanent memory (namely the token itself).
+				if (IS_NUMERIC(this_token.symbol)) // No need for make_result_persistent or early Assign(). Any numeric result can be considered final because it's already stored in permanent memory (namely the token itself).
 					goto push_this_token; // For code simplicity, the optimization for numeric results is done at a later stage.
 				//else it's a string, which might need to be moved to persistent memory further below.
 				if (done) // In this case, "done" means the expression is finished *and* we have an output_var available.
@@ -1246,7 +1261,6 @@ end_of_infix_to_postfix:
 			}
 			else // It's not a built-in function, or it's a built-in that was overridden with a custom function.
 			{
-				udf_is_final_action = false; // Set default.
 				// If there are other instances of this function already running, either via recursion or
 				// an interrupted quasi-thread, back up the local variables of the instance that lies immediately
 				// beneath ours (in turn, that instance is responsible for backing up any instance that lies
@@ -1287,9 +1301,9 @@ end_of_infix_to_postfix:
 								// SYM_OPERAND to allow the variables to be backed up and reset further below without
 								// corrupting any SYM_VARs that happen to be locals or params of this very same
 								// function.
-								// DllCall() relies on the fact that this transformation is only done for UDFs
-								// and not built-in functions such as DllCall().  This is because DllCall() sometimes
-								// needs the variable of a parameter for use as an output parameter.
+								// DllCall() relies on the fact that this transformation is only done for user
+								// functions, not built-in ones such as DllCall().  This is because DllCall()
+								// sometimes needs the variable of a parameter for use as an output parameter.
 								this_stack_token.marker = this_stack_token.var->Contents();
 								this_stack_token.symbol = SYM_OPERAND;
 							}
@@ -1346,7 +1360,10 @@ end_of_infix_to_postfix:
 					// both generic and specific operands.  Specific operands were evaluated by a previous iteration
 					// of this section.  Generic ones were pushed as-is onto the stack by a previous iteration.
 					if (!IS_OPERAND(token.symbol)) // Haven't found a way to produce this situation yet, but safe to assume it's possible.
-						goto abort_udf;  // Done in lieu of "goto end/fail" so that Free()+RestoreFunctionVars() can be called.
+					{
+						Var::FreeAndRestoreFunctionVars(func, var_backup, var_backup_count);
+						goto abort;
+					}
 					if (this_formal_param.var->IsByRef())
 					{
 						// Note that the previous loop might not have checked things like the following because that
@@ -1359,7 +1376,8 @@ end_of_infix_to_postfix:
 							// would be able to get this far to trigger this error, because something like
 							// func(Array%VarContainingSpaces%) would have been caught at an earlier stage above.
 							LineError(ERR_BYREF ERR_ABORT, FAIL, this_formal_param.var->mName);
-							goto abort_udf;  // Done in lieu of "goto end/fail" so that Free()+RestoreFunctionVars() can be called.
+							Var::FreeAndRestoreFunctionVars(func, var_backup, var_backup_count);
+							goto abort;
 						}
 						this_formal_param.var->UpdateAlias(token.var); // Make the formal parameter point directly to the actual parameter's contents.
 					}
@@ -1435,8 +1453,8 @@ end_of_infix_to_postfix:
 						// anyway in conjunction with normal function-call cleanup. In other words, we can take
 						// that local variable's memory and directly hang it onto the output_var.
 						output_var->Assign(result);
-						udf_is_final_action = true; // This tells the label below that after the cleanup, we're done.
-						goto skip_abort_udf; // Do end-of-function-call cleanup (see comment above).  No need to do make_result_persistent section.
+						Var::FreeAndRestoreFunctionVars(func, var_backup, var_backup_count); // Do end-of-function-call cleanup (see comment above). No need to do make_result_persistent section.
+						goto normal_end_skip_output_var; // Nothing more to do because it has even taken care of output_var already.
 					}
 					// Otherwise (since above didn't goto): !output_var || !EXPR_IS_DONE || var_backup, so do
 					// normal handling of "result" below.
@@ -1457,7 +1475,10 @@ end_of_infix_to_postfix:
 				|| mem_count && result == mem[mem_count - 1]) // v1.0.45: A call to a built-in function can sometimes store its result here, which is already persistent.
 				make_result_persistent = false;
 			else if (result < sDerefBuf || result >= sDerefBuf + sDerefBufSize) // Not in their deref buffer (yields correct result even if sDerefBuf is NULL).
-				make_result_persistent = true; // Since above didn't set it to false, this result must be assumed to be one of their local variables, so must be immediately copied since it's about to be cleared.
+				// In this case, the result must be assumed to be one of their local variables (since there's
+				// no way to distinguish between that and a literal string such as "abc"?). So it should be
+				// immediately copied since if it's a local, it's about to be freed.
+				make_result_persistent = true;
 			// So now since the above didn't set the value, the result must be in their deref buffer, perhaps
 			// due to something like "return x+3" on their part.
 			else if (done) // We don't have to make it persistent here because the final stage will copy it from their deref buf into ours (since theirs is only deleted later, by our caller).
@@ -1477,8 +1498,9 @@ end_of_infix_to_postfix:
 						result = "";  // ensure it's a non-volatile address instead (read-only mem is okay for expression results).
 					else
 					{
-						// If we don't have have any more function calls pending, we can skip the following step since
-						// this deref buffer will not be overwritten during the period we need it.
+						// If we don't have have any more user-defined function calls pending, we can skip the
+						// make-persistent section since this deref buffer will not be overwritten during the
+						// period we need it.
 						for (j = i + 1; j < postfix_count; ++j)
 							if (postfix[j]->symbol == SYM_FUNC)
 							{
@@ -1489,52 +1511,68 @@ end_of_infix_to_postfix:
 				}
 			}
 
+			this_token.symbol = SYM_OPERAND; // Set default. Use generic, not string, so that any operator of function call that uses this result is free to reinterpret it as an integer or float.
 			if (make_result_persistent)
 			{
-				// v1.0.44.06: EXPR_SMALL_MEM_LIMIT is the means by which _alloca() is used to boost performance a
-				// little by avoiding the overhead of malloc+free for small strings.  The limit should be something
-				// small enough that the chance that even 10 of them would cause stack overflow is vanishingly small
-				// (the program is currently compiled to allow stack to expand anyway).  Even in a worst-case
-				// scenario where an expression is composed entirely of functions and they all need to use this
-				// limit of stack space, there's a practical limit on how many functions you can call in an
-				// expression due to MAX_TOKENS (probably around MAX_TOKENS / 3).
-				#define EXPR_SMALL_MEM_LIMIT 4097
-				#define EXPR_ALLOCA_LIMIT 40000  // v1.0.45: Just as an extra precaution against stack stress in extreme/theoretical cases.
+				if (!*result) // Below relies on this check having been done so that size > 1 and thus length > 0.
+					this_token.marker = ""; // A constant empty string is persistent enough for this purpose.
+				else
+				{
+					result_size = strlen(result) + 1; // No easy way to avoid strlen currently. Maybe some future revisions to architecture will provide a length.
 
-				result_size = strlen(result) + 1;
-				// Must cast to int to avoid loss of negative values:
-				if (result_size <= (int)(aDerefBufSize - (target - aDerefBuf))) // There is room at the end of our deref buf, so use it.
-				{
-					// Point result to its new, more persistent location:
-					result = (char *)memcpy(target, result, result_size); // Benches slightly faster than strcpy().
-					target += result_size; // Point it to the location where the next string would be written.
-				}
-				else if (result_size < EXPR_SMALL_MEM_LIMIT && alloca_usage < EXPR_ALLOCA_LIMIT) // See comments at EXPR_SMALL_MEM_LIMIT.
-				{
-					result = (char *)memcpy(_alloca(result_size), result, result_size); // Benches slightly faster than strcpy().
-					alloca_usage += result_size; // This might put alloca_usage over the limit by as much as EXPR_SMALL_MEM_LIMIT, but that is fine because it's more of a guideline than a limit.
-				}
-				else // Need to create some new persistent memory for our temporary use.
-				{
-					// In real-world scripts the need for additonal memory allocation should be quite
-					// rare because it requires a combination of worst-case situations:
-					// - Called-function's return value is in their new deref buf (rare because return
-					//   values are more often literal numbers, true/false, or variables).
-					// - We still have more functions to call here (which is somewhat atypical).
-					// - There's insufficient room at the end of the deref buf to store the return value
-					//   (unusual because the deref buf expands in block-increments, and also because
-					//   return values are usually small, such as numbers).
-					if (mem_count == MAX_EXPR_MEM_ITEMS // No more slots left (should be nearly impossible).
-						|| !(mem[mem_count] = (char *)malloc(result_size)))
+					// The following check is not done earlier because it's benefit is little if any when
+					// make_result_persistent==false.  In addition, it is fairly rare for the optimization
+					// below to even be applicable because it requires an assignment *internal* to an
+					// expression, such as "if not var:=func()", or "a:=b, c:=func()".
+					if (i < postfix_count-1 && postfix[i+1]->symbol == SYM_ASSIGN // Next operation is ":=".
+						&& stack_count && stack[stack_count-1]->symbol == SYM_VAR // i.e. let the next iteration handle it instead of doing it here.  Further below relies on this having been checked.
+						&& stack[stack_count-1]->var->Type() == VAR_NORMAL) // Don't do clipboard here because don't want its result to be SYM_VAR, yet there's no place to store that result (i.e. need to continue on to make-persistent further below to get some memory for it).
 					{
-						LineError(ERR_OUTOFMEM ERR_ABORT, FAIL, func.mName);
-						goto abort;
+						// This section is an optimization that avoids memory allocation and an extra memcpy()
+						// whenever this result is going to be assigned to a variable as the very next step.
+						// See the comment section higher above for examples.
+						ExprTokenType &left = *STACK_POP; // Above has already confirmed that it's SYM_VAR and VAR_NORMAL.
+						left.var->Assign(result, (VarSizeType)result_size - 1);
+						this_token.circuit_token = postfix[++i]->circuit_token; // this_token.circuit_token should have been NULL prior to this because the final right-side result of an assignment shouldn't be the last item of an AND/OR/IFF's left branch. The assignment itself would be that.
+						this_token.var = left.var;   // Make the result a variable rather than a normal operand so that its
+						this_token.symbol = SYM_VAR; // address can be taken, and it can be passed ByRef. e.g. &(x:=1)
 					}
-					// Point result to its new, more persistent location:
-					result = (char *)memcpy(mem[mem_count], result, result_size); // Benches slightly faster than strcpy().
-					++mem_count; // Must be done last.
-				}
+					// Must cast to int to avoid loss of negative values:
+					else if (result_size <= (int)(aDerefBufSize - (target - aDerefBuf))) // There is room at the end of our deref buf, so use it.
+					{
+						// Make the token's result the new, more persistent location:
+						this_token.marker = (char *)memcpy(target, result, result_size); // Benches slightly faster than strcpy().
+						target += result_size; // Point it to the location where the next string would be written.
+					}
+					else if (result_size < EXPR_SMALL_MEM_LIMIT && alloca_usage < EXPR_ALLOCA_LIMIT) // See comments at EXPR_SMALL_MEM_LIMIT.
+					{
+						this_token.marker = (char *)memcpy(_alloca(result_size), result, result_size); // Benches slightly faster than strcpy().
+						alloca_usage += result_size; // This might put alloca_usage over the limit by as much as EXPR_SMALL_MEM_LIMIT, but that is fine because it's more of a guideline than a limit.
+					}
+					else // Need to create some new persistent memory for our temporary use.
+					{
+						// In real-world scripts the need for additonal memory allocation should be quite
+						// rare because it requires a combination of worst-case situations:
+						// - Called-function's return value is in their new deref buf (rare because return
+						//   values are more often literal numbers, true/false, or variables).
+						// - We still have more functions to call here (which is somewhat atypical).
+						// - There's insufficient room at the end of the deref buf to store the return value
+						//   (unusual because the deref buf expands in block-increments, and also because
+						//   return values are usually small, such as numbers).
+						if (mem_count == MAX_EXPR_MEM_ITEMS // No more slots left (should be nearly impossible).
+							|| !(mem[mem_count] = (char *)malloc(result_size)))
+						{
+							LineError(ERR_OUTOFMEM ERR_ABORT, FAIL, func.mName);
+							goto abort;
+						}
+						// Make the token's result the new, more persistent location:
+						this_token.marker = (char *)memcpy(mem[mem_count], result, result_size); // Benches slightly faster than strcpy().
+						++mem_count; // Must be done last.
+					}
+				} // result is non-zero length.
 			}
+			else // !make_result_persistent
+				this_token.marker = result;
 
 			if (!func.mIsBuiltIn)
 			{
@@ -1556,32 +1594,15 @@ end_of_infix_to_postfix:
 				//    c) To yield results consistent with when the same function is called while other instances
 				//       of itself exist on the call stack.  In other words, it would be inconsistent to make
 				//       all variables blank for case #1 above but not do it here in case #2.
-				goto skip_abort_udf;
-abort_udf:
-// v1.0.40.07: The labels here were added so that an abort of a call to a non-built-in function will collapse
-// cleanly.  A goto/label is used rather than some other method because:
-// 1) It performs better (the whole reason for having this function be so monolithic is performance).
-// 2) Constrained by the performance goal above, it's more maintainable and less code size to do it this way.
-				aResult = FAIL;
-				early_return = true;
-skip_abort_udf:
 				Var::FreeAndRestoreFunctionVars(func, var_backup, var_backup_count);
-				if (udf_is_final_action) // v1.0.45: An earlier stage has already taken care of this expression's result.
-					goto normal_end_skip_output_var; // Nothing more to do because it has even taken care of output_var already.
 				// The callers of this function know that the value of aResult (which already contains the reason
 				// for early exit) should be considered valid/meaningful only if result_to_return is NULL.
 				if (early_return) // aResult has already been set above for our caller.
 				{
 					result_to_return = NULL; // Use NULL to inform our caller that this thread is finished (whether through normal means such as Exit or a critical error).
-					goto normal_end;
+					goto normal_end_skip_output_var; // output_var is left unchanged in these cases.
 				}
 			} // if (!func.mIsBuiltIn)
-
-			// Convert this_token's symbol only as the final step in case anything above ever uses its old
-			// union member.  Mark it as generic, not string, so that any operator of function call that uses
-			// this result is free to reinterpret it as an integer or float:
-			this_token.symbol = SYM_OPERAND;
-			this_token.marker = result;
 			goto push_this_token;
 		} // if (this_token.symbol == SYM_FUNC)
 
@@ -1642,23 +1663,26 @@ skip_abort_udf:
 			// Without the behavior implemented here, the above would wrongly put Var3's rvalue into Var2.
 			continue;
 
-		// If the operand is still generic/undetermined, find out whether it is a string, integer, or float:
-		switch(right.symbol)
+		if (this_token.symbol != SYM_ASSIGN) // SYM_ASSIGN doesn't need "right" to be resolved.
 		{
-		case SYM_VAR:
-			right_contents = right.var->Contents();
-			right_is_number = IsPureNumeric(right_contents, true, false, true);
-			break;
-		case SYM_OPERAND:
-			right_contents = right.marker;
-			right_is_number = IsPureNumeric(right_contents, true, false, true);
-			break;
-		case SYM_STRING:
-			right_contents = right.marker;
-			right_is_number = PURE_NOT_NUMERIC; // Explicitly-marked strings are not numeric, which allows numeric strings to be compared as strings rather than as numbers.
-		default: // INTEGER or FLOAT
-			// right_contents is left uninitialized for performance and to catch bugs.
-			right_is_number = right.symbol;
+			// If the operand is still generic/undetermined, find out whether it is a string, integer, or float:
+			switch(right.symbol)
+			{
+			case SYM_VAR:
+				right_contents = right.var->Contents(); // Can be the clipboard in this case, but it works even then.
+				right_is_number = IsPureNumeric(right_contents, true, false, true);
+				break;
+			case SYM_OPERAND:
+				right_contents = right.marker;
+				right_is_number = IsPureNumeric(right_contents, true, false, true);
+				break;
+			case SYM_STRING:
+				right_contents = right.marker;
+				right_is_number = PURE_NOT_NUMERIC; // Explicitly-marked strings are not numeric, which allows numeric strings to be compared as strings rather than as numbers.
+			default: // INTEGER or FLOAT
+				// right_contents is left uninitialized for performance and to catch bugs.
+				right_is_number = right.symbol;
+			}
 		}
 
 		// IF THIS IS A UNARY OPERATOR, we now have the single operand needed to perform the operation.
@@ -1730,12 +1754,36 @@ skip_abort_udf:
 		case SYM_POST_DECREMENT: // += and -= at load-time or during the tokenizing phase higher above because 
 		case SYM_PRE_INCREMENT:  // it might introduce precedence problems, plus the post-inc/dec's nature is
 		case SYM_PRE_DECREMENT:  // unique among all the operators in that it pushes an operand before the evaluation.
-			if (right.symbol != SYM_VAR || right_is_number == PURE_NOT_NUMERIC)
+			is_pre_op = (this_token.symbol >= SYM_PRE_INCREMENT); // Store this early because its symbol will soon be overwritten.
+			if (right.symbol != SYM_VAR || right_is_number == PURE_NOT_NUMERIC) // Invalid operation.
 			{
+				if (right_is_number == PURE_NOT_NUMERIC) // Non-numeric target such as ++i when "i" is blank or contains text.
+				{
+					right.var->Assign(); // If target var contains "" or "non-numeric text", make it blank. Clipboard is also supported here.
+					if (is_pre_op)
+					{
+						// v1.0.46.01: For consistency, it seems best to make the result of a pre-op be a
+						// variable whenever a variable came in.  This allows its address to be taken, and it
+						// to be passed byreference, and other SYM_VAR behaviors, even if the operation itself
+						// produces a blank value.
+						if (right.var->Type() == VAR_NORMAL)
+						{
+							this_token.var = right.var;  // Make the result a variable rather than a normal operand so that its
+							this_token.symbol = SYM_VAR; // address can be taken, and it can be passed ByRef. e.g. &(++x)
+							break;
+						}
+						//else VAR_CLIPBOARD, which is allowed in only when it's the lvalue of an assignent or
+						// inc/dec.  So fall through to make the result blank because clipboard isn't allowed as
+						// SYM_VAR beyond this point (to simplify the code and improve maintainability).
+					}
+					//else post_op against non-numeric target-var.  Fall through to below to yield blank result.
+				}
+				//else target isn't a var.  Fall through to below to yield blank result.
 				this_token.marker = "";          // Make the result blank to indicate invalid operation
 				this_token.symbol = SYM_STRING;  // (assign to non-lvalue or increment/decrement a non-number).
 				break;
-			}
+			} // end of "invalid operation" block.
+
 			// DUE TO CODE SIZE AND PERFORMANCE decided not to support things like the following:
 			// -> ++++i ; This one actually works because pre-ops produce a variable (usable by future pre-ops).
 			// -> i++++ ; Fails because the first ++ produces an operand that isn't a variable.  It could be
@@ -1746,7 +1794,6 @@ skip_abort_udf:
 			//    nearly identical to the sub-expression (Var+1)? Anyway, --Var++ could probably be supported
 			//    using the loop described in the previous example.
 			delta = (this_token.symbol == SYM_POST_INCREMENT || this_token.symbol == SYM_PRE_INCREMENT) ? 1 : -1;
-			is_pre_op = (this_token.symbol >= SYM_PRE_INCREMENT); // Store this early because its symbol is about to get overwritten.
 			if (right_is_number == PURE_INTEGER)
 			{
 				this_token.value_int64 = (right.symbol == SYM_INTEGER) ? right.value_int64 : ATOI64(right_contents);
@@ -1762,8 +1809,22 @@ skip_abort_udf:
 			{
 				// Push the variable itself so that the operation will have already taken effect for whoever
 				// uses this operand/result in the future (i.e. pre-op vs. post-op).
-				this_token.var = right.var;  // Make the result a variable rather than a normal operand so that its
-				this_token.symbol = SYM_VAR; // address can be taken, and it can be passed ByRef. e.g. &(++x)
+				if (right.var->Type() == VAR_NORMAL)
+				{
+					this_token.var = right.var;  // Make the result a variable rather than a normal operand so that its
+					this_token.symbol = SYM_VAR; // address can be taken, and it can be passed ByRef. e.g. &(++x)
+				}
+				else // VAR_CLIPBOARD, which is allowed in only when it's the lvalue of an assignent or inc/dec.
+				{
+					// Clipboard isn't allowed as SYM_VAR beyond this point (to simplify the code and
+					// improve maintainability).  So use the new contents of the clipboard as the result,
+					// rather than the clipboard itself.
+					if (right_is_number == PURE_INTEGER)
+						this_token.value_int64 += delta;
+					else // right_is_number must be PURE_FLOAT because it's the only alternative remaining.
+						this_token.value_double += delta;
+					this_token.symbol = right_is_number; // Set the symbol type to match the double or int64 that was already stored higher above.
+				}
 			}
 			else // Post-inc/dec, so the non-delta version, which was already stored in this_token, should get pushed.
 				this_token.symbol = right_is_number; // Set the symbol type to match the double or int64 that was already stored higher above.
@@ -1820,7 +1881,7 @@ skip_abort_udf:
 			break;
 
 		case SYM_ADDRESS: // Take the address of a variable.
-			if (right.symbol == SYM_VAR) // SYM_VAR is always a normal variable, never a built-in one, so taking its address should be safe.
+			if (right.symbol == SYM_VAR) // At this stage, SYM_VAR is always a normal variable, never a built-in one, so taking its address should be safe.
 			{
 				this_token.symbol = SYM_INTEGER;
 				this_token.value_int64 = (__int64)right_contents;
@@ -1840,7 +1901,7 @@ skip_abort_udf:
 			if (!IS_OPERAND(left.symbol)) // Haven't found a way to produce this situation yet, but safe to assume it's possible.
 				goto abnormal_end;
 
-			if (IS_ASSIGNMENT(this_token.symbol))
+			if (IS_ASSIGNMENT_EXCEPT_POST_AND_PRE(this_token.symbol)) // v1.0.46: Added support for various assignment operators.
 			{
 				if (left.symbol != SYM_VAR)
 				{
@@ -1850,11 +1911,19 @@ skip_abort_udf:
 				}
 				switch(this_token.symbol)
 				{
-				// "left" is VAR_NORMAL SYM_VAR's Type() is always VAR_NORMAL.
 				case SYM_ASSIGN: // Listed first for performance (it's probably the most common because things like ++ and += aren't expressions when they're by themselves on a line).
-					left.var->Assign(right);
-					this_token.var = left.var;   // Make the result a variable rather than a normal operand so that its
-					this_token.symbol = SYM_VAR; // address can be taken, and it can be passed ByRef. e.g. &(x:=1)
+					left.var->Assign(right); // left.var can be VAR_CLIPBOARD in this case.
+					if (left.var->Type() == VAR_CLIPBOARD) // v1.0.46.01: Clipboard is present as SYM_VAR, but only for assign-to-clipboard so that built-in functions and other code sections don't need handling for VAR_CLIPBOARD.
+					{
+						circuit_token = this_token.circuit_token; // Temp copy to avoid overwrite by the next line.
+						this_token = right; // Struct copy.  Doing it this way is more maintainable than other methods, and is unlikely to perform much worse.
+						this_token.circuit_token = circuit_token;
+					}
+					else
+					{
+						this_token.var = left.var;   // Make the result a variable rather than a normal operand so that its
+						this_token.symbol = SYM_VAR; // address can be taken, and it can be passed ByRef. e.g. &(x:=1)
+					}
 					goto push_this_token;
 				case SYM_ASSIGN_ADD:           this_token.symbol = SYM_ADD; break;
 				case SYM_ASSIGN_SUBTRACT:      this_token.symbol = SYM_SUBTRACT; break;
@@ -1873,12 +1942,15 @@ skip_abort_udf:
 				sym_assign_var = left.var; // This tells the bottom of this switch() to do extra steps for this assignment.
 			}
 
+			// The following section needs done even for assignments such as += because the type of value
+			// inside the target variable (integer vs. float vs. string) must be known to determine how
+			// the operation should proceed.
 			// Since above didn't goto/break, this is a non-unary operator that needs further processing.
 			// If the operand is still generic/undetermined, find out whether it is a string, integer, or float:
 			switch(left.symbol)
 			{
 			case SYM_VAR:
-				left_contents = left.var->Contents(); // SYM_VAR's Type() is always VAR_NORMAL.
+				left_contents = left.var->Contents();
 				left_is_number = IsPureNumeric(left_contents, true, false, true);
 				break;
 			case SYM_OPERAND:
@@ -1911,7 +1983,7 @@ skip_abort_udf:
 				// Seems best to obey SetFormat for these two, though it's debatable:
 				case SYM_INTEGER: left_string = ITOA64(left.value_int64, left_buf); break;
 				case SYM_FLOAT: snprintf(left_buf, sizeof(left_buf), g.FormatFloat, left.value_double); left_string = left_buf; break;
-				default: left_string = left_contents; // SYM_STRING or SYM_OPERAND, which is already in the right format.
+				default: left_string = left_contents; // SYM_STRING/SYM_OPERAND/SYM_VAR, which is already in the right format.
 				}
 
 				result_symbol = SYM_INTEGER; // Set default.  Boolean results are treated as integers.
@@ -1931,7 +2003,6 @@ skip_abort_udf:
 				case SYM_CONCAT:
 					// Even if the left or right is "", must copy the result to temporary memory, at least
 					// when integers and floats had to be converted to temporary strings above.
-					// Calling LengthIgnoreBinaryClip() is valid because SYM_VAR's Type() is always VAR_NORMAL.
 					// Binary clipboard is ignored because it's documented that except for certain features,
 					// binary clipboard variables are seen only up to the first binary zero (mostly to
 					// simplify the code).
@@ -1939,23 +2010,46 @@ skip_abort_udf:
 					if (sym_assign_var // Since "right" is being appended onto a variable ("left"), an optimization is possible.
 						&& sym_assign_var->AppendIfRoom(right_string, (VarSizeType)right_length)) // But only if the target variable has enough remaining capacity.
 					{
-						this_token.var = sym_assign_var;    // Make the result a variable rather than a normal operand so that its
-						this_token.symbol = SYM_VAR;        // address can be taken, and it can be passed ByRef. e.g. &(x+=1)
+						// AppendIfRoom() always fails for VAR_CLIPBOARD, so below won't execute for it (which is
+						// good because don't want clipboard to stay as SYM_VAR after the assignment. This is
+						// because it simplifies the code not to have to worry about VAR_CLIPBOARD in BIFs, etc.)
+						this_token.var = sym_assign_var; // Make the result a variable rather than a normal operand so that its
+						this_token.symbol = SYM_VAR;     // address can be taken, and it can be passed ByRef. e.g. &(x+=1)
 						goto push_this_token; // Skip over all other sections such as subsequent checks of sym_assign_var because it was all taken care of here.
 					}
+					// Otherwise, fall back to the other concat methods:
 					left_length = (left.symbol == SYM_VAR) ? left.var->LengthIgnoreBinaryClip() : strlen(left_string);
 					result_size = right_length + left_length + 1;
 
 					if (output_var && EXPR_IS_DONE) // i.e. this is ACT_ASSIGNEXPR and we're at the final operator, a concat.
+						temp_var = output_var;
+					else if (i < postfix_count-1 && postfix[i+1]->symbol == SYM_ASSIGN // Next operation is ":=".
+						&& stack_count && stack[stack_count-1]->symbol == SYM_VAR // i.e. let the next iteration handle it instead of doing it here.  Further below relies on this having been checked.
+						&& stack[stack_count-1]->var->Type() == VAR_NORMAL) // Don't do clipboard here because: 1) AcceptNewMem() doesn't support it; 2) Could probably use Assign() and then make its result be a newly added mem_count item, but the code complexity doesn't seem worth it given the rarity.
+						temp_var = stack[stack_count-1]->var;
+					else
+						temp_var = NULL;
+
+					if (temp_var)
 					{
-						result = output_var->Contents();
+						result = temp_var->Contents();
 						if (result == left_string) // This is something like x := x . y, so simplify it to x .= y
 						{
 							// MUST DO THE ABOVE CHECK because the next section further below might free the
 							// destination memory before doing the operation. Thus, if the destination is the
 							// same as one of the sources, freeing it beforehand would obviously be a problem.
-							if (output_var->AppendIfRoom(right_string, (VarSizeType)right_length))
-								goto normal_end_skip_output_var; // Nothing more to do because it has even taken care of output_var already.
+							if (temp_var->AppendIfRoom(right_string, (VarSizeType)right_length))
+							{
+								if (temp_var == output_var)
+									goto normal_end_skip_output_var; // Nothing more to do because it has even taken care of output_var already.
+								else // temp_var is from look-ahead to a future assignment.
+								{
+									this_token.circuit_token = postfix[++i]->circuit_token; // this_token.circuit_token should have been NULL prior to this because the final right-side result of an assignment shouldn't be the last item of an AND/OR/IFF's left branch. The assignment itself would be that.
+									this_token.var = STACK_POP->var; // Make the result a variable rather than a normal operand so that its
+									this_token.symbol = SYM_VAR;     // address can be taken, and it can be passed ByRef. e.g. &(x:=1)
+									goto push_this_token;
+								}
+							}
 							//else no optimizations are possible because: 1) No room; 2) The overlap between the
 							// source and dest requires temporary memory.  So fall through to the slower method.
 						}
@@ -1968,24 +2062,40 @@ skip_abort_udf:
 							// the concat, which would corrupt the result.
 							// Optimize by copying directly into the target variable rather than the intermediate
 							// step of putting into temporary memory.
-							if (!output_var->Assign(NULL, (VarSizeType)result_size - 1)) // Resize the destination, if necessary.
+							if (!temp_var->Assign(NULL, (VarSizeType)result_size - 1)) // Resize the destination, if necessary.
 								goto abort; // Above should have already reported the error.
-							result = output_var->Contents(); // Call Contents() AGAIN because Assign() may have changed it.
+							result = temp_var->Contents(); // Call Contents() AGAIN because Assign() may have changed it.
 							if (left_length)
 								memcpy(result, left_string, left_length);  // Not +1 because don't need the zero terminator.
 							memcpy(result + left_length, right_string, right_length + 1); // +1 to include its zero terminator.
-							output_var->Close(); // Mostly just to reset the VAR_ATTRIB_BINARY_CLIP attribute and for maintainability.
-							goto normal_end_skip_output_var; // Nothing more to do because it has even taken care of output_var already.
+							temp_var->Close(); // Mostly just to reset the VAR_ATTRIB_BINARY_CLIP attribute and for maintainability.
+							if (temp_var == output_var)
+								goto normal_end_skip_output_var; // Nothing more to do because it has even taken care of output_var already.
+							else // temp_var is from look-ahead to a future assignment.
+							{
+								this_token.circuit_token = postfix[++i]->circuit_token; // this_token.circuit_token should have been NULL prior to this because the final right-side result of an assignment shouldn't be the last item of an AND/OR/IFF's left branch. The assignment itself would be that.
+								this_token.var = STACK_POP->var; // Make the result a variable rather than a normal operand so that its
+								this_token.symbol = SYM_VAR;     // address can be taken, and it can be passed ByRef. e.g. &(x:=1)
+								goto push_this_token;
+							}
 						}
 						//else result==right_string (e.g. x := y . x).  Although this could be optimized by 
 						// moving memory around inside output_var (if it has enough capacity), it seems more
 						// complicated than it's worth given the rarity of this.  It probably wouldn't save
 						// much time anyway due to the memory-moves inside output_var.  So just fall through
 						// to the normal method.
-					}
+					} // if (temp_var)
 
+					// Since above didn't "goto", it didn't find a way to optimize this concat.
+					// So fall back to the standard method.
 					// The following section is similar to the one for "symbol == SYM_FUNC", so they
 					// should be maintained together.
+					// The following isn't done because there's a memcpy() further below which would also
+					// have to check it, which hurts maintainability.  This doesn't seem worth it since
+					// it's unlikely to be the empty string in the case of concat.
+					//if (result_size == 1)
+					//	this_token.marker = "";
+					//else
 					// Must cast to int to avoid loss of negative values:
 					if (result_size <= (int)(aDerefBufSize - (target - aDerefBuf))) // There is room at the end of our deref buf, so use it.
 					{
@@ -2186,11 +2296,17 @@ skip_abort_udf:
 			} // Result is floating point.
 		} // switch() operator type
 
-		if (sym_assign_var) // v1.0.46.
+		if (sym_assign_var) // Added in v1.0.46. There are some places higher above that handle sym_assign_var themselves and skip this section via goto.
 		{
 			sym_assign_var->Assign(this_token); // Assign the result (based on its type) to the target variable.
-			this_token.var = sym_assign_var;    // Make the result a variable rather than a normal operand so that its
-			this_token.symbol = SYM_VAR;        // address can be taken, and it can be passed ByRef. e.g. &(x+=1)
+			if (sym_assign_var->Type() != VAR_CLIPBOARD)
+			{
+				this_token.var = sym_assign_var;    // Make the result a variable rather than a normal operand so that its
+				this_token.symbol = SYM_VAR;        // address can be taken, and it can be passed ByRef. e.g. &(x+=1)
+			}
+			//else its the clipboard, so just push this_token as-is because after its assignment is done,
+			// VAR_CLIPBOARD should no longer be a SYM_VAR.  This is done to simplify the code, such as BIFs.
+			//
 			// Now fall through and push this_token onto the stack as an operand for use by future operators.
 			// This is because by convention, an assignment like "x+=1" produces a usable operand.
 		}
@@ -2328,8 +2444,8 @@ non_null_circuit_token:
 	// there was more than one token on the stack even for the final function call, or maybe other unforeseen ways.
 	// It seems best to avoid any chance of looking at the result since it might be invalid due to the above
 	// having taken shortcuts (since it knew the result would be discarded).
-	if (mActionType == ACT_EXPRESSION) // A stand-alone expression whose end result doesn't matter.
-		goto normal_end; // And leave result_to_return at its default of "".
+	if (mActionType == ACT_EXPRESSION)   // A stand-alone expression whose end result doesn't matter.
+		goto normal_end_skip_output_var; // Can't be any output_var for this action type. Also, leave result_to_return at its default of "".
 
 	if (stack_count != 1)  // Even for multi-statement expressions, the stack should have only one item left on it:
 		goto abnormal_end; // the overall result. Examples of errors include: () ... x y ... (x + y) (x + z) ... etc. (some of these might no longer produce this issue due to auto-concat).
@@ -2348,20 +2464,24 @@ non_null_circuit_token:
 		// v1.0.45: Take a shortcut, which in the case of SYM_STRING/OPERAND/VAR avoids one memcpy
 		// (into the deref buffer).  In some cases, this also saves from having to expand the deref buffer.
 		output_var->Assign(result_token);
-		goto normal_end_skip_output_var;
+		goto normal_end_skip_output_var; // result_to_return is left at its default of "", though its value doesn't matter as long as it isn't NULL.
 	}
+
+	result_to_return = aTarget; // Set default.
 	switch (result_token.symbol)
 	{
 	case SYM_INTEGER:
 		// SYM_INTEGER and SYM_FLOAT will fit into our deref buffer because an earlier stage has already ensured
 		// that the buffer is large enough to hold at least one number.  But a string/generic might not fit if it's
 		// a concatenation and/or a large string returned from a called function.
-		ITOA64(result_token.value_int64, aTarget); // Store in hex or decimal format, as appropriate.
-		break;
+		aTarget += strlen(ITOA64(result_token.value_int64, aTarget)) + 1; // Store in hex or decimal format, as appropriate.
+		// Above: +1 because that's what callers want; i.e. the position after the terminator.
+		goto normal_end_skip_output_var; // output_var was already checked higher above, so no need to consider it again.
 	case SYM_FLOAT:
 		// In case of float formats that are too long to be supported, use snprint() to restrict the length.
-		snprintf(aTarget, MAX_FORMATTED_NUMBER_LENGTH + 1, g.FormatFloat, result_token.value_double); // %f probably defaults to %0.6f.  %f can handle doubles in MSVC++.
-		break;
+		 // %f probably defaults to %0.6f.  %f can handle doubles in MSVC++.
+		aTarget += snprintf(aTarget, MAX_FORMATTED_NUMBER_LENGTH + 1, g.FormatFloat, result_token.value_double) + 1; // +1 because that's what callers want; i.e. the position after the terminator.
+		goto normal_end_skip_output_var; // output_var was already checked higher above, so no need to consider it again.
 	case SYM_STRING:
 	case SYM_OPERAND:
 	case SYM_VAR: // SYM_VAR is somewhat unusual at this late a stage.
@@ -2384,28 +2504,48 @@ non_null_circuit_token:
 			result = result_token.marker;
 			result_size = strlen(result) + 1;
 		}
+
+		// Notes about the macro below:
+		// Space is needed for whichever of the following is greater (since only one of the following is in
+		// the deref buf at any given time; i.e. they can share the space by being in it at different times):
+		// 1) All the expression's literal strings/numbers and double-derefs (e.g. "Array%i%" as a string).
+		//    Allowing room for this_arg.length plus a terminator seems enough for any conceivable
+		//    expression, even worst-cases and malformatted syntax-error expressions. This is because
+		//    every numeric literal or double-deref needs to have some kind of symbol or character
+		//    between it and the next one or it would never have been recognized as a separate operand
+		//    in the first place.  And the final item uses the final terminator provided via +1 below.
+		// 2) Any numeric result (i.e. MAX_FORMATTED_NUMBER_LENGTH).  If the expression needs to store a
+		//    string result, it will take care of expanding the deref buffer.
+		#define EXPR_BUF_SIZE(raw_expr_len) (raw_expr_len < MAX_FORMATTED_NUMBER_LENGTH \
+			? MAX_FORMATTED_NUMBER_LENGTH : raw_expr_len) + 1 // +1 for the overall terminator.
+
 		// If result is the empty string or a number, it should always fit because the size estimation
-		// phase has ensured that capacity_of_our_buf_portion is large enough to hold those:
+		// phase has ensured that capacity_of_our_buf_portion is large enough to hold those.
+		// In addition, it doesn't matter if we already used target/aTarget for things higher above
+		// because anything in there we're now done with, and memmove() vs. memcpy() later below
+		// will allow overlap of the final result with intermediate results already in the buffer.
+		size_t capacity_of_our_buf_portion;
+		capacity_of_our_buf_portion = EXPR_BUF_SIZE(mArg[aArgIndex].length) + aExtraSize; // The initial amount of size available to write our final result.
 		if (result_size > capacity_of_our_buf_portion)
 		{
 			// Do a simple expansion of our deref buffer to handle the fact that our actual result is bigger
 			// than the size estimator could have calculated (due to a concatenation or a large string returned
-			// from a called function).  This performs poorly but seems justified by the fact that it is
-			// typically needed only in extreme cases.
-			size_t new_buf_size = aDerefBufSize + result_size - capacity_of_our_buf_portion;
+			// from a called function).  This performs poorly but seems justified by the fact that it typically
+			// happens only in extreme cases.
+			size_t new_buf_size = aDerefBufSize + (result_size - capacity_of_our_buf_portion);
 
 			// malloc() and free() are used instead of realloc() because in many cases, the overhead of
 			// realloc()'s internal memcpy(entire contents) can be avoided because only part or
 			// none of the contents needs to be copied (realloc's ability to do an in-place resize might
 			// be unlikely for anything other than small blocks; see compiler's realloc.c):
-			char *new_buf = (char *)malloc(new_buf_size);
-			if (!new_buf)
+			char *new_buf;
+			if (   !(new_buf = (char *)malloc(new_buf_size))   )
 			{
 				LineError(ERR_OUTOFMEM ERR_ABORT);
 				goto abort;
 			}
 			if (new_buf_size > LARGE_DEREF_BUF_SIZE)
-				++sLargeDerefBufs;
+				++sLargeDerefBufs; // And if the old deref buf was larger too, this value is decremented later below.
 
 			// Copy only that portion of the old buffer that is in front of our portion of the buffer
 			// because we no longer need our portion (except for result.marker if it happens to be
@@ -2414,10 +2554,11 @@ non_null_circuit_token:
 			if (aTarget_offset) // aDerefBuf has contents that must be preserved.
 				memcpy(new_buf, aDerefBuf, aTarget_offset); // This will also copy the empty string if the buffer first and only character is that.
 			aTarget = new_buf + aTarget_offset;
-			// NOTE: result_token.marker might be at the end of our deref buffer and thus be larger than
-			// capacity_of_our_buf_portion because other arg(s) exist in this line after ours that will be
-			// using a larger total portion of the buffer than ours.  Thus, the following must be done prior
-			// to free(), but memcpy() vs. memmove() is safe in any case:
+			result_to_return = aTarget; // Update to reflect new value above.
+			// NOTE: result_token.marker might extend too far to the right in our deref buffer and thus be
+			// larger than capacity_of_our_buf_portion because other arg(s) exist in this line after ours
+			// that will be using a larger total portion of the buffer than ours.  Thus, the following must be
+			// done prior to free(), but memcpy() vs. memmove() is safe in any case:
 			memcpy(aTarget, result, result_size); // Copy from old location to the newly allocated one.
 
 			free(aDerefBuf); // Free our original buffer since it's contents are no longer needed.
@@ -2437,29 +2578,24 @@ non_null_circuit_token:
 		}
 		else // Deref buf is already large enough to fit the string.
 			if (aTarget != result) // Currently, might be always true.
-				memmove(aTarget, result, result_size); // memmove() vs. memcpy() in this case, since source and dest might overlap.
-		result_to_return = aTarget;
+				memmove(aTarget, result, result_size); // memmove() vs. memcpy() in this case, since source and dest might overlap (i.e. "target" may have been used to put temporary things into aTarget, but those things are no longer needed and now safe to overwrite).
 		aTarget += result_size;
-		goto normal_end;
+		goto normal_end_skip_output_var; // output_var was already checked higher above, so no need to consider it again.
 
 	default: // Result contains a non-operand symbol such as an operator.
 		goto abnormal_end;
-	}
+	} // switch (result_token.symbol)
 
-	// Since above didn't "goto", this is SYM_FLOAT/SYM_INTEGER.  Calculate the length and use it to adjust
-	// aTarget for use by our caller:
-	result_to_return = aTarget;
-	aTarget += strlen(aTarget) + 1;  // +1 because that's what callers want; i.e. the position after the terminator.
-	goto normal_end;
-
+// ALL PATHS ABOVE SHOULD "GOTO".  TO CATCH BUGS, ANY THAT DON'T FALL INTO "ABORT" BELOW.
 abort:
 	// The callers of this function know that the value of aResult (which contains the reason
 	// for early exit) should be considered valid/meaningful only if result_to_return is NULL.
 	result_to_return = NULL; // Use NULL to inform our caller that this entire thread is to be terminated.
 	aResult = FAIL; // Indicate reason to caller.
+	goto normal_end_skip_output_var; // output_var is skipped as part of standard abort behavior.
 
 abnormal_end: // Currently the same as normal_end; it's separate to improve readability.  When this happens, result_to_return is typically "" (unless the caller overrode that default).
-normal_end:
+//normal_end: // This isn't currently used, but is available for future-use and readability.
 	// v1.0.45: ACT_ASSIGNEXPR relies on us to set the output_var (i.e. whenever it's ARG1's is_expression==true).
 	// Our taking charge of output_var allows certain performance optimizations in other parts of this function,
 	// such as avoiding excess memcpy's and malloc's during intermediate stages.
@@ -2467,7 +2603,7 @@ normal_end:
 		output_var->Assign(result_to_return);
 
 normal_end_skip_output_var:
-	for (i = 0; i < mem_count; ++i) // Free any temporary memory blocks that were used.
+	for (i = mem_count; i--;) // Free any temporary memory blocks that were used.  Using reverse order might reduce memory fragmentation a little (depending on implementation of malloc).
 		free(mem[i]);
 
 	return result_to_return;
@@ -2572,6 +2708,7 @@ ResultType Line::ExpandArgs(VarSizeType aSpaceNeeded, Var *aArgVar[])
 		sArgVar[0] = NULL; // PixelSearch), even if it's just to allow their output-var(s) to be omitted.  This allows OUTPUT_VAR to be used without any need to check mArgC.
 	else
 	{
+		size_t extra_size = our_deref_buf_size - space_needed;
 		for (i = 0; i < mArgc; ++i) // Second pass.  For each arg:
 		{
 			ArgStruct &this_arg = mArg[i]; // For performance and convenience.
@@ -2589,15 +2726,27 @@ ResultType Line::ExpandArgs(VarSizeType aSpaceNeeded, Var *aArgVar[])
 				// In addition to producing its return value, ExpandExpression() will alter our_buf_marker
 				// to point to the place in our_deref_buf where the next arg should be written.
 				// In addition, in some cases it will alter some of the other parameters that are arrays or
-				// that are passed by ref.  Finally, it might tempoarily use parts of the buffer beyond
-				// what the size estimator provide for it, so we should be sure here that everything in
-				// our_deref_buf after our_buf_marker is available to it as temporary memory.
+				// that are passed by-ref.  Finally, it might temporarily use parts of the buffer beyond
+				// extra_size plus what the size estimator provided for it, so we should be sure here that
+				// everything in our_deref_buf to the right of our_buf_marker is available to it as temporary memory.
 				// Note: It doesn't seem worthwhile to enhance ExpandExpression to give us back a variable
 				// for use in arg_var[] (for performance) because only rarely does an expression yield
 				// a variable other than some function's local variable (and a local's contents are no
 				// longer valid due to having been freed after the call [unless it's static]).
-				if (   !(arg_deref[i] = ExpandExpression(i, result, our_buf_marker, our_deref_buf
-					, our_deref_buf_size, arg_deref, our_deref_buf_size - space_needed))   )
+				arg_deref[i] = ExpandExpression(i, result, our_buf_marker, our_deref_buf
+					, our_deref_buf_size, arg_deref, extra_size);
+				extra_size = 0; // See comment below.
+				// v1.0.46.01: The whole point of passing extra_size is to allow an expression to write
+				// a large string to the deref buffer without having to expand it (i.e. if there happens to
+				// be extra room in it that won't be used by ANY arg, including ones after THIS expression).
+				// Since the expression just called above might have used some/all of the extra size,
+				// the line above prevents subsequent expressions in this line from getting any extra size.
+				// It's pretty rare to have more than one expression in a line anyway, and even when there
+				// is there's hardly ever a need for the extra_size.  As an alternative to setting it to
+				// zero, above could check how much the expression wrote to the buffer (by comparing our_buf_marker
+				// before and after the call above), and compare that to how much space was reserved for this
+				// particular arg/expression (which is currently a standard formula for expressions).
+				if (!arg_deref[i])
 				{
 					// A script-function-call inside the expression returned EARLY_EXIT or FAIL.  Report "result"
 					// to our caller (otherwise, the contents of "result" should be ignored since they're undefined).
@@ -2771,43 +2920,38 @@ end:
 	
 
 VarSizeType Line::GetExpandedArgSize(bool aCalcDerefBufSize, Var *aArgVar[])
-// Args that are expressions are only calculated correctly if aCalcDerefBufSize is true,
-// which is okay for the moment since the only caller that can have expressions does call
-// it that way.
 // Returns the size, or VARSIZE_ERROR if there was a problem.
-// WARNING: This function can return a size larger than what winds up actually being needed
+// This function can return a size larger than what winds up actually being needed
 // (e.g. caused by ScriptGetCursor()), so our callers should be aware that that can happen.
 {
 	int i;
-	VarSizeType space_needed, space;
-	DerefType *deref;
+	VarSizeType space_needed;
 	Var *the_only_var_of_this_arg;
-	bool include_this_arg;
 	ResultType result;
 
-	// Note: the below loop is similar to the one in ExpandArgs(), so the two should be
-	// maintained together:
-	for (i = 0, space_needed = 0; i < mArgc; ++i) // For each arg:
+	// Note: the below loop is similar to the one in ExpandArgs(), so the two should be maintained together:
+	for (i = 0, space_needed = 0; i < mArgc; ++i) // FOR EACH ARG:
 	{
 		ArgStruct &this_arg = mArg[i]; // For performance and convenience.
-
-		// If this_arg.is_expression is true, the space is still calculated as though the
-		// expression itself will be inside the arg.  This is done so that an expression
-		// such as if(Array%i% = LargeString) can be expanded temporarily into the deref
-		// buffer so that it can be evaluated more easily.
 
 		// Accumulate the total of how much space we will need.
 		if (this_arg.type == ARG_TYPE_OUTPUT_VAR)  // These should never be included in the space calculation.
 		{
-			if (mActionType != ACT_ASSIGN) // PerformAssign() already resolve its output-var, so don't do it again here.
+			if (mActionType != ACT_ASSIGN) // PerformAssign() already resolved its output-var, so don't do it again here.
 			{
 				if (   !(aArgVar[i] = ResolveVarOfArg(i))   ) // v1.0.45: Resolve output variables too, which eliminates a ton of calls to ResolveVarOfArg() in various other functions.  This helps code size more than performance.
 					return VARSIZE_ERROR;  // The above will have already displayed the error.
 			}
 			continue;
 		}
-		// Otherwise, set default.
+		// Otherwise, set default aArgVar[] (above took care of setting aArgVar[] for itself).
 		aArgVar[i] = NULL;
+
+		if (this_arg.is_expression)
+		{
+			space_needed += EXPR_BUF_SIZE(this_arg.length); // See comments at macro definition.
+			continue;
+		}
 
 		// Always do this check before attempting to traverse the list of dereferences, since
 		// such an attempt would be invalid in this case:
@@ -2820,9 +2964,7 @@ VarSizeType Line::GetExpandedArgSize(bool aCalcDerefBufSize, Var *aArgVar[])
 		{
 			if (NO_DEREF)
 			{
-				// Below relies on the fact that caller has ensure no args are expressions
-				// when !aCalcDerefBufSize.
-				if (!aCalcDerefBufSize || this_arg.is_expression) // i.e. we want the total size of what the args resolve to.
+				if (!aCalcDerefBufSize) // i.e. we want the total size of what the args resolve to.
 					space_needed += this_arg.length + 1;  // +1 for the zero terminator.
 				// else don't increase space_needed, even by 1 for the zero terminator, because
 				// the terminator isn't needed if the arg won't exist in the buffer at all.
@@ -2842,71 +2984,37 @@ VarSizeType Line::GetExpandedArgSize(bool aCalcDerefBufSize, Var *aArgVar[])
 			// This is set for our caller so that it doesn't have to call ResolveVarOfArg() again, which
 			// would a performance hit if this variable is dynamically built and thus searched for at runtime:
 			aArgVar[i] = the_only_var_of_this_arg; // For now, this is done regardless of whether it must be dereferenced.
-			include_this_arg = !aCalcDerefBufSize || this_arg.is_expression;  // i.e. caller wanted its size unconditionally included
-			if (!include_this_arg)
+			if (aCalcDerefBufSize) // In this case, caller doesn't want its size unconditionally included, but instead only if certain conditions are met.
 			{
 				if (   !(result = ArgMustBeDereferenced(the_only_var_of_this_arg, i, aArgVar))   )
 					return VARSIZE_ERROR;
-				if (result == CONDITION_TRUE) // The size of these types of args is always included.
-					include_this_arg = true;
-				//else leave it as false
+				if (result == CONDITION_FALSE)
+					continue;
+				//else the size of this arg is always included, so fall through to below.
 			}
-			if (!include_this_arg) // No extra space is needed in the buffer for this arg.
-				continue;
-			space = the_only_var_of_this_arg->Get() + 1;  // +1 for the zero terminator.
+			//else caller wanted it's size unconditionally included, so continue on to below.
+			space_needed += the_only_var_of_this_arg->Get() + 1;  // +1 for the zero terminator.
 			// NOTE: Get() (with no params) can retrieve a size larger that what winds up actually
 			// being needed, so our callers should be aware that that can happen.
-			if (this_arg.is_expression) // Space is needed for the result of the expression or the expanded expression itself, whichever is greater.
-				space_needed += (space > MAX_FORMATTED_NUMBER_LENGTH) ? space : MAX_FORMATTED_NUMBER_LENGTH + 1;
-			else
-				space_needed += space;
 			continue;
 		}
 
 		// Otherwise: This arg has more than one deref, or a single deref with some literal text around it.
-		space = this_arg.length + 1; // +1 for this arg's zero terminator in the buffer.
-		for (deref = this_arg.deref; deref && deref->marker; ++deref)
+		space_needed += this_arg.length + 1; // +1 for this arg's zero terminator in the buffer.
+		if (this_arg.deref) // There's at least one deref.
 		{
-			// Replace the length of the deref's literal text with the length of its variable's contents:
-			space -= deref->length;
-			if (!deref->is_function)
+			for (DerefType *deref = this_arg.deref; deref->marker; ++deref)
 			{
-				if (this_arg.is_expression)
-				{
-					// In the case of expressions, size needs to be reserved for the variable's contents only
-					// if it will be copied into the deref buffer; namely the following cases:
-					// 1) Derefs whose type isn't VAR_NORMAL or that are env. vars (those whose length is zero but whose Get() is of non-zero length)
-					// 2) Derefs that are enclosed by the g_DerefChar character (%), which in expressions means that
-					//    must be copied into the buffer to support double references such as Array%i%.
-					if (*deref->marker == g_DerefChar || deref->var->Type() != VAR_NORMAL // Relies on short-circuit boolean order for the next line.
-						|| (!g_NoEnv && !deref->var->Length())) // v1.0.43.08: Added g_NoEnv.
-						space += deref->var->Get(); // If an environment var, Get() will yield its length.
-					space += 1;
-					// Fix for v1.0.35.04: The above now adds a space unconditionally because it is needed
-					// by the expression evaluation to provide an empty string (terminator) in the deref 
-					// buf for each variable, which prevents something like "x*y*z" from being seen as
-					// two asterisks in a row (since y doesn't take up any space).  Although the +1 might
-					// not be needed in a few sub-cases of the above, it is safer to do it and doesn't
-					// increase the size much anyway.  Note that function-calls do not need this fix because
-					// their parentheses and arg list are always in the deref buffer.
-					// Above adds 1 for the insertion of an extra space after every single deref.  This space
-					// is unnecessary if Get() returns a size of zero to indicate a non-existent environment
-					// variable, but that seems harmless).  This is done for parsing reasons described in
-					// ExpandExpression().
-					// NOTE: Get() (with no params) can retrieve a size larger that what winds up actually
-					// being needed, so our callers should be aware that that can happen.
-				}
-				else // Not an expression.
-					space += deref->var->Get(); // If an environment var, Get() will yield its length.
+				// Replace the length of the deref's literal text with the length of its variable's contents:
+				space_needed -= deref->length;
+				if (!deref->is_function)
+					space_needed += deref->var->Get(); // If an environment var, Get() will yield its length.
+				//else it's a function-call's function name, in which case it's length is effectively zero since
+				// the function name never gets copied into the deref buffer during ExpandExpression().
 			}
-			//else it's a function-call's function name, in which case it's length is effectively zero.
-			// since the function name never gets copied into the deref buffer during ExpandExpression().
 		}
-		if (this_arg.is_expression) // Space is needed for the result of the expression or the expanded expression itself, whichever is greater.
-			space_needed += (space > MAX_FORMATTED_NUMBER_LENGTH) ? space : MAX_FORMATTED_NUMBER_LENGTH + 1;
-		else
-			space_needed += space;
-	}
+	} // For each arg.
+
 	return space_needed;
 }
 
@@ -2993,23 +3101,23 @@ char *Line::ExpandArg(char *aBuf, int aArgIndex, Var *aArgVar) // 10/2/2006: Doe
 		// +1 so that we return the position after the terminator, as required.
 		return aBuf += aArgVar->Get(aBuf) + 1;
 
-	char *pText, *this_marker;
-	DerefType *deref;
-	for (pText = this_arg.text  // Start at the begining of this arg's text.
-		, deref = this_arg.deref  // Start off by looking for the first deref.
-		; deref && deref->marker; ++deref)  // A deref with a NULL marker terminates the list.
+	char *this_marker, *pText = this_arg.text;  // Start at the begining of this arg's text.
+	if (this_arg.deref) // There's at least one deref.
 	{
-		// FOR EACH DEREF IN AN ARG (if we're here, there's at least one):
-		// Copy the chars that occur prior to deref->marker into the buffer:
-		for (this_marker = deref->marker; pText < this_marker; *aBuf++ = *pText++); // this_marker is used to help performance.
-
-		// Now copy the contents of the dereferenced var.  For all cases, aBuf has already
-		// been verified to be large enough, assuming the value hasn't changed between the
-		// time we were called and the time the caller calculated the space needed.
-		aBuf += deref->var->Get(aBuf); // Caller has ensured that deref->is_function==false
-		// Finally, jump over the dereference text. Note that in the case of an expression, there might not
-		// be any percent signs within the text of the dereference, e.g. x + y, not %x% + %y%.
-		pText += deref->length;
+		for (DerefType *deref = this_arg.deref  // Start off by looking for the first deref.
+			; deref->marker; ++deref)  // A deref with a NULL marker terminates the list.
+		{
+			// FOR EACH DEREF IN AN ARG (if we're here, there's at least one):
+			// Copy the chars that occur prior to deref->marker into the buffer:
+			for (this_marker = deref->marker; pText < this_marker; *aBuf++ = *pText++);
+			// Now copy the contents of the dereferenced var.  For all cases, aBuf has already
+			// been verified to be large enough, assuming the value hasn't changed between the
+			// time we were called and the time the caller calculated the space needed.
+			aBuf += deref->var->Get(aBuf); // Caller has ensured that deref->is_function==false
+			// Finally, jump over the dereference text. Note that in the case of an expression, there might not
+			// be any percent signs within the text of the dereference, e.g. x + y, not %x% + %y%.
+			pText += deref->length;
+		}
 	}
 	// Copy any chars that occur after the final deref into the buffer:
 	for (; *pText; *aBuf++ = *pText++);
