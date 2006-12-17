@@ -6714,6 +6714,44 @@ Func *Script::AddFunc(char *aFuncName, size_t aFuncNameLength, bool aIsBuiltIn)
 
 
 
+size_t Line::ArgLength(int aArgNum)
+// "ArgLength" is the arg's fully resolved, dereferenced length during runtime.
+// Callers must call this only at times when sArgDeref and sArgVar are defined/meaningful.
+// Caller must ensure that aArgNum should be 1 or greater.
+// ArgLength() was added in v1.0.44.14 to help its callers improve performance by avoiding
+// costly calls to strlen() (which is especially beneficial for huge strings).
+{
+#ifdef _DEBUG
+	if (aArgNum < 1)
+	{
+		LineError("DEBUG: BAD", WARN);
+		aArgNum = 1;  // But let it continue.
+	}
+#endif
+	if (aArgNum > mArgc) // Arg doesn't exist, so don't try accessing sArgVar (unlike sArgDeref, it wouldn't be valid to do so).
+		return 0; // i.e. treat it as the empty string.
+	// The length is not known and must be calculcated in the following situations:
+	// - The arg consists of more than just a single isolated variable name (not possible if the arg is
+	//   ARG_TYPE_INPUT_VAR).
+	// - The arg is a built-in variable, in which case the length isn't known, so it must be derived from
+	//   the string copied into sArgDeref[] by an earlier stage.
+	// - The arg is a normal variable but it's VAR_ATTRIB_BINARY_CLIP. In such cases, our callers do not
+	//   recognize/support binary-clipboard as binary and want the apparent length of the string returned
+	//   (i.e. strlen(), which takes into account the position of the first binary zero wherever it may be).
+	--aArgNum; // Convert to zero-based index (squeeze a little more performance out of it by avoiding a new variable).
+	if (sArgVar[aArgNum])
+	{
+		Var &var = *sArgVar[aArgNum]; // For performance and convenience.
+		if (var.Type() == VAR_NORMAL && (g_NoEnv || var.Length())) // v1.0.46.02: Recognize environment variables (when g_NoEnv==false) by falling through to strlen() for them.
+			return var.LengthIgnoreBinaryClip(); // Do it the fast way (unless it's binary clipboard, in which case this call will internally call strlen()).
+	}
+	// Otherwise, length isn't known due to no variable, a built-in variable, or an environment variable.
+	// So do it the slow way.
+	return strlen(sArgDeref[aArgNum]);
+}
+
+
+
 Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 // Returns NULL on failure.  Caller has ensured that none of this arg's derefs are function-calls.
 // Args that are input or output variables are normally resolved at load-time, so that

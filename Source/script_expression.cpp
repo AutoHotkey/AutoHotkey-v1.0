@@ -717,15 +717,18 @@ double_deref: // Caller has set cp to be start and op_end to be the character af
 				// of whether that variable is blank in the environment -- treat it as a normal
 				// variable instead.  This is because most people would want that, and also because
 				// it's tranditional not to directly support assignments to environment variables
-				// (only EnvSet can do that, mostly for code simplicity).  So convert this variable
-				// to a normal variable so that it can be seen as a valid lvalue.
+				// (only EnvSet can do that, mostly for code simplicity).  In addition, things like
+				// EnvVar.="string" and EnvVar+=2 aren't supported due to obscurity/rarity (instead,
+				// such expressions treat EnvVar as blank). In light of all this, convert environment
+				// variables that are targets of ANY assignments into normal variables so that they
+				// can be seen as a valid lvalues when the time comes to do the assignment.
 				// IMPORTANT: VAR_CLIPBOARD is made into SYM_VAR here, but only for assignments.
 				// This allows built-in functions and other places in the code to treat SYM_VAR
-				// as though its always VAR_NORMAL, which reduces code size and improves maintainability.
-				sym_prev = this_infix[1].symbol; // Resolve to help macro code size and performance.
+				// as though it's always VAR_NORMAL, which reduces code size and improves maintainability.
+				sym_prev = this_infix[1].symbol; // Resolve to help macro's code size and performance.
 				if (IS_ASSIGNMENT_OR_POST_OP(sym_prev) // Post-op must be checked for VAR_CLIPBOARD (by contrast, it seems unnecessary to check it for others; see comments below).
 					|| stack_symbol == SYM_PRE_INCREMENT || stack_symbol == SYM_PRE_DECREMENT) // Stack *not* infix.
-					this_infix->symbol = SYM_VAR;
+					this_infix->symbol = SYM_VAR; // Convert clipboard or environment variable into SYM_VAR.
 				// POST-INC/DEC: It seems unnecessary to check for these except for VAR_CLIPBOARD because
 				// those assignments (and indeed any assignment other than .= and :=) will have no effect
 				// on a ON A SYM_DYNAMIC environment variable.  This is because by definition, such

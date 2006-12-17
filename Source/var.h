@@ -251,8 +251,8 @@ public:
 	}
 
 	VarSizeType &Length() // __forceinline() on Capacity, Length, and/or Contents bloats the code and reduces performance.
-	// This should not be called to discover a non-NORMAL var's length because the length
-	// of most such variables aren't knowable without calling Get() on them.
+	// This should not be called to discover a non-NORMAL var's length (nor that of an environment variable)
+	// because their lengths aren't knowable without calling Get().
 	// Returns a reference so that caller can use this function as an lvalue.
 	{
 		// Relies on the fact that aliases can't point to other aliases (enforced by UpdateAlias()).
@@ -264,12 +264,14 @@ public:
 		// not thread-safe, but currently there's only one thread so it's not an issue.
 		// For reserved vars do the same thing as above, but this function should never
 		// be called for them:
-		static VarSizeType length; // Must be static so that caller can use its contents.
+		static VarSizeType length; // Must be static so that caller can use its contents. See above.
 		return length;
 	}
 
 	VarSizeType LengthIgnoreBinaryClip()
 	// Returns 0 for types other than VAR_NORMAL and VAR_CLIPBOARD.
+	// IMPORTANT: Environment variables aren't supported here, so caller must either want such
+	// variables treated as blank, or have already checked that they're not environment variables.
 	{
 		// Relies on the fact that aliases can't point to other aliases (enforced by UpdateAlias()).
 		Var &var = *(mType == VAR_ALIAS ? mAliasFor : this);

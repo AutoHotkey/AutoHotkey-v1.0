@@ -10554,9 +10554,11 @@ end:
 
 
 void BIF_StrLen(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+// Caller has ensured that SYM_VAR's Type() is VAR_NORMAL and that it's either not an environment
+// variable or the caller wants environment varibles treated as having zero length.
+// Result is always an integer (caller has set aResultToken.symbol to a default of SYM_INTEGER, so no need
+// to set it here).
 {
-	// Result will always be an integer.
-	// Caller has set aResultToken.symbol to a default of SYM_INTEGER, so no need to set it here.
 	// Loadtime validation has ensured that there's exactly one actual parameter.
 	// Calling Length() is always valid for SYM_VAR because SYM_VAR's Type() is always VAR_NORMAL.
 	aResultToken.value_int64 = (aParam[0]->symbol == SYM_VAR)

@@ -1582,6 +1582,7 @@ WSAStartup@8
 ?ParseActionType@Script@@AAEPADPAD0_N@Z
 ?ParseDerefs@Script@@AAE?AW4ResultType@@PAD0PAUDerefType@@AAH@Z
 
+?StartsWithAssignmentOp@Line@@SA_NPAD@Z  ; script.obj
 ?PreparseBlocks@Script@@AAEPAVLine@@PAV2@_N0@Z
 ?PreparseError@Line@@QAEPAV1@PAD0@Z
 ?PreparseIfElse@Script@@AAEPAVLine@@PAV2@W4ExecUntilMode@@PAX222@Z

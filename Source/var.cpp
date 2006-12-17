@@ -1093,6 +1093,8 @@ void Var::Free(int aWhenToFree, bool aExcludeAliases)
 ResultType Var::AppendIfRoom(char *aStr, VarSizeType aLength)
 // Returns OK if there's room enough to append aStr and it succeeds.
 // Returns FAIL otherwise (also returns FAIL for VAR_CLIPBOARD).
+// Environment variables aren't supported here; instead, aStr is appended directly onto the actual/internal
+// contents of the "this" variable.
 {
 	// Relies on the fact that aliases can't point to other aliases (enforced by UpdateAlias()):
 	Var &var = *(mType == VAR_ALIAS ? mAliasFor : this);
