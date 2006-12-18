@@ -9029,9 +9029,12 @@ int CALLBACK LV_GeneralSort(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort)
 			result = strcmp2(field1, lvs.lvi.pszText, lvs.col.case_sensitive); // Must not refer to buf1/buf2 directly, see above.
 	}
 	else
+	{
 		// Unlike ACT_SORT, supporting hex for an explicit-floating point column seems far too rare to
-		// justify, hence atof() is used vs. ATOF():
-		result = (int)(atof(field1) - atof(lvs.lvi.pszText)); // Must not refer to buf1/buf2 directly, see above.
+		// justify, hence atof() is used vs. ATOF().  v1.0.46.03: Fixed to sort properly (formerly, it just case the difference to an int, which isn't right).
+		double f1 = atof(field1), f2 = atof(lvs.lvi.pszText); // Must not refer to buf1/buf2 directly, see above.
+		result = (f1 > f2) ? 1 : (f1 == f2 ? 0 : -1);
+	}
 	return lvs.sort_ascending ? result : -result;
 }
 
