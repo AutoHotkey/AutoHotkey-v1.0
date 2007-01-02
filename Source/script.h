@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2006 Chris Mallett (support@autohotkey.com)
+Copyright 2003-2007 Chris Mallett (support@autohotkey.com)
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -763,7 +763,7 @@ public:
 	#define EXPR_CORE "<>=/|^,:"
 	// The characters common to both EXPR_TELLTALES and EXPR_OPERAND_TERMINATORS:
 	#define EXPR_COMMON " \t" EXPR_CORE "*&~!()"  // Space and Tab are included at the beginning for performance.
-	#define EXPR_COMMON_FORBIDDEN_BYREF "<>=/|^,*&~!" // Omits space/tab because operators like := can have them. Omits colon because want to be able to pass a ternary byref. Omits parentheses because a variable or assignment can be enclosed in them even though they're redundant.
+	#define EXPR_COMMON_FORBIDDEN_BYREF "<>/|^,*&~!" // Omits space/tab because operators like := can have them. Omits colon because want to be able to pass a ternary byref. Omits = because colon is omitted (otherwise the logic is written in a way that wouldn't allow :=). Omits parentheses because a variable or assignment can be enclosed in them even though they're redundant.
 	#define CONTINUATION_LINE_SYMBOLS EXPR_CORE ".+-*&!?~" // v1.0.46.
 	// Characters whose presence in a mandatory-numeric param make it an expression for certain.
 	// + and - are not included here because legacy numeric parameters can contain unary plus or minus,

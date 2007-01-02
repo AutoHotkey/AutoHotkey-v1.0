@@ -955,7 +955,16 @@ ResultType Line::URLDownloadToFile(char *aURL, char *aFilespec)
 	if (!(lpfnInternetOpen && lpfnInternetOpenUrl && lpfnInternetCloseHandle && lpfnInternetReadFileEx))
 		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
 
-	DWORD flags_for_open_url = INTERNET_FLAG_RELOAD; // v1.0.44.07: Set default to INTERNET_FLAG_RELOAD vs. 0 because the vast majority of usages would want the file to be retrieved directly rather than from the cache.
+	// v1.0.44.07: Set default to INTERNET_FLAG_RELOAD vs. 0 because the vast majority of usages would want
+	// the file to be retrieved directly rather than from the cache.
+	// v1.0.46.04: Added more no-cache flags because otherwise, it definitely falls back to the cache if
+	// the remote server doesn't repond (and perhaps other errors), which defeats the ability to use
+	// UrlDownloadToFile for uptime/server monitoring.  Also, in spite of what MSDN says, it seems nearly
+	// certain based on other sources that more than one flag is supported.  Someone also mentioned that
+	// INTERNET_FLAG_CACHE_IF_NET_FAIL is related to this, but there's no way to specify it in these
+	// particular calls, and it's the opposite of the desired behavior anyway; so it seems impossible to
+	// turn it off explicitly.
+	DWORD flags_for_open_url = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_NO_CACHE_WRITE;
 	aURL = omit_leading_whitespace(aURL);
 	if (*aURL == '*') // v1.0.44.07: Provide an option to override flags_for_open_url.
 	{
