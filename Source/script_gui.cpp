@@ -5851,9 +5851,10 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 		// Update any tab controls to show only their correct pane.  This should only be necessary
 		// upon the first "Gui Show" (even "Gui, Show, Hide") of the window because subsequent switches
 		// of the control's tab should result in a TCN_SELCHANGE notification.
-		for (GuiIndexType u = 0; u < mControlCount; ++u)
-			if (mControl[u].type == GUI_CONTROL_TAB)
-				ControlUpdateCurrentTab(mControl[u], false); // Pass false so that default/z-order focus is used across entire window.
+		if (mTabControlCount)
+			for (GuiIndexType u = 0; u < mControlCount; ++u)
+				if (mControl[u].type == GUI_CONTROL_TAB)
+					ControlUpdateCurrentTab(mControl[u], false); // Pass false so that default/z-order focus is used across entire window.
 		// By default, center the window if this is the first time it's being shown:
 		if (x == COORD_UNSPECIFIED)
 			x = COORD_CENTERED;
@@ -6007,26 +6008,43 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 	// is done, even if it's far into the future, long after the user has activated and navigated in the
 	// window, the same "first activation" behavior will be done anyway.  This is documented here as a
 	// known limitation, since fixing it would probably add an unreasonable amount of complexity.
-	HWND focused_control_hwnd;
-	if (we_did_the_first_activation && mTabControlCount // Window probably must be visible and active for GetFocus() to work.
-		&& (focused_control_hwnd = GetFocus())) // Assign
+	if (we_did_the_first_activation)
 	{
-		// Since this is the first activation, if the focus wound up on a tab control itself as a result
-		// of the above, focus the first control of that tab since that is traditional.  HOWEVER, do not
-		// instead default tab controls to lacking WS_TABSTOP since it is traditional for them to have
-		// that property, probably to aid accessibility.
-		GuiControlType *focused_control = FindControl(focused_control_hwnd);
-		if (focused_control && focused_control->type == GUI_CONTROL_TAB)
+		HWND focused_hwnd = GetFocus(); // Window probably must be visible and active for GetFocus() to work.
+		if (focused_hwnd)
 		{
-			// v1.0.27: The following must be done, at least in some cases, because otherwise
-			// controls outside of the tab control will not get drawn correctly.  I suspect this
-			// is because at the exact moment execution reaches the line below, the window is in
-			// a transitional state, with some WM_PAINT and other messages waiting in the queue
-			// for it.  If those messages are not processed prior to ControlUpdateCurrentTab()'s
-			// use of WM_SETREDRAW, they might get dropped out of the queue and lost.
-			UpdateWindow(mHwnd);
-			ControlUpdateCurrentTab(*focused_control, true);
+			if (mTabControlCount)
+			{
+				// Since this is the first activation, if the focus wound up on a tab control itself as a result
+				// of the above, focus the first control of that tab since that is traditional.  HOWEVER, do not
+				// instead default tab controls to lacking WS_TABSTOP since it is traditional for them to have
+				// that property, probably to aid accessibility.
+				GuiControlType *focused_control = FindControl(focused_hwnd);
+				if (focused_control && focused_control->type == GUI_CONTROL_TAB)
+				{
+					// v1.0.27: The following must be done, at least in some cases, because otherwise
+					// controls outside of the tab control will not get drawn correctly.  I suspect this
+					// is because at the exact moment execution reaches the line below, the window is in
+					// a transitional state, with some WM_PAINT and other messages waiting in the queue
+					// for it.  If those messages are not processed prior to ControlUpdateCurrentTab()'s
+					// use of WM_SETREDRAW, they might get dropped out of the queue and lost.
+					UpdateWindow(mHwnd);
+					ControlUpdateCurrentTab(*focused_control, true);
+				}
+			}
+			//else no tab controls, but focus has already been set.  Nothing needs to be done.
 		}
+		else // No window/control has keyboard focus (see comment below).
+			SetFocus(mHwnd);
+			// The above was added in v1.0.46.05 to fix the fact that a GUI window could be both active and
+			// foreground yet not have keyboard focus.  This occurs under the following circumstances (and
+			// possibly others):
+			// 1) A script with a menu item that shows a GUI window is reloaded via its tray menu item "Reload".
+			// 2) The GUI window is shown via its custom tray menu item.
+			// 3) The window becomes active and foreground, but doesn't have keyboard focus (not even its
+			//    GuiEscape label will work until you switch away from that window then back to it).
+			// Note: SetFocus() apparently works even on parent windows, which is good because otherwise,
+			// might have to do a loop to find the first input-capable control that's enabled+visible.
 	}
 
 	mGuiShowHasNeverBeenDone = false;
@@ -8612,7 +8630,7 @@ void GuiType::ControlUpdateCurrentTab(GuiControlType &aTabControl, bool aFocusFi
 			if (!(PtInRect(&tab_rect, rect_pt[0]) && PtInRect(&tab_rect, rect_pt[1])))
 				invalidate_entire_parent = true;
 		}
-		// The aboves use of show/hide across a wide range of controls may be necessary to support things
+		// The above's use of show/hide across a wide range of controls may be necessary to support things
 		// such as the dynamic removal of tabs via "GuiControl,, MyTab, |NewTabSet1|NewTabSet2", i.e. if the
 		// newly added removed tab was active, it's controls should now be hidden.
 		// The below sets focus to the first input-capable control, which seems standard for the tab-control

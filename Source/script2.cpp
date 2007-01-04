@@ -1353,7 +1353,7 @@ ResultType Line::Input()
 			// namely punctuation marks -- but not for alphabetic chars.  In the
 			// future, an option can be added to the Options param to treat
 			// end chars as case sensitive (if there is any demand for that):
-			if (!IsCharAlpha(*single_char_string))
+			if (*single_char_string && !IsCharAlpha(*single_char_string)) // v1.0.46.05: Added check for "*single_char_string" so that non-single-char strings like {F9} work as end keys even when the Shift key is being held down (this fixes the behavior to be like it was in pre-v1.0.45).
 			{
 				// Now we know it's not alphabetic, and it's not a key whose name
 				// is longer than one char such as a function key or numpad number.

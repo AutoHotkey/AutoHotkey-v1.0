@@ -7733,6 +7733,13 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 						// as required by ByRef:
 						for (cp = param_start, param_last_char = omit_trailing_whitespace(param_start, param_end - 1)
 							; cp <= param_last_char; ++cp)
+						{
+							if (*cp == ':' && cp[1] == '=')
+								// v1.0.46.05: This section fixes the inability to pass ByRef certain non-trivial
+								// assignments like X := " ". Although this doesn't give 100% detection, something
+								// more elaborate seems unjustified (in both code size and performance) given that
+								// this is only a syntax check.
+								break;
 							if (strchr(EXPR_FORBIDDEN_BYREF, *cp)) // This character isn't allowed in something passed ByRef unless it's an assignment (which is checked below).
 							{
 								if (Line::StartsWithAssignmentOp(cp))
@@ -7745,6 +7752,7 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 								abort = true; // So that the caller doesn't also report an error.
 								return line->PreparseError(ERR_BYREF, param_start);   // param_start seems more informative than func.mParam[deref->param_count].var->mName
 							}
+						}
 						// Below relies on the above having been done because the above should prevent
 						// any is_function derefs from being possible since their parentheses would have been caught
 						// as an error:
