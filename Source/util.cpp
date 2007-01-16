@@ -853,8 +853,8 @@ UINT StrReplace(char *aHaystack, char *aOld, char *aNew, StringCaseSenseType aSt
 // memory savings and avoidance of any reallocs since the initial alloc was always exactly right; however,
 // testing shows that one or two reallocs are generally much quicker than doing the size-calculation phase
 // because extra alloc'ing & memcpy'ing is much faster than an extra search through haystack for all the matches.
-// Furthermore, the new approach minimizes reallocs by using smart prediction.  It also shrinks the result memory
-// via _expand() to avoid giving the caller back more memory than it needs.  These optimizations seem to make
+// Furthermore, the new approach minimizes reallocs by using smart prediction.  Furthermore, the caller shrinks
+// the result memory via _expand() to avoid having too much extra/overhang.  These optimizations seem to make
 // the new approach better than the old one in every way, but especially performance.
 {
 	#define REPLACEMENT_MODE2 aDest  // For readability.
@@ -993,16 +993,7 @@ UINT StrReplace(char *aHaystack, char *aOld, char *aNew, StringCaseSenseType aSt
 	}
 	result[result_length] = '\0'; // Must terminate it unconditionally because other sections usually don't do it.
 
-	if (REPLACEMENT_MODE2)
-	{
-		// Since at least 80% of the time, the caller will be hanging this memory onto a variable rather than
-		// immediately freeing it, shrink the memory if there's a lot of wasted space in it (even if caller calls
-		// _msize() to determine the entire capacity, the extra capacity is seldom utilized in real-world scripts).
-		if (result_size - result_length > 1024)
-			result = (char *)_expand(result, result_length + 1); // MSDN implies that when shrinking, this won't return NULL unless something is terribly wrong (e.g. corrupted heap).  So caller probably doesn't need to worry about that.
-			// _expand() is only about 75 bytes of uncompressed code size and probably performs very quickly when shrinking.
-	}
-	else // Mode #1.
+	if (!REPLACEMENT_MODE2) // Mode #1.
 	{
 		// Since caller didn't provide destination memory, copy the result from our temporary memory (that was used
 		// for performance) back into the caller's original buf (which has already been confirmed to be large enough).
@@ -1150,7 +1141,8 @@ int PredictReplacementSize(int aLengthDelta, int aReplacementCount, int aLimit, 
 			// 2) When Haystack-or-current length is relatively small, allow the speculative memory allocation
 			//    to be many times larger than that length because the risk of swapping is low.  HOWEVER, TO
 			//    AVOID WASTING MEMORY, the caller should probably call _expand() to shrink the result
-			//    when it detects that far fewer replacements were needed than predicted.
+			//    when it detects that far fewer replacements were needed than predicted (this is currently
+			//    done by Var::AcceptNewMem()).
 			int total_delta_limit = (int)(haystack_or_new_length < 10*1024*1024 ? quality*10*1024*1024
 				: quality*haystack_or_new_length); // See comment above.
 			total_delta = additional_replacements_expected

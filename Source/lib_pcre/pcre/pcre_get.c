@@ -436,7 +436,6 @@ pcre_get_named_substring(const pcre *code, const char *subject, int *ovector,
 int n = get_first_set(code, stringname, ovector);
 if (n <= 0) return n;
 return pcre_get_substring(subject, ovector, stringcount, n, stringptr);
-
 }
 
 

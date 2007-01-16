@@ -79,7 +79,7 @@ for (p = string; length-- > 0; p++)
   register int ab;
   register int c = *p;
   if (c < 128) continue;
-  if ((c & 0xc0) != 0xc0) return p - string;
+  if (c < 0xc0) return p - string;
   ab = _pcre_utf8_table4[c & 0x3f];  /* Number of additional bytes */
   if (length < ab) return p - string;
   length -= ab;

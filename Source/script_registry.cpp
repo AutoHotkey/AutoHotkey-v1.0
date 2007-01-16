@@ -2,7 +2,7 @@
 //
 // AutoIt
 //
-// Copyright (C)1999-2006:
+// Copyright (C)1999-2007:
 //		- Jonathan Bennett <jon@hiddensoft.com>
 //		- Others listed at http://www.autoitscript.com/autoit3/docs/credits.htm
 //      - Chris Mallett (support@autohotkey.com): adaptation of this file's

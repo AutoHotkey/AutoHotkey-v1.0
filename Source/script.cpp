@@ -8226,8 +8226,7 @@ void Line::FreeDerefBufIfLarge()
 		// deref buffer (they make copies of anything they need prior to calling MsgSleep() or anything
 		// else that might pump messages and thus result in a call to us here).
 		free(sDerefBuf); // The above size-check has ensured this is non-NULL.
-		sDerefBuf = NULL;
-		sDerefBufSize = 0;
+		SET_S_DEREF_BUF(NULL, 0);
 		--sLargeDerefBufs;
 		if (!sLargeDerefBufs)
 			KILL_DEREF_TIMER
@@ -8612,11 +8611,11 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 		case ACT_LOOP:
 		case ACT_REPEAT:
 		{
+			HKEY root_key_type; // For registry loops, this holds the type of root key, independent of whether it is local or remote.
 			AttributeType attr = line->mAttribute;
-			HKEY root_key_type = NULL; // This will hold the type of root key, independent of whether it is local or remote.
 			if (attr == ATTR_LOOP_REG)
 				root_key_type = RegConvertRootKey(ARG1);
-			else if (attr == ATTR_LOOP_UNKNOWN || attr == ATTR_NONE)
+			else if (ATTR_LOOP_IS_UNKNOWN_OR_NONE(attr))
 			{
 				// Since it couldn't be determined at load-time (probably due to derefs),
 				// determine whether it's a file-loop, registry-loop or a normal/counter loop.
@@ -8660,36 +8659,49 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 				}
 			}
 
-			bool recurse_subfolders = (attr == ATTR_LOOP_FILE && *ARG3 == '1' && !*(ARG3 + 1))
-				|| (attr == ATTR_LOOP_REG && *ARG4 == '1' && !*(ARG4 + 1));
-
-			__int64 iteration_limit = 0;
-			bool is_infinite = line->mArgc < 1;
-			if (!is_infinite)
-				// Must be set to zero at least for ATTR_LOOP_FILE:
-				iteration_limit = (attr == ATTR_LOOP_FILE || attr == ATTR_LOOP_REG || attr == ATTR_LOOP_READ_FILE
-					||  attr == ATTR_LOOP_PARSE) ? 0 : ATOI64(ARG1);
-
-			if (line->mActionType == ACT_REPEAT && !iteration_limit)
-				is_infinite = true;  // Because a 0 means infinite in AutoIt2 for the REPEAT command.
-			// else if it's negative, zero iterations will be performed automatically.
-
 			FileLoopModeType file_loop_mode;
-			if (attr == ATTR_LOOP_FILE)
-			{
-				file_loop_mode = (line->mArgc <= 1) ? FILE_LOOP_FILES_ONLY : ConvertLoopMode(ARG2);
-				if (file_loop_mode == FILE_LOOP_INVALID)
-					return line->LineError(ERR_PARAM2_INVALID ERR_ABORT, FAIL, ARG2);
-			}
-			else if (attr == ATTR_LOOP_REG)
-			{
-				file_loop_mode = (line->mArgc <= 2) ? FILE_LOOP_FILES_ONLY : ConvertLoopMode(ARG3);
-				if (file_loop_mode == FILE_LOOP_INVALID)
-					return line->LineError(ERR_PARAM3_INVALID ERR_ABORT, FAIL, ARG3);
-			}
-			else
-				file_loop_mode = FILE_LOOP_INVALID;
+			bool recurse_subfolders;
+			bool is_infinite = false; // Set default early to improve maintainability. "is_infinite" is more maintainable and future-proof than using LLONG_MAX to simulate an infinite loop. Plus it gives peace-of-mind and the LLONG_MAX method doesn't measurably improve benchmarks.
+			__int64 iteration_limit;
 
+			if (attr == ATTR_LOOP_NORMAL)
+			{
+				file_loop_mode = FILE_LOOP_INVALID; // This signals PerformLoop() that its a normal loop vs. file-pattern loop.
+				recurse_subfolders = false; // Avoids debug-mode's "used without having been defined" (though it's merely passed as a parameter, not ever used in this case).
+				if (line->mArgc > 0) // At least one parameter is present.
+				{
+					iteration_limit = ATOI64(ARG1);
+					if (line->mActionType == ACT_REPEAT && !iteration_limit)
+						is_infinite = true; // Because a 0 means infinite in AutoIt2 for the REPEAT command.
+					// else if it's negative, zero iterations will be performed automatically.
+				}
+				else // It's either ACT_REPEAT or an ACT_LOOP without parameters.
+				{
+					is_infinite = true;  // Override the default set earlier.
+					iteration_limit = 0; // Avoids debug-mode's "used without having been defined" (though it's merely passed as a parameter, not ever used in this case).
+				}
+			}
+			else // attr != ATTR_LOOP_NORMAL
+			{
+				iteration_limit = 0; // Must be set to zero at least for ATTR_LOOP_FILE because some things rely on such loops always being beyond their iteration limit so that other criteria take effect rather than getting short-circuited.
+				if (attr == ATTR_LOOP_FILE)
+				{
+					file_loop_mode = (line->mArgc <= 1) ? FILE_LOOP_FILES_ONLY : ConvertLoopMode(ARG2);
+					if (file_loop_mode == FILE_LOOP_INVALID)
+						return line->LineError(ERR_PARAM2_INVALID ERR_ABORT, FAIL, ARG2);
+					recurse_subfolders = (*ARG3 == '1' && !*(ARG3 + 1));
+				}
+				else if (attr == ATTR_LOOP_REG)
+				{
+					file_loop_mode = (line->mArgc <= 2) ? FILE_LOOP_FILES_ONLY : ConvertLoopMode(ARG3);
+					if (file_loop_mode == FILE_LOOP_INVALID)
+						return line->LineError(ERR_PARAM3_INVALID ERR_ABORT, FAIL, ARG3);
+					recurse_subfolders = (*ARG4 == '1' && !*(ARG4 + 1));
+				}
+			}
+
+			// Now that it's certain the loop will launch (i.e. there was no error or early return above),
+			// it's safe to make changes to global things like g.mLoopIteration.
 			bool continue_main_loop = false; // Init prior to below call.
 			jump_to_line = NULL; // Init prior to below call.
 
@@ -8758,8 +8770,8 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 					result = OK;
 			}
 			else // All other loops types are handled this way:
-				result = line->PerformLoop(apReturnValue, continue_main_loop, jump_to_line, attr, file_loop_mode, recurse_subfolders
-					, ARG1, iteration_limit, is_infinite);
+				result = line->PerformLoop(apReturnValue, continue_main_loop, jump_to_line, file_loop_mode
+					, recurse_subfolders, ARG1, iteration_limit, is_infinite);
 
 			// RESTORE THE PREVIOUS A_LOOPXXX VARIABLES.  If there isn't an outer loop, this will set them
 			// all to NULL/0, which is the most proper and also in keeping with historical behavior.
@@ -8965,7 +8977,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 
 
 
-inline ResultType Line::EvaluateCondition()
+ResultType Line::EvaluateCondition() // __forceinline on this reduces benchmarks, probably because it reduces caching effectiveness by having code in the case that doesn't execute much in the benchmarks.
 // Returns FAIL, CONDITION_TRUE, or CONDITION_FALSE.
 {
 #ifdef _DEBUG
@@ -9284,9 +9296,9 @@ inline ResultType Line::EvaluateCondition()
 
 
 
-ResultType Line::PerformLoop(char **apReturnValue, bool &aContinueMainLoop
-	, Line *&aJumpToLine, AttributeType aAttr, FileLoopModeType aFileLoopMode
-	, bool aRecurseSubfolders, char *aFilePattern, __int64 aIterationLimit, bool aIsInfinite)
+ResultType Line::PerformLoop(char **apReturnValue, bool &aContinueMainLoop, Line *&aJumpToLine
+	, FileLoopModeType aFileLoopMode, bool aRecurseSubfolders, char *aFilePattern
+	, __int64 aIterationLimit, bool aIsInfinite)
 // Note: Even if aFilePattern is just a directory (i.e. with not wildcard pattern), it seems best
 // not to append "\\*.*" to it because the pattern might be a script variable that the user wants
 // to conditionally resolve to various things at runtime.  In other words, it's valid to have
@@ -9301,7 +9313,7 @@ ResultType Line::PerformLoop(char **apReturnValue, bool &aContinueMainLoop
 	char file_path[MAX_PATH], naked_filename_or_pattern[MAX_PATH]; // Giving +3 extra for "*.*" seems fairly pointless because any files that actually need that extra room would fail to be retrieved by FindFirst/Next due to their inability to support paths much over 256.
 	size_t file_path_length;
 
-	if (aAttr == ATTR_LOOP_FILE)
+	if (aFileLoopMode != FILE_LOOP_INVALID) // This is a file-pattern loop (ATTR_LOOP_FILE).
 	{
 		// Make a local copy of the path given in aFilePattern because as the lines of
 		// the loop are executed, the deref buffer (which is what aFilePattern might
@@ -9338,7 +9350,7 @@ ResultType Line::PerformLoop(char **apReturnValue, bool &aContinueMainLoop
 
 	ResultType result;
 	Line *jump_to_line = NULL;
-	for (; aIsInfinite || file_found || g.mLoopIteration <= aIterationLimit; ++g.mLoopIteration)
+	for (; aIsInfinite || g.mLoopIteration <= aIterationLimit || file_found; ++g.mLoopIteration) // Ordered for short-circuit performance.
 	{
 		if (file_found) // inner loop's file takes precedence over outer's.
 			g.mLoopFile = &new_current_file;
@@ -9404,7 +9416,7 @@ ResultType Line::PerformLoop(char **apReturnValue, bool &aContinueMainLoop
 	// every subfolder to search for more files and folders inside that match aFilePattern.  We can't
 	// do this in the first loop, above, because it may have a restricted file-pattern such as *.txt
 	// and we want to find and recurse into ALL folders:
-	if (aAttr != ATTR_LOOP_FILE || !aRecurseSubfolders)
+	if (aFileLoopMode == FILE_LOOP_INVALID || !aRecurseSubfolders) // Not a file-pattern loop, or it is but it's not recursing.
 		return OK;
 
 	// Since above didn't return, this is a file-loop and recursion into sub-folders has been requested.
@@ -9441,7 +9453,7 @@ ResultType Line::PerformLoop(char **apReturnValue, bool &aContinueMainLoop
 		// its first loop iteration.  This is because this directory is being recursed into, not
 		// processed itself as a file-loop item (since this was already done in the first loop,
 		// above, if its name matches the original search pattern):
-		result = PerformLoop(apReturnValue, aContinueMainLoop, aJumpToLine, aAttr, aFileLoopMode, aRecurseSubfolders
+		result = PerformLoop(apReturnValue, aContinueMainLoop, aJumpToLine, aFileLoopMode, aRecurseSubfolders
 			, file_path, aIterationLimit, aIsInfinite);
 		// result should never be LOOP_CONTINUE because the above call to PerformLoop() should have
 		// handled that case.  However, it can be LOOP_BREAK if it encoutered the break command.

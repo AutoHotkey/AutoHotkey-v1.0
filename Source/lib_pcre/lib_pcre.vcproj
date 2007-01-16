@@ -4,10 +4,6 @@
 	Version="7.10"
 	Name="lib_pcre"
 	ProjectGUID="{39037993-9571-4DF2-8E39-CD2909043574}"
-	SccProjectName="SAK"
-	SccAuxPath="SAK"
-	SccLocalPath="SAK"
-	SccProvider="SAK"
 	Keyword="Win32Proj">
 	<Platforms>
 		<Platform
@@ -27,7 +23,6 @@
 				MinimalRebuild="TRUE"
 				BasicRuntimeChecks="3"
 				RuntimeLibrary="5"
-				UsePrecompiledHeader="0"
 				WarningLevel="3"
 				Detect64BitPortabilityProblems="TRUE"
 				DebugInformationFormat="4"
@@ -76,7 +71,6 @@
 				RuntimeLibrary="4"
 				BufferSecurityCheck="FALSE"
 				EnableFunctionLevelLinking="TRUE"
-				UsePrecompiledHeader="0"
 				WarningLevel="3"
 				Detect64BitPortabilityProblems="FALSE"
 				DebugInformationFormat="0"
@@ -137,6 +131,9 @@
 				RelativePath=".\pcre\pcre_globals.c">
 			</File>
 			<File
+				RelativePath=".\pcre\pcre_newline.c">
+			</File>
+			<File
 				RelativePath=".\pcre\pcre_refcount.c">
 			</File>
 			<File
@@ -144,11 +141,6 @@
 			</File>
 			<File
 				RelativePath=".\pcre\pcre_tables.c">
-				<FileConfiguration
-					Name="Release|Win32">
-					<Tool
-						Name="VCCLCompilerTool"/>
-				</FileConfiguration>
 			</File>
 			<File
 				RelativePath=".\pcre\pcre_try_flipped.c">

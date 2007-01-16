@@ -49,12 +49,14 @@ inline bool IsTextMatch(char *aHaystack, char *aNeedle)
 {
 	if (!*aNeedle) // The empty string is always found, regardless of mode.
 		return true;
-	if (g.TitleMatchMode == FIND_ANYWHERE)
-		return strstr(aHaystack, aNeedle);
-	if (g.TitleMatchMode == FIND_IN_LEADING_PART)
-		return !strncmp(aHaystack, aNeedle, strlen(aNeedle));
-	// Otherwise: Exact match.
-	return !strcmp(aHaystack, aNeedle);
+	switch(g.TitleMatchMode)
+	{
+	case FIND_ANYWHERE:        return strstr(aHaystack, aNeedle);
+	case FIND_REGEX:           return RegExMatch(aHaystack, aNeedle);
+	case FIND_IN_LEADING_PART: return !strncmp(aHaystack, aNeedle, strlen(aNeedle));
+	default: // Otherwise: Exact match.
+		return !strcmp(aHaystack, aNeedle); 
+	}
 }
 
 

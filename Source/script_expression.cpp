@@ -149,7 +149,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 	char *op_end, *cp;
 	DerefType *deref, *this_deref, *deref_start, *deref_alloca;
 	int derefs_in_this_double;
-	char cp1;
+	int cp1; // int vs. char benchmarks slightly faster, and is slightly smaller in code size.
 
 	for (cp = mArg[aArgIndex].text, deref = mArg[aArgIndex].deref // Start at the begining of this arg's text and look for the next deref.
 		;; ++deref, ++infix_count) // FOR EACH DEREF IN AN ARG:
@@ -981,8 +981,10 @@ end_of_infix_to_postfix:
 	int j, s, actual_param_count, delta;
 	Func *prev_func;
 	char *result; // "result" is used for return values and also the final result.
+	VarSizeType result_length;
 	size_t result_size, alloca_usage = 0; // v1.0.45: Track amount of alloca mem to avoid stress on stack from extreme expressions (mostly theoretical).
-	bool done, make_result_persistent, early_return, left_branch_is_true, left_was_negative, is_pre_op;
+	BOOL done, done_and_have_an_output_var, make_result_persistent, left_branch_is_true
+		, left_was_negative, is_pre_op; // BOOL vs. bool benchmarks slightly faster, and is slightly smaller in code size (or maybe it's cp1's int vs. char that shrunk it).
 	ExprTokenType *circuit_token;
 	Var *sym_assign_var, *temp_var;
 	VarBkp *var_backup = NULL;  // If needed, it will hold an array of VarBkp objects. v1.0.40.07: Initialized to NULL to facilitate an approach that's more maintainable.
@@ -1198,7 +1200,9 @@ end_of_infix_to_postfix:
 
 				// RESTORE THE CIRCUIT TOKEN (after handling what came back inside it):
 				#define EXPR_IS_DONE (!stack_count && i == postfix_count-1) // True if we've used up the last of the operators & operands.
-				done = output_var && EXPR_IS_DONE; // i.e. this is ACT_ASSIGNEXPR and we've now produced the final result.
+				done = EXPR_IS_DONE;
+				done_and_have_an_output_var = done && output_var; // i.e. this is ACT_ASSIGNEXPR and we've now produced the final result.
+				make_result_persistent = true; // Set default.
 				if (this_token.circuit_token) // The called function allocated some memory here (to facilitate returning long strings) and turned it over to us.
 				{
 					// In most cases, the string stored in circuit_token is the same address as this_token.marker
@@ -1213,11 +1217,13 @@ end_of_infix_to_postfix:
 						// the new memory block). Thus we give it a new block directly to avoid all of that.
 						// This should be a big boost to performance when long strings are involved.
 						// So now, turn over responsibility for this memory to the variable. The called function
-						// is responsible for having stored the length of what's in the memory as an overload
-						// of this_token.buf.
-						if (done)
+						// is responsible for having stored the length of what's in the memory as an overload of
+						// this_token.buf, but only when that memory is the result (currently might always be true).
+						if (done_and_have_an_output_var)
 						{
-							output_var->AcceptNewMem((char *)this_token.circuit_token, (VarSizeType)(size_t)this_token.buf);
+							// AcceptNewMem() will shrink the memory for us, via _expand(), if there's a lot of
+							// extra/unused space in it.
+							output_var->AcceptNewMem((char *)this_token.circuit_token, (VarSizeType)(size_t)this_token.buf); // "buf" is the length. See comment higher above.
 							goto normal_end_skip_output_var; // No need to restore circuit_token because the expression is finished.
 						}
 						if (i < postfix_count-1 && postfix[i+1]->symbol == SYM_ASSIGN // Next operation is ":=".
@@ -1228,15 +1234,18 @@ end_of_infix_to_postfix:
 							// whenever this result is going to be assigned to a variable as the very next step.
 							// See the comment section higher above for examples.
 							ExprTokenType &left = *STACK_POP; // Above has already confirmed that it's SYM_VAR and VAR_NORMAL.
+							// AcceptNewMem() will shrink the memory for us, via _expand(), if there's a lot of
+							// extra/unused space in it.
 							left.var->AcceptNewMem((char *)this_token.circuit_token, (VarSizeType)(size_t)this_token.buf);
 							this_token.circuit_token = postfix[++i]->circuit_token; // Must be done AFTER above. this_token.circuit_token should have been NULL prior to this because the final right-side result of an assignment shouldn't be the last item of an AND/OR/IFF's left branch. The assignment itself would be that.
 							this_token.var = left.var;   // Make the result a variable rather than a normal operand so that its
 							this_token.symbol = SYM_VAR; // address can be taken, and it can be passed ByRef. e.g. &(x:=1)
 							goto push_this_token;
 						}
-					}
-					// Otherwise, not done yet; so handle this memory the normal way: Mark it to be freed at the
-					// time we return.
+						make_result_persistent = false; // Override the default set higher above.
+					} // if (this_token.circuit_token == this_token.marker)
+					// Since above didn't goto, we're not done yet; so handle this memory the normal way: Mark it
+					// to be freed at the time we return.
 					if (mem_count == MAX_EXPR_MEM_ITEMS) // No more slots left (should be nearly impossible).
 					{
 						LineError(ERR_OUTOFMEM ERR_ABORT, FAIL, func.mName);
@@ -1244,13 +1253,14 @@ end_of_infix_to_postfix:
 					}
 					mem[mem_count++] = (char *)this_token.circuit_token;
 				}
+				//else this_token.circuit_token==NULL, so the BIF just called didn't allocate memory to give to us.
 				this_token.circuit_token = circuit_token; // Restore it to its original value.
 
 				// HANDLE THE RESULT (unless it was already handled above due to an optimization):
 				if (IS_NUMERIC(this_token.symbol)) // No need for make_result_persistent or early Assign(). Any numeric result can be considered final because it's already stored in permanent memory (namely the token itself).
 					goto push_this_token; // For code simplicity, the optimization for numeric results is done at a later stage.
 				//else it's a string, which might need to be moved to persistent memory further below.
-				if (done) // In this case, "done" means the expression is finished *and* we have an output_var available.
+				if (done_and_have_an_output_var) // RELIES ON THE IS_NUMERIC() CHECK above having been done first.
 				{
 					// v1.0.45: This mode improves performance by avoiding the need to copy the result into
 					// more persistent memory, then avoiding the need to copy it into the defer buffer (which
@@ -1258,9 +1268,19 @@ end_of_infix_to_postfix:
 					output_var->Assign(this_token.marker); // Marker can be used because symbol will never be SYM_VAR
 					goto normal_end_skip_output_var;       // in this case. ALSO: Assign() contains an optimization that avoids actually doing the mem-copying if output_var is being assigned to itself (which can happen in cases like RegExMatch()).
 				}
-				// Otherwise, there's no output_var or the expressions isn't finished yet, so do normal processing.
+				// Otherwise, there's no output_var or the expression isn't finished yet, so do normal processing.
+				if (!*this_token.marker) // Various make-persistent sections further below may rely on this check.
+				{
+					this_token.marker = ""; // Ensure it's a constant memory area, not a buf that might get overwritten soon.
+					goto push_this_token; // For code simplicity, the optimization for numeric results is done at a later stage.
+				}
+				// Since above didn't goto, "result" is not SYM_INTEGER/FLOAT/VAR, and not "".  Therefore, it's
+				// either a pointer to static memory (such as a constant string), or more likely the small buf
+				// we gave to the BIF for storing small strings.  For simplicity assume its the buf, which is
+				// volatile and must be made persistent if called for below.
 				result = this_token.marker; // Marker can be used because symbol will never be SYM_VAR in this case.
-				early_return = false; // For maintainability.  A built-in function can't cause an early return, unlike the Exit command in a user-defined function.
+				if (make_result_persistent) // At this stage, this means that the above wasn't able to determine its correct value yet.
+					make_result_persistent = !done;
 			}
 			else // It's not a built-in function, or it's a built-in that was overridden with a custom function.
 			{
@@ -1430,18 +1450,32 @@ end_of_infix_to_postfix:
 				// g.CurrentFunc accurate, even amidst the asynchronous saving and restoring of "g" itself:
 				g.CurrentFunc = prev_func;
 
-				if (   !(early_return = (aResult == EARLY_EXIT || aResult == FAIL))   ) // No need to do any of this for early_return because for backward compatibility, ACT_ASSIGNEXPR is aborted by early return (i.e. output_var's original contents are not altered).
+				if (aResult == EARLY_EXIT || aResult == FAIL) // "Early return". See comment below.
 				{
-					// Fix for v1.0.45.03: The second line below was added to detect whether output_var is among
-					// the variables that are about to be restored from backup.  If it is, we can't assign to it
-					// now because it's currently a local that belongs to the instance we're in the middle of
-					// calling; i.e. it doesn't belong to our instance (which is beneath it on the call stack
-					// until after the restore-from-backup is done later below).  And we can't assign "result"
-					// to it *after* the restore because by then result may have been freed (if it happens to be
-					// a local variable too).  Therefore, continue on to the normal method, which will check
-					// whether "result" needs to be stored in more persistent memory.
-					if (output_var && EXPR_IS_DONE // i.e. this is ACT_ASSIGNEXPR and we've now produced the final result.
+					// Take a shortcut because for backward compatibility, ACT_ASSIGNEXPR (and anything else
+					// for that matter) is being aborted by this type of early return (i.e. if there's an
+					// output_var, its contents are left as-is).  In other words, this expression will have
+					// no result storable by the outside world.
+					Var::FreeAndRestoreFunctionVars(func, var_backup, var_backup_count);
+					result_to_return = NULL; // Use NULL to inform our caller that this thread is finished (whether through normal means such as Exit or a critical error).
+					// Above: The callers of this function know that the value of aResult (which already contains
+					// the reason for early exit) should be considered valid/meaningful only if result_to_return
+					// is NULL.  aResult has already been set higher above for our caller.
+					goto normal_end_skip_output_var; // output_var is left unchanged in these cases.
+				}
+				// Since above didn't goto, this isn't an early return, so proceed normally.
+				if (done = EXPR_IS_DONE) // Resolve macro only once for use in more than one place below.
+				{
+					if (output_var // i.e. this is ACT_ASSIGNEXPR and we've now produced the final result.
 						&& !(var_backup && g.CurrentFunc == &func && output_var->IsNonStaticLocal())) // Ordered for short-circuit performance. See multiline comment above.
+						// Above line is a fix for v1.0.45.03: It detects whether output_var is among the variables
+						// that are about to be restored from backup.  If it is, we can't assign to it now
+						// because it's currently a local that belongs to the instance we're in the middle of
+						// calling; i.e. it doesn't belong to our instance (which is beneath it on the call stack
+						// until after the restore-from-backup is done later below).  And we can't assign "result"
+						// to it *after* the restore because by then result may have been freed (if it happens to be
+						// a local variable too).  Therefore, continue on to the normal method, which will check
+						// whether "result" needs to be stored in more persistent memory.
 					{
 						// v1.0.45: Take a shortcut for performance.  Doing it this way saves up to two memcpy's
 						// (make_result_persistent then copy into deref buffer).  In some cases, it also saves
@@ -1455,52 +1489,105 @@ end_of_infix_to_postfix:
 						// the contents of that local variable can be salvaged if it's about to be destroyed
 						// anyway in conjunction with normal function-call cleanup. In other words, we can take
 						// that local variable's memory and directly hang it onto the output_var.
-						output_var->Assign(result);
+						result_length = (VarSizeType)strlen(result);
+						// 1.0.46.06: If the UDF has stored its result in its deref buffer, take possession
+						// of that buffer, which saves a memcpy of a potentially huge string.  The cost
+						// of this is that if there are any other UDF-calls pending after this one, the
+						// code in their bodies will have to create another deref buffer if they need one.
+						if (result == sDerefBuf && result_length >= MAX_ALLOC_SIMPLE) // Result is in their buffer and it's longer than what can fit in a SimpleHeap variable (avoids wasting SimpleHeap memory).
+						{
+							// AcceptNewMem() will shrink the memory for us, via _expand(), if there's a lot of
+							// extra/unused space in it.
+							output_var->AcceptNewMem(result, result_length);
+							NULLIFY_S_DEREF_BUF // Force any UDFs called subsequently by us to create a new deref buffer because this one was just taken over by a variable.
+						}
+						else
+							output_var->Assign(result, result_length);
 						Var::FreeAndRestoreFunctionVars(func, var_backup, var_backup_count); // Do end-of-function-call cleanup (see comment above). No need to do make_result_persistent section.
 						goto normal_end_skip_output_var; // Nothing more to do because it has even taken care of output_var already.
 					}
-					// Otherwise (since above didn't goto): !output_var || !EXPR_IS_DONE || var_backup, so do
-					// normal handling of "result" below.
+					if (mActionType == ACT_EXPRESSION) // Isolated expression: Outermost function call's result will be ignored, so no need to store it.
+					{
+						Var::FreeAndRestoreFunctionVars(func, var_backup, var_backup_count); // Do end-of-function-call cleanup (see comment above). No need to do make_result_persistent section.
+						goto normal_end_skip_output_var; // No output_var is possible for ACT_EXPRESSION.
+					}
+				} // if (done)
+				// Otherwise (since above didn't goto), the following statement is true:
+				//    !output_var || !EXPR_IS_DONE || var_backup
+				// ...so do normal handling of "result". Also, no more optimizations of output_var should be
+				// attempted because either we're not "done" (i.e. it isn't valid to assign to output_var yet)
+				// or it isn't safe to store in output_var yet for the reason mentioned earlier.
+				if (!*result) // RELIED UPON by the make-persistent check further below.
+				{
+					// Empty strings are returned pretty often by UDFs, such as when they don't use "return"
+					// at all.  Therefore, handle them fully now, which should improve performance (since it
+					// avoids all the other checking later on).  It also doesn't hurt code size because this
+					// check avoids having to check for empty string in other sections later on.
+					this_token.marker = ""; // Ensure it's a non-volatile address instead (read-only mem is okay for expression results).
+					this_token.symbol = SYM_OPERAND; // SYM_OPERAND vs. SYM_STRING probably doesn't matter in the case of empty string, but it's used for consistency with what the other UDF handling further below does.
+					Var::FreeAndRestoreFunctionVars(func, var_backup, var_backup_count);
+					goto push_this_token;
 				}
-				//else early_return==true, so no need to store anything in result because for backward compatibility, this expression will have no result storable by the outside world (e.g. ACT_ASSIGNEXPR).
-			} // Call to a user defined function.
-
-			// Above just called a function (either user-defined or built-in).
-			done = EXPR_IS_DONE; // Macro called again because its components may have changed. Resolve macro only once for use in more than one place below.
-
-			// The result just returned may need to be copied to a more persistent location.  This is done right
-			// away if the result is the contents of a local variable (since all locals are about to be freed
-			// and overwritten), which is assumed to be the case if it's not in the new deref buf because it's
-			// difficult to distinguish between when the function returned one of its own local variables
-			// rather than a global or a string/numeric literal).  The only exceptions are:
-			if (early_return // We're about to return early, so the caller will be ignoring this result entirely.
-				|| done && mActionType == ACT_EXPRESSION // Isolated expression: Outermost function call's result will be ignored, so no need to store it.
-				|| mem_count && result == mem[mem_count - 1]) // v1.0.45: A call to a built-in function can sometimes store its result here, which is already persistent.
-				make_result_persistent = false;
-			else if (result < sDerefBuf || result >= sDerefBuf + sDerefBufSize) // Not in their deref buffer (yields correct result even if sDerefBuf is NULL).
-				// In this case, the result must be assumed to be one of their local variables (since there's
-				// no way to distinguish between that and a literal string such as "abc"?). So it should be
-				// immediately copied since if it's a local, it's about to be freed.
-				make_result_persistent = true;
-			// So now since the above didn't set the value, the result must be in their deref buffer, perhaps
-			// due to something like "return x+3" on their part.
-			else if (done) // We don't have to make it persistent here because the final stage will copy it from their deref buf into ours (since theirs is only deleted later, by our caller).
-				make_result_persistent = false;
-			else // There are more operators/operands to be evaluated, but if there are no more function calls, we don't have to make it persistent since their deref buf won't be overwritten by anything during the time we need it.
-			{
-				if (func.mIsBuiltIn)
-					make_result_persistent = true; // Future operators/operands might use the buffer where the result is stored, so must copy it somewhere else (unless "done", which was already checked above).
-				else
+				// The following section is done only for UDFs (i.e. here) rather than for BIFs too because
+				// the only BIFs remaining that haven't yet been fully handled by earlier optimizations are
+				// those whose results are almost always tiny (small strings, since floats/integers were already
+				// handled earlier). So performing the following optimization for them would probably reduce
+				// average-case performance (since both performing and checking for the optimization is costly).
+				// It's fairly rare that the following optimization is even be applicable because it requires
+				// an assignment *internal* to an expression, such as "if not var:=func()", or "a:=b, c:=func()".
+				// But it seems best to optimize these cases so that commas aren't penalized.
+				if (i < postfix_count-1 && postfix[i+1]->symbol == SYM_ASSIGN // Next operation is ":=".
+					&& stack_count && stack[stack_count-1]->symbol == SYM_VAR // i.e. let the next iteration handle it instead of doing it here.  Further below relies on this having been checked.
+					&& stack[stack_count-1]->var->Type() == VAR_NORMAL) // Don't do clipboard here because don't want its result to be SYM_VAR, yet there's no place to store that result (i.e. need to continue on to make-persistent further below to get some memory for it).
+				{
+					// This section is an optimization that avoids memory allocation and an extra memcpy()
+					// whenever this result is going to be assigned to a variable as the very next step.
+					// See the comment section higher above for examples.
+					ExprTokenType &left = *STACK_POP; // Above has already confirmed that it's SYM_VAR and VAR_NORMAL.
+					// The following section is similar to one higher above, so maintain them together.
+					result_length = (VarSizeType)strlen(result);
+					// 1.0.46.06: If the UDF has stored its result in its deref buffer, take possession
+					// of that buffer, which saves a memcpy of a potentially huge string.  The cost
+					// of this is that if there are any other UDF-calls pending after this one, the
+					// code in their bodies will have to create another deref buffer if they need one.
+					if (result == sDerefBuf && result_length >= MAX_ALLOC_SIMPLE) // Result is in their buffer and it's longer than what can fit in a SimpleHeap variable (avoids wasting SimpleHeap memory).
+					{
+						// AcceptNewMem() will shrink the memory for us, via _expand(), if there's a lot of
+						// extra/unused space in it.
+						left.var->AcceptNewMem(result, result_length);
+						NULLIFY_S_DEREF_BUF // Force any UDFs called subsequently by us to get a new deref buffer because this one was just hung onto a variable.
+					}
+					else
+						left.var->Assign(result, result_length);
+					this_token.circuit_token = postfix[++i]->circuit_token; // this_token.circuit_token should have been NULL prior to this because the final right-side result of an assignment shouldn't be the last item of an AND/OR/IFF's left branch. The assignment itself would be that.
+					this_token.var = left.var;   // Make the result a variable rather than a normal operand so that its
+					this_token.symbol = SYM_VAR; // address can be taken, and it can be passed ByRef. e.g. &(x:=1)
+					Var::FreeAndRestoreFunctionVars(func, var_backup, var_backup_count); // Do end-of-function-call cleanup (see comment above). No need to do make_result_persistent section.
+					goto push_this_token;
+				}
+				// Since above didn't goto:
+				// The result just returned may need to be copied to a more persistent location.  This is done right
+				// away if the result is the contents of a local variable (since all locals are about to be freed
+				// and overwritten), which is assumed to be the case if it's not in the new deref buf because it's
+				// difficult to distinguish between when the function returned one of its own local variables
+				// rather than a global or a string/numeric literal).  The only exceptions are covered below.
+				// Old method, not necessary to be so thorough because "return" always puts its result as the
+				// very first item in its deref buf.  So this is commneted out in favor of the line below it:
+				//if (result < sDerefBuf || result >= sDerefBuf + sDerefBufSize)
+				if (result != sDerefBuf) // Not in their deref buffer (yields correct result even if sDerefBuf is NULL; also, see above.)
+					// In this case, the result must be assumed to be one of their local variables (since there's
+					// no way to distinguish between that and a literal string such as "abc"?). So it should be
+					// immediately copied since if it's a local, it's about to be freed.
+					make_result_persistent = true;
+				else // The result must be in their deref buffer, perhaps due to something like "return x+3" or "return bif()" on their part.
 				{
 					make_result_persistent = false; // Set default to be possibly overridden below.
-					// Since there's more in the stack or postfix array to be evaluated, and since the return value
-					// is in the new deref buffer, must copy result to somewhere non-volatile whenever there's
-					// another function call pending by us.  But if result is the empty string, that's a simplified
-					// case that doesn't require copying:
-					if (!*result)     // Since it's an empty string in their deref buffer,
-						result = "";  // ensure it's a non-volatile address instead (read-only mem is okay for expression results).
-					else
+					if (!done) // There are more operators/operands to be evaluated, but if there are no more function calls, we don't have to make it persistent since their deref buf won't be overwritten by anything during the time we need it.
 					{
+						// Since there's more in the stack or postfix array to be evaluated, and since the return
+						// value is in the new deref buffer, must copy result to somewhere non-volatile whenever
+						// there's another function-call pending by us.  Note that an empty-string result was
+						// already checked and fully handled higher above.
 						// If we don't have have any more user-defined function calls pending, we can skip the
 						// make-persistent section since this deref buffer will not be overwritten during the
 						// period we need it.
@@ -1511,70 +1598,53 @@ end_of_infix_to_postfix:
 								break;
 							}
 					}
-				}
-			}
+					//else done==true, so don't have to make it persistent here because the final stage will
+					// copy it from their deref buf into ours (since theirs is only deleted later, by our caller).
+					// In this case, leave make_result_persistent set to false.
+				} // This is the end of the section that determines the value of "make_result_persistent" for UDFs.
+			} // Call to a user-defined function (UDF).
 
 			this_token.symbol = SYM_OPERAND; // Set default. Use generic, not string, so that any operator of function call that uses this result is free to reinterpret it as an integer or float.
-			if (make_result_persistent)
+			if (make_result_persistent) // Both UDFs and built-in functions have ensured make_result_persistent is set.
 			{
-				if (!*result) // Below relies on this check having been done so that size > 1 and thus length > 0.
-					this_token.marker = ""; // A constant empty string is persistent enough for this purpose.
-				else
+				// BELOW RELIES ON THE ABOVE ALWAYS HAVING VERFIED FULLY HANDLED RESULT BEING AN EMPTY STRING.
+				// So now we know result isn't an empty string, which in turn ensures that size > 1 and length > 0,
+				// which might be relied upon by things further below.
+				result_size = strlen(result) + 1; // No easy way to avoid strlen currently. Maybe some future revisions to architecture will provide a length.
+				// Must cast to int to avoid loss of negative values:
+				if (result_size <= (int)(aDerefBufSize - (target - aDerefBuf))) // There is room at the end of our deref buf, so use it.
 				{
-					result_size = strlen(result) + 1; // No easy way to avoid strlen currently. Maybe some future revisions to architecture will provide a length.
-
-					// The following check is not done earlier because it's benefit is little if any when
-					// make_result_persistent==false.  In addition, it is fairly rare for the optimization
-					// below to even be applicable because it requires an assignment *internal* to an
-					// expression, such as "if not var:=func()", or "a:=b, c:=func()".
-					if (i < postfix_count-1 && postfix[i+1]->symbol == SYM_ASSIGN // Next operation is ":=".
-						&& stack_count && stack[stack_count-1]->symbol == SYM_VAR // i.e. let the next iteration handle it instead of doing it here.  Further below relies on this having been checked.
-						&& stack[stack_count-1]->var->Type() == VAR_NORMAL) // Don't do clipboard here because don't want its result to be SYM_VAR, yet there's no place to store that result (i.e. need to continue on to make-persistent further below to get some memory for it).
+					// Make the token's result the new, more persistent location:
+					this_token.marker = (char *)memcpy(target, result, result_size); // Benches slightly faster than strcpy().
+					target += result_size; // Point it to the location where the next string would be written.
+				}
+				else if (result_size < EXPR_SMALL_MEM_LIMIT && alloca_usage < EXPR_ALLOCA_LIMIT) // See comments at EXPR_SMALL_MEM_LIMIT.
+				{
+					this_token.marker = (char *)memcpy(_alloca(result_size), result, result_size); // Benches slightly faster than strcpy().
+					alloca_usage += result_size; // This might put alloca_usage over the limit by as much as EXPR_SMALL_MEM_LIMIT, but that is fine because it's more of a guideline than a limit.
+				}
+				else // Need to create some new persistent memory for our temporary use.
+				{
+					// In real-world scripts the need for additonal memory allocation should be quite
+					// rare because it requires a combination of worst-case situations:
+					// - Called-function's return value is in their new deref buf (rare because return
+					//   values are more often literal numbers, true/false, or variables).
+					// - We still have more functions to call here (which is somewhat atypical).
+					// - There's insufficient room at the end of the deref buf to store the return value
+					//   (unusual because the deref buf expands in block-increments, and also because
+					//   return values are usually small, such as numbers).
+					if (mem_count == MAX_EXPR_MEM_ITEMS // No more slots left (should be nearly impossible).
+						|| !(mem[mem_count] = (char *)malloc(result_size)))
 					{
-						// This section is an optimization that avoids memory allocation and an extra memcpy()
-						// whenever this result is going to be assigned to a variable as the very next step.
-						// See the comment section higher above for examples.
-						ExprTokenType &left = *STACK_POP; // Above has already confirmed that it's SYM_VAR and VAR_NORMAL.
-						left.var->Assign(result, (VarSizeType)result_size - 1);
-						this_token.circuit_token = postfix[++i]->circuit_token; // this_token.circuit_token should have been NULL prior to this because the final right-side result of an assignment shouldn't be the last item of an AND/OR/IFF's left branch. The assignment itself would be that.
-						this_token.var = left.var;   // Make the result a variable rather than a normal operand so that its
-						this_token.symbol = SYM_VAR; // address can be taken, and it can be passed ByRef. e.g. &(x:=1)
+						LineError(ERR_OUTOFMEM ERR_ABORT, FAIL, func.mName);
+						goto abort;
 					}
-					// Must cast to int to avoid loss of negative values:
-					else if (result_size <= (int)(aDerefBufSize - (target - aDerefBuf))) // There is room at the end of our deref buf, so use it.
-					{
-						// Make the token's result the new, more persistent location:
-						this_token.marker = (char *)memcpy(target, result, result_size); // Benches slightly faster than strcpy().
-						target += result_size; // Point it to the location where the next string would be written.
-					}
-					else if (result_size < EXPR_SMALL_MEM_LIMIT && alloca_usage < EXPR_ALLOCA_LIMIT) // See comments at EXPR_SMALL_MEM_LIMIT.
-					{
-						this_token.marker = (char *)memcpy(_alloca(result_size), result, result_size); // Benches slightly faster than strcpy().
-						alloca_usage += result_size; // This might put alloca_usage over the limit by as much as EXPR_SMALL_MEM_LIMIT, but that is fine because it's more of a guideline than a limit.
-					}
-					else // Need to create some new persistent memory for our temporary use.
-					{
-						// In real-world scripts the need for additonal memory allocation should be quite
-						// rare because it requires a combination of worst-case situations:
-						// - Called-function's return value is in their new deref buf (rare because return
-						//   values are more often literal numbers, true/false, or variables).
-						// - We still have more functions to call here (which is somewhat atypical).
-						// - There's insufficient room at the end of the deref buf to store the return value
-						//   (unusual because the deref buf expands in block-increments, and also because
-						//   return values are usually small, such as numbers).
-						if (mem_count == MAX_EXPR_MEM_ITEMS // No more slots left (should be nearly impossible).
-							|| !(mem[mem_count] = (char *)malloc(result_size)))
-						{
-							LineError(ERR_OUTOFMEM ERR_ABORT, FAIL, func.mName);
-							goto abort;
-						}
-						// Make the token's result the new, more persistent location:
-						this_token.marker = (char *)memcpy(mem[mem_count], result, result_size); // Benches slightly faster than strcpy().
-						++mem_count; // Must be done last.
-					}
-				} // result is non-zero length.
+					// Make the token's result the new, more persistent location:
+					this_token.marker = (char *)memcpy(mem[mem_count], result, result_size); // Benches slightly faster than strcpy().
+					++mem_count; // Must be done last.
+				}
 			}
-			else // !make_result_persistent
+			else // make_result_persistent==false
 				this_token.marker = result;
 
 			if (!func.mIsBuiltIn)
@@ -1598,13 +1668,6 @@ end_of_infix_to_postfix:
 				//       of itself exist on the call stack.  In other words, it would be inconsistent to make
 				//       all variables blank for case #1 above but not do it here in case #2.
 				Var::FreeAndRestoreFunctionVars(func, var_backup, var_backup_count);
-				// The callers of this function know that the value of aResult (which already contains the reason
-				// for early exit) should be considered valid/meaningful only if result_to_return is NULL.
-				if (early_return) // aResult has already been set above for our caller.
-				{
-					result_to_return = NULL; // Use NULL to inform our caller that this thread is finished (whether through normal means such as Exit or a critical error).
-					goto normal_end_skip_output_var; // output_var is left unchanged in these cases.
-				}
 			} // if (!func.mIsBuiltIn)
 			goto push_this_token;
 		} // if (this_token.symbol == SYM_FUNC)
@@ -2495,8 +2558,7 @@ non_null_circuit_token:
 		//    end of our buf because there was enough room, etc.)
 		// 2) In a called function's deref buffer, namely sDerefBuf, which will be deleted by our caller
 		//    shortly after we return to it.
-		// 3) In an area of memory we malloc'd for lack of any better place to put it.
-		char *result;
+		// 3) In an area of memory we alloc'd for lack of any better place to put it.
 		if (result_token.symbol == SYM_VAR)
 		{
 			result = result_token.var->Contents();
@@ -2657,6 +2719,17 @@ ResultType Line::ExpandArgs(VarSizeType aSpaceNeeded, Var *aArgVar[])
 	// script with no derefs is being run):
 	if (space_needed > sDerefBufSize)
 	{
+		// KNOWN LIMITATION: The memory utilization of *recursive* user-defined functions is rather high because
+		// of the size of DEREF_BUF_EXPAND_INCREMENT, which is used to create a new deref buffer for each
+		// layer of recursion.  So if a UDF recurses deeply, say 100 layers, about 3200 MB (32KB*100) of
+		// memory would be temporarily allocated, which in a worst-case scenario would cause swapping and
+		// kill performance.  Perhaps the best solution to this is to dynamically change the size of
+		// DEREF_BUF_EXPAND_INCREMENT (via a new global variable) in the expression evaluation section that
+		// detects that a UDF has another instance of itself on the call stack.  To ensure proper collapse-back
+		// out of nested udfs and threads, the old value should be backed up, the new smaller increment set,
+		// then the old size should be passed to FreeAndRestoreFunctionVars() so that it can restore it.
+		// However, given the rarity of deep recursion, this doesn't seem worth the extra code size and loss of
+		// performance.
 		size_t increments_needed = space_needed / DEREF_BUF_EXPAND_INCREMENT;
 		if (space_needed % DEREF_BUF_EXPAND_INCREMENT)  // Need one more if above division truncated it.
 			++increments_needed;
@@ -2691,18 +2764,20 @@ ResultType Line::ExpandArgs(VarSizeType aSpaceNeeded, Var *aArgVar[])
 	// given a new memory area by an expression's function-call within this line.  In other words,
 	// our_buf_marker is our recursion layer's buffer, but not necessarily sDerefBuf.  To enforce
 	// that, and keep responsibility here rather than in ExpandExpression(), set sDerefBuf to NULL
-	// so that the zero or more calls to ExpandExpression() made in the loop below, which in turn
-	// will result in zero or more invocations of script-functions, will allocate and use a single
-	// new deref buffer if any of them need it.
-	// Note that it is not possible for a new quasi-thread to directly interrupt ExpandArgs(),
-	// since ExpandArgs() never calls MsgSleep().  Therefore, each ExpandArgs() layer on the call
-	// stack is safe from interrupting threads overwriting its deref buffer.  It's true that a call
-	// to a script function will usually result in MsgSleep(), and thus allow interruptions, but those
+	// so that the zero or more calls to ExpandExpression() made in the loop below (each of which will
+	// in turn call zero or more user-defined functions) will allocate and use a single new deref
+	// buffer if any of them need it (they all share a single deref buffer because each UDF-call
+	// in a particular expression of the current line creates a buf only if necessary, and it won't
+	// be necessary if some prior UDF of this same expression or line already created a deref buffer
+	// "above" ours because our layer here is the only one who ever frees that upper/extra buffer).
+	// Note that it is not possible for a new quasi-thread to directly interrupt ExpandArgs() because
+	// ExpandArgs() never calls MsgSleep().  Therefore, each ExpandArgs() layer on the call-stack
+	// is safe from interrupting threads overwriting its deref buffer.  It's true that a call to a
+	// script function will usually result in MsgSleep(), and thus allow interruptions, but those
 	// interruptions would hit some other deref buffer, not that of our layer.
 	char *our_deref_buf = sDerefBuf; // For detecting whether ExpandExpression() caused a new buffer to be created.
 	size_t our_deref_buf_size = sDerefBufSize;
-	sDerefBuf = NULL;
-	sDerefBufSize = 0;
+	SET_S_DEREF_BUF(NULL, 0);
 
 	ResultType result, result_to_return = OK;  // Set default return value.
 	Var *the_only_var_of_this_arg;
@@ -2864,7 +2939,7 @@ end:
 	// pointer and setting sDerefBuf to NULL, which effectively makes the original deref buffer private
 	// until the line that contains the function-calling expressions finishes completely.
 	// Description of recursion and usage of multiple deref buffers:
-	// 1) ExpandArgs() receives a line with one or more expressions containing one or more function-calls.
+	// 1) ExpandArgs() receives a line with one or more expressions containing one or more calls to user functions.
 	// 2) Worst-case: those function-calls create a new sDerefBuf automatically via us having set sDerefBuf to NULL.
 	// 3) Even worse, the bodies of those functions call other functions, which ExpandArgs() receives, resulting in
 	//    a recursive leap back to step #1.
@@ -2875,7 +2950,7 @@ end:
 	// ExpandArgs() on the call-stack can never be blamed for creating more than one extra buffer.
 	if (our_deref_buf)
 	{
-		// Must always restore the original buffer, not the keep the new one, because our caller needs
+		// Must always restore the original buffer, not keep the new one, because our caller needs
 		// the arg_deref addresses, which point into the original buffer.
 		if (sDerefBuf)
 		{
@@ -2883,8 +2958,7 @@ end:
 			if (sDerefBufSize > LARGE_DEREF_BUF_SIZE)
 				--sLargeDerefBufs;
 		}
-		sDerefBuf = our_deref_buf;
-		sDerefBufSize = our_deref_buf_size;
+		SET_S_DEREF_BUF(our_deref_buf, our_deref_buf_size);
 	}
 	//else the original buffer is NULL, so keep any new sDerefBuf that might have been created (should
 	// help avg-case performance).

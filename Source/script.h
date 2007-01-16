@@ -39,14 +39,15 @@ enum ExecUntilMode {NORMAL_MODE, UNTIL_RETURN, UNTIL_BLOCK_END, ONLY_ONE_LINE};
 // If it is storing a pointer for a given Action Type, be sure never to compare it
 // for equality against these constants because by coincidence, the pointer value
 // might just match one of them:
-#define ATTR_NONE ((void *)0)
-#define ATTR_TRUE ((void *)1)
-#define ATTR_LOOP_UNKNOWN ((void *)1) // Same value as the above.
-#define ATTR_LOOP_NORMAL ((void *)2)
-#define ATTR_LOOP_FILE ((void *)3)
-#define ATTR_LOOP_REG ((void *)4)
-#define ATTR_LOOP_READ_FILE ((void *)5)
-#define ATTR_LOOP_PARSE ((void *)6)
+#define ATTR_NONE (void *)0
+#define ATTR_TRUE (void *)1
+#define ATTR_LOOP_UNKNOWN (void *)1 // Same value as the above.        // KEEP IN SYNC WITH BELOW.
+#define ATTR_LOOP_IS_UNKNOWN_OR_NONE(attr) (attr <= ATTR_LOOP_UNKNOWN) // KEEP IN SYNC WITH ABOVE.
+#define ATTR_LOOP_NORMAL (void *)2
+#define ATTR_LOOP_FILE (void *)3
+#define ATTR_LOOP_REG (void *)4
+#define ATTR_LOOP_READ_FILE (void *)5
+#define ATTR_LOOP_PARSE (void *)6
 typedef void *AttributeType;
 
 enum FileLoopModeType {FILE_LOOP_INVALID, FILE_LOOP_FILES_ONLY, FILE_LOOP_FILES_AND_FOLDERS, FILE_LOOP_FOLDERS_ONLY};
@@ -488,6 +489,13 @@ enum WinSetAttributes {WINSET_INVALID, WINSET_TRANSPARENT, WINSET_TRANSCOLOR, WI
 class Line
 {
 private:
+	#define SET_S_DEREF_BUF(ptr, size) sDerefBuf = ptr, sDerefBufSize = size
+	#define NULLIFY_S_DEREF_BUF \
+	{\
+		SET_S_DEREF_BUF(NULL, 0);\
+		if (sDerefBufSize > LARGE_DEREF_BUF_SIZE)\
+			--sLargeDerefBufs;\
+	}
 	static char *sDerefBuf;  // Buffer to hold the values of any args that need to be dereferenced.
 	static size_t sDerefBufSize;
 	static int sLargeDerefBufs;
@@ -499,7 +507,7 @@ private:
 
 	ResultType EvaluateCondition();
 	ResultType PerformLoop(char **apReturnValue, bool &aContinueMainLoop, Line *&aJumpToLine
-		, AttributeType aAttr, FileLoopModeType aFileLoopMode, bool aRecurseSubfolders, char *aFilePattern
+		, FileLoopModeType aFileLoopMode, bool aRecurseSubfolders, char *aFilePattern
 		, __int64 aIterationLimit, bool aIsInfinite);
 	ResultType PerformLoopReg(char **apReturnValue, bool &aContinueMainLoop, Line *&aJumpToLine
 		, FileLoopModeType aFileLoopMode, bool aRecurseSubfolders, HKEY aRootKeyType, HKEY aRootKey, char *aRegSubkey);

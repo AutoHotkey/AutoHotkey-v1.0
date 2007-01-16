@@ -6608,6 +6608,7 @@ ResultType Line::StringReplace()
 	{
 		// v1.0.45: Take a shortcut for performance: Hang the newly allocated memory (populated by the callee)
 		// directly onto the variable, which saves a memcpy() over the old method (and possible other savings).
+		// AcceptNewMem() will shrink the memory for us, via _expand(), if there's a lot of extra/unused space in it.
 		output_var.AcceptNewMem(dest, (VarSizeType)length); // Tells the variable to adopt this memory as its new memory. Callee has set "length" for us.
 		// Above also handles the case where output_var is VAR_CLIPBOARD.
 	}
@@ -10811,6 +10812,7 @@ pcre *get_compiled_regex(char *aRegEx, bool &aGetPositionsNotSubstrings, pcre_ex
 		aGetPositionsNotSubstrings = false;\
 		do_study = false;\
 	}
+	#define PCRE_NEWLINE_BITS (PCRE_NEWLINE_CRLF | PCRE_NEWLINE_ANY) // Covers all bits that are used for newline options.
 
 	// SET DEFAULT OPTIONS:
 	int pcre_options;
@@ -10832,13 +10834,14 @@ pcre *get_compiled_regex(char *aRegEx, bool &aGetPositionsNotSubstrings, pcre_ex
 		case 'J': pcre_options |= PCRE_DUPNAMES;       break; //
 		case 'U': pcre_options |= PCRE_UNGREEDY;       break; //
 		case 'X': pcre_options |= PCRE_EXTRA;          break; //
+		case '\a':pcre_options = (pcre_options & ~PCRE_NEWLINE_BITS) | PCRE_NEWLINE_ANY; break; // v1.0.46.06: alert/bell (i.e. `a) is used for PCRE_NEWLINE_ANY.
 		case '\n':                                            //
 			// Could alternatively have called this option "LF" rather than or in addition to "`n", but that
 			// seems slightly less desirable due to potential overlap/conflict with future option letters,
 			// plus the fact that `n should be pretty well known to AutoHotkey users, especially advanced ones
 			// using RegEx.  Note: `n`r is NOT treated the same as `r`n because there's a slight chance PCRE
 			// will someday support `n`r for some obscure usage (or just for symmetry/completeness).
-			pcre_options &= ~PCRE_NEWLINE_CRLF; // Do it this way because PCRE_NEWLINE_CRLF is a bitwise combination of PCRE_NEWLINE_CR and PCRE_NEWLINE_LF (i.e. this purges both flags).
+			pcre_options &= ~PCRE_NEWLINE_BITS; // Done this way for maintainability. It removes all newline options, which causes behavior to revert to the compile-time default (which is LF).
 			// The PCRE_NEWLINE_XXX options are valid for both compile() and exec(), but specifying it for exec()
 			// would only serve to override the default stored inside the compiled pattern (seems rarely needed).
 			break;
@@ -10846,10 +10849,10 @@ pcre *get_compiled_regex(char *aRegEx, bool &aGetPositionsNotSubstrings, pcre_ex
 			if (pat[1] == '\n') // Even though `r`n is the default, it's recognized as an option for flexibility and intuitiveness.
 			{
 				++pat; // Skip over the second character so that it's not recognized as a separate option by the next iteration.
-				pcre_options |= PCRE_NEWLINE_CRLF; // Set explicitly in case it was unset by an earlier option. Remember that PCRE_NEWLINE_CRLF is a bitwise combination of PCRE_NEWLINE_LF and CR.
+				pcre_options = (pcre_options & ~PCRE_NEWLINE_BITS) | PCRE_NEWLINE_CRLF; // Set explicitly in case it was unset by an earlier option. Remember that PCRE_NEWLINE_CRLF is a bitwise combination of PCRE_NEWLINE_LF and CR.
 			}
 			else // For completeness, it's easy to support PCRE_NEWLINE_CR too, though nowadays I think it's quite rare (former Macintosh format).
-				pcre_options = (pcre_options & ~PCRE_NEWLINE_LF) | PCRE_NEWLINE_CR; // Do it this way because PCRE_NEWLINE_CRLF is a bitwise combination of PCRE_NEWLINE_CR and PCRE_NEWLINE_LF.
+				pcre_options = (pcre_options & ~PCRE_NEWLINE_BITS) | PCRE_NEWLINE_CR; // Do it this way because PCRE_NEWLINE_CRLF is a bitwise combination of PCRE_NEWLINE_CR and PCRE_NEWLINE_LF.
 			break;
 
 		// Other options (uppercase so that lowercase can be reserved for future/PERL options):
@@ -10982,7 +10985,7 @@ error: // Since NULL is returned here, caller should ignore the contents of the 
 
 
 char *RegExMatch(char *aHaystack, char *aNeedleRegEx)
-// Returns NULL if no match.  Otherwise, returns the position in aHaystack.
+// Returns NULL if no match.  Otherwise, returns the address where the pattern was found in aHaystack.
 {
 	bool get_positions_not_substrings; // Currently ignored.
 	pcre_extra *extra;
@@ -11015,7 +11018,7 @@ void RegExReplace(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPar
 {
 	// Set default return value in case of early return.
 	aResultToken.symbol = SYM_STRING;
-	aResultToken.marker = "";
+	aResultToken.marker = aHaystack; // v1.0.46.06: aHaystack vs. "" is the new default because it seems a much safer and more convenient to return aHaystack when an unexpected PCRE-exec error occurs (such an error might otherwise cause loss of data in scripts that don't meticulously check ErrorLevel after each RegExReplace()).
 
 	// If an output variable was provided for the count, get it and initialize it in case of early return.
 	Var *output_var_count;
@@ -11029,7 +11032,7 @@ void RegExReplace(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPar
 	// In PCRE, lengths and such are confined to ints, so there's little reason for using unsigned for anything.
 	int captured_pattern_count, empty_string_is_not_a_match, replacement_count, match_length, ref_num
 		, result_size, new_result_length, haystack_portion_length, second_iteration, substring_name_length
-		, extra_offset;
+		, extra_offset, pcre_options;
 	char *haystack_pos, *match_pos, *src, *src_orig, *dest, *closing_brace, char_after_dollar
 		, *substring_name_pos, substring_name[33] // In PCRE, "Names consist of up to 32 alphanumeric characters and underscores."
 		, transform;
@@ -11058,7 +11061,7 @@ void RegExReplace(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPar
 	// aStartingOffset is altered further on in the loop; but for its initial value, the caller has ensured
 	// that it lies within aHaystackLength.  Also, if there are no replacements yet, haystack_pos ignores
 	// aStartingOffset because otherwise, when the first replacement occurs, any part of haystack that lies
-	// to the left of a caller-specified aStartingOffset won't get copied into the result.
+	// to the left of a caller-specified aStartingOffset wouldn't get copied into the result.
 	for (replacement_count = 0, empty_string_is_not_a_match = 0, haystack_pos = aHaystack
 		;; haystack_pos = aHaystack + aStartingOffset) // See comment above.
 	{
@@ -11075,9 +11078,37 @@ void RegExReplace(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPar
 				// That iteration told the pcre_exec that just occurred above to try to match something other than ""
 				// at the same position.  But since we're here, it wasn't able to find such a match.  So just copy
 				// the current character over literally then advance to the next character to resume normal searching.
-				result[result_length++] = *haystack_pos; // This can't overflow because the size calculations in a previous iteration reserved at least two bytes: 1 for this character and 1 for the terminator.
-				++aStartingOffset; // Advance to next candidate section of haystack.
 				empty_string_is_not_a_match = 0; // Reset so that the next iteration starts off with the normal matching method.
+				result[result_length++] = *haystack_pos; // This can't overflow because the size calculations in a previous iteration reserved 3 bytes: 1 for this character, 1 for the possible LF that follows CR, and 1 for the terminator.
+				++aStartingOffset; // Advance to next candidate section of haystack.
+				// v1.0.46.06: This following section was added to to avoid finding a match between a CR and LF
+				// when PCRE_NEWLINE_ANY mode is in effect.  The fact that this is the only change for
+				// PCRE_NEWLINE_ANY relies on the belief that any pattern that matches the empty string in between
+				// a CR and LF must also match the empty string that occurs right before the CRLF (even if that
+				// pattern also matched a non-empty string right before the empty one in front of the CRLF).  If
+				// this belief is correct, no logic similar to this is needed near the bottom of the main loop
+				// because the empty string found immediately prior to this CRLF will put us into
+				// empty_string_is_not_a_match mode, which will then execute this section of code (unless
+				// empty_string_is_not_a_match mode actually found a match, in which case the logic here seems
+				// superceded by that match?)  Even if this reasoning is not a complete solution, it might be
+				// adequate if patterns that match empty strings are rare, which I believe they are.  In fact,
+				// they might be so rare that arguably this could be documented as a known limitation rather than
+				// having added the following section of code in the first place.
+				// Examples that illustrate the effect:
+				//    MsgBox % "<" . RegExReplace("`r`n", "`a).*", "xxx") . ">"
+				//    MsgBox % "<" . RegExReplace("`r`n", "`am)^.*$", "xxx") . ">"
+				if (*haystack_pos == '\r' && haystack_pos[1] == '\n')
+				{
+					// pcre_fullinfo() is a fast call, so it's called every time to simplify the code (I don't think
+					// this whole "empty_string_is_not_a_match" section of code executes for most patterns anyway,
+					// so performance seems less of a concern).
+					if (!pcre_fullinfo(aRE, aExtra, PCRE_INFO_OPTIONS, &pcre_options) // Success.
+						&& (pcre_options & PCRE_NEWLINE_ANY)) // See comment above.
+					{
+						result[result_length++] = '\n'; // This can't overflow because the size calculations in a previous iteration reserved 3 bytes: 1 for this character, 1 for the possible LF that follows CR, and 1 for the terminator.
+						++aStartingOffset; // Skip over this LF because it "belongs to" the CR that preceded it.
+					}
+				}
 				continue; // i.e. we're not done yet because the "no match" above was a special one and there's still more haystack to check.
 			}
 			// Otherwise, there aren't any more matches.  So we're all done except for copying the last part of
@@ -11093,38 +11124,35 @@ void RegExReplace(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPar
 					result_length = new_result_length; // Remember that result_length is actually an output for our caller, so even if for no other reason, it must be kept accurate for that.
 				}
 				result[result_length] = '\0'; // result!=NULL when replacement_count!=0.  Also, must terminate it unconditionally because other sections usually don't do it.
-
-				// Since the caller will be hanging this memory onto a variable rather than immediately freeing it,
-				// shrink the memory if there's a lot of wasted space in it (even if caller calls _msize() to
-				// determine the entire capacity, the extra capacity is seldom utilized).
-				if (result_size - result_length > 1024)
-					result = (char *)_expand(result, result_length + 1); // MSDN implies that when shrinking, this won't return NULL unless something is terribly wrong (e.g. corrupted heap).  So caller probably doesn't need to worry about that.
-					// _expand() is only about 75 bytes of uncompressed code size and probably performs very quickly when shrinking.
-
 				// Set RegExMatch()'s return value to be "result":
 				aResultToken.marker = result;  // Caller will take care of freeing result's memory.
 				if (output_var_count) // Override the default output-count of zero set earlier.
 					output_var_count->Assign(replacement_count);
 			}
-			else // No replacements were actually done, so just return the original string to avoid malloc+memcpy (in addition, returning the original might help the caller make other optimizations).
-			{
-				aResultToken.marker = aHaystack;
-				result_length = aHaystackLength; // result_length is an alias for an output parameter, so update for maintainability even though currently callers don't use it when no alloc of circuit_token.
+			// Section below is obsolete but is retained for its comments.
+			//else // No replacements were actually done, so just return the original string to avoid malloc+memcpy
+			// (in addition, returning the original might help the caller make other optimizations).
+			//{
+				// Already set as a default earlier, so commented out:
+				//aResultToken.marker = aHaystack;
+				// Not necessary to set output-var (length) for caller except when we allocated memory for the caller:
+				//result_length = aHaystackLength; // result_length is an alias for an output parameter, so update for maintainability even though currently callers don't use it when no alloc of circuit_token.
+				//
 				// There's no need to do the following because it should already be that way when replacement_count==0.
 				//if (result)
 				//	free(result);
 				//result = NULL; // This tells the caller that we already freed it (i.e. from its POV, we never allocated anything).
-			}
-			// All done, indicate success via ErrorLevel.
-			g_ErrorLevel->Assign(ERRORLEVEL_NONE);
-			return;
+			//}
+
+			g_ErrorLevel->Assign(ERRORLEVEL_NONE); // All done, indicate success via ErrorLevel.
+			return;                                //
 		}
 
 		// Otherwise:
 		if (captured_pattern_count < 0) // An error other than "no match". These seem very rare, so it seems best to abort rather than yielding a partially-converted result.
 		{
 			g_ErrorLevel->Assign(captured_pattern_count); // No error text is stored; just a negative integer (since these errors are pretty rare).
-			return; // Return vs. break to leave aResultToken.marker set to "" and output_var_count set to 0, and let ErrorLevel tell the story.
+			return; // Return vs. break to leave aResultToken.marker set to aHaystack and output_var_count set to 0, and let ErrorLevel tell the story.
 		}
 
 		// Otherwise (since above didn't return, break, or continue), a match has been found (i.e. captured_pattern_count > 0;
@@ -11143,7 +11171,7 @@ void RegExReplace(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPar
 			if (second_iteration)
 			{
 				// Using the required length calculated by the first iteration, expand/realloc "result" if necessary.
-				if (new_result_length + 2 > result_size) // Must use +2 not +1 in case of empty_string_is_not_a_match (which needs an extra character).
+				if (new_result_length + 3 > result_size) // Must use +3 not +1 in case of empty_string_is_not_a_match (which needs room for up to two extra characters).
 				{
 					// The first expression passed to REGEX_REALLOC is the average length of each replacement so far.
 					// It's more typically more accurate to pass that than the following "length of current
@@ -11152,7 +11180,7 @@ void RegExReplace(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPar
 					// Above is the length difference between the current replacement text and what it's
 					// replacing (it's negative when replacement is smaller than what it replaces).
 					REGEX_REALLOC(PredictReplacementSize((new_result_length - aOffset[1]) / replacement_count // See above.
-						, replacement_count, limit, aHaystackLength, new_result_length+1, aOffset[1])); // +1 in case of empty_string_is_not_a_match (which needs an extra character).  The function will also do another +1 to convert length to size (for terminator).
+						, replacement_count, limit, aHaystackLength, new_result_length+2, aOffset[1])); // +2 in case of empty_string_is_not_a_match (which needs room for up to two extra characters).  The function will also do another +1 to convert length to size (for terminator).
 					// The above will return if an alloc error occurs.
 				}
 				//else result_size is not only large enough, but also non-zero.  Other sections rely on it always
@@ -11213,7 +11241,7 @@ void RegExReplace(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPar
 				ref_num = INT_MIN; // Set default to "no valid backreference".  Use INT_MIN to virtually guaranty that anything other than INT_MIN means that something like a backreference was found (even if it's invalid, such as ${-5}).
 				switch (char_after_dollar)
 				{
-				case '{':  // Found a backreference: ${
+				case '{':  // Found a backreference: ${...
 					substring_name_pos = src + 2 + extra_offset;
 					if (closing_brace = strchr(substring_name_pos, '}'))
 					{
@@ -11236,7 +11264,7 @@ void RegExReplace(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPar
 					break;
 
 				case '$':  // i.e. Two consecutive $ amounts to one literal $.
-					++src;  // Skip over the first '$', and the loop's increment will skip over the second. "extra_offset" is ignored due to rarity and silliness.  Just transcribe things like $U$ as U$ to indicate the problem.
+					++src; // Skip over the first '$', and the loop's increment will skip over the second. "extra_offset" is ignored due to rarity and silliness.  Just transcribe things like $U$ as U$ to indicate the problem.
 					break; // This also sets up things properly to copy a single literal '$' into the result.
 
 				case '\0': // i.e. a single $ was found at the end of the string.
@@ -11326,7 +11354,7 @@ void RegExReplace(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPar
 		// continues the search; it finds the empty string at the end of haystack, which is replaced by z.
 		// On the other hand, maybe there's a better example than the above that explains what would happen
 		// if PCRE_NOTEMPTY actually finds a match, or what would happen if this PCRE_NOTEMPTY method weren't
-		// used at all (possible infinite loop?).
+		// used at all (i.e. infinite loop as mentioned in the previous paragraph).
 		// 
 		// If this match is "" (length 0), then by definitition we just found a match in normal mode, not
 		// PCRE_NOTEMPTY mode (since that mode isn't capable of finding "").  Thus, empty_string_is_not_a_match
@@ -11345,7 +11373,8 @@ out_of_mem:
 	{
 		free(result);  // Since result is probably an non-terminated string (not to mention an incompletely created result), it seems best to free it here to remove it from any further consideration by the caller.
 		result = NULL; // Tell caller that it was freed.
-		// AND LEAVE aResultToken.marker == "", because the result is indeterminate and thus discarded.
+		// AND LEAVE aResultToken.marker (i.e. the final result) set to aHaystack, because the altered result is
+		// indeterminate and thus discarded.
 	}
 }
 

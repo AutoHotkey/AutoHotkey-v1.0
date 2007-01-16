@@ -32,7 +32,7 @@ public:
 	char *mClipMemNowLocked, *mClipMemNewLocked;
 	size_t mLength;  // Last-known length of the clipboard contents (for internal use only because it's valid only during certain specific times).
 	UINT mCapacity;  // Capacity of mClipMemNewLocked.
-	bool mIsOpen;  // Whether the clipboard is physically open due to action by this class.
+	BOOL mIsOpen;  // Whether the clipboard is physically open due to action by this class.  BOOL vs. bool improves some benchmarks slightly due to this item being frequently checked.
 
 	// It seems best to default to many attempts, because a failure
 	// to open the clipboard may result in the early termination

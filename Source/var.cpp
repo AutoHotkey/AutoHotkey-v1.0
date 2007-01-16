@@ -1132,14 +1132,35 @@ void Var::AcceptNewMem(char *aNewMem, VarSizeType aLength)
 		var.Assign(aNewMem, aLength); // Clipboard requires GlobalAlloc memory so can't directly accept aNewMem.  So just copy it the normal way.
 		free(aNewMem); // Caller gave it to us to take charge of, but we have no further use for it.
 	}
-	else
+	else // VAR_NORMAL
 	{
 		var.Free(VAR_ALWAYS_FREE); // Release the variable's old memory.
 		var.mHowAllocated = ALLOC_MALLOC; // Must always be this type to avoid complications and possible memory leaks.
+		var.mAttrib &= ~VAR_ATTRIB_BINARY_CLIP; // New memory is always non-binary-clip.  A new parameter could be added to change this if it's ever needed.
 		var.mContents = aNewMem;
 		var.mLength = aLength;
 		var.mCapacity = (VarSizeType)_msize(aNewMem); // Get actual capacity in case it's a lot bigger than aLength+1. _msize() is only about 36 bytes of code and probably a very fast call.
-		var.mAttrib &= ~VAR_ATTRIB_BINARY_CLIP; // New memory is always non-binary-clip.  A new parameter could be added to change this if it's ever needed.
+		// Shrink the memory if there's a lot of wasted space because the extra capacity is seldom utilized
+		// in real-world scripts.
+		// A simple rule seems best because shrinking is probably fast regardless of the sizes involved,
+		// plus and there's consierable rarity to ever needing capacity beyond what's in a variable
+		// (concat/append is one example).  This will leave a large percentage of extra space in small variables,
+		// but in those rare cases when a script needs to create thousands of such variables, there may be a
+		// current or future way to shrink an existing variable to contain only its current length, such as
+		// VarShrink().
+		if (var.mCapacity - var.mLength > 64)
+		{
+			var.mCapacity = var.mLength + 1; // This will become the new capacity.
+			// _expand() is only about 75 bytes of uncompressed code size and probably performs very quickly
+			// when shrinking.
+			if (   !(var.mContents = (char *)_expand(var.mContents, var.mCapacity))   )
+				// MSDN implies that when shrinking, this won't happen unless something is terribly wrong
+				// (e.g. corrupted heap).  But for robustness it is checked anyway.
+			{
+				var.mLength = 0;
+				var.mCapacity = 0;
+			}
+		}
 	}
 }
 

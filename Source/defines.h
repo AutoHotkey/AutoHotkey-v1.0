@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.46.05"
+#define NAME_VERSION "1.0.46.06"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -571,8 +571,7 @@ struct global_struct
 	bool AutoTrim;
 	bool FormatIntAsHex;
 	bool MsgBoxTimedOut; // Doesn't require initialization.
-	bool IsPaused;
-	bool UnderlyingThreadIsPaused; // Supports better toggling via "Pause" or "Pause Toggle".
+	bool IsPaused, UnderlyingThreadIsPaused; // The latter supports better toggling via "Pause" or "Pause Toggle".
 };
 
 inline void global_clear_state(global_struct &g)

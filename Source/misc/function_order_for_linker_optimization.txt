@@ -100,7 +100,7 @@ _atoi64
 ; Exploit (build from) both sides of this function, above and below.
 ?ExecUntil@Line@@QAE?AW4ResultType@@W4ExecUntilMode@@PAPADPAPAV1@@Z
 
-?PerformLoop@Line@@AAE?AW4ResultType@@PAPADAA_NAAPAV1@PAXW4FileLoopModeType@@_NPAD_J5@Z
+?PerformLoop@Line@@AAE?AW4ResultType@@PAPADAA_NAAPAV1@W4FileLoopModeType@@_NPAD_J4@Z  ; script.obj
 
 ?EvaluateCondition@Line@@AAE?AW4ResultType@@XZ
 ?Perform@Line@@AAE?AW4ResultType@@XZ
@@ -443,6 +443,8 @@ _vsnprintf  ; Sandwiching this function between the other two seems likely to yi
 pcre_study
 pcre_compile
 pcre_compile2
+_pcre_is_newline  ; lib_pcre.lib(pcre_newline.obj)
+_pcre_was_newline  ; lib_pcre.lib(pcre_newline.obj)
 pcre_exec
 _pcre_try_flipped
 pcre_fullinfo

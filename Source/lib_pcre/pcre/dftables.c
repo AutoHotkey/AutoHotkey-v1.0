@@ -86,7 +86,16 @@ fprintf(f,
 fprintf(f,
   "This file contains the default tables for characters with codes less than\n"
   "128 (ASCII characters). These tables are used when no external tables are\n"
-  "passed to PCRE. */\n\n"
+  "passed to PCRE.\n\n");
+fprintf(f,
+  "The following #include is present because without it gcc 4.x may remove\n"
+  "the array definition from the final binary if PCRE is built into a static\n"
+  "library and dead code stripping is activated. This leads to link errors.\n"
+  "Pulling in the header ensures that the array gets flagged as \"someone\n"
+  "outside this compilation unit might reference this\" and so it will always\n"
+  "be supplied to the linker. */\n\n"
+  "#include \"pcre_internal.h\"\n\n");
+fprintf(f,
   "const unsigned char _pcre_default_tables[] = {\n\n"
   "/* This table is a lower casing table. */\n\n");
 
