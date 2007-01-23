@@ -84,10 +84,12 @@ const uschar _pcre_utf8_table4[] = {
   1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
   3,3,3,3,3,3,3,3,4,4,4,4,5,5,5,5 };
+#endif /* AutoHotkey. */
 
 /* This table translates Unicode property names into type and code values. It
 is searched by binary chop, so must be in collating sequence of name. */
 
+#ifdef SUPPORT_UCP /* AutoHotkey. */
 const ucp_type_table _pcre_utt[] = {
   { "Any",                 PT_ANY,  0 },
   { "Arabic",              PT_SC,   ucp_Arabic },

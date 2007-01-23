@@ -147,6 +147,8 @@ ResultType YYYYMMDDToSystemTime(char *aYYYYMMDD, SYSTEMTIME &aSystemTime, bool a
 	{
 		strlcpy(temp, aYYYYMMDD + 4, 3);
 		aSystemTime.wMonth = atoi(temp);  // Unlike "struct tm", SYSTEMTIME uses 1 for January, not 0.
+		if (aSystemTime.wMonth < 1 || aSystemTime.wMonth > 12) // v1.0.46.07: Must validate month since it's used to access an array further below.
+			aSystemTime.wMonth = 1; // For simplicity and due to extreme rarity, just choose an in-range value.
 	}
 	else
 		aSystemTime.wMonth = 1;

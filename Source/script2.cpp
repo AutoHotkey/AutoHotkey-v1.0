@@ -6405,9 +6405,11 @@ ResultType Line::FormatTime(char *aYYYYMMDD, char *aFormat)
 ResultType Line::PerformAssign()
 // Returns OK or FAIL.  Caller has ensured that none of this line's derefs is a function-call.
 {
-	// Resolve alias now to detect "source_is_being_appended_to_target" and perhaps other things.
-	// Can't use OUTPUT_VAR or sArgVar here because ExpandArgs() isn't called prior to PerformAssign().
-	Var &output_var = *(ResolveVarOfArg(0)->ResolveAlias());
+	Var *p_output_var; // Can't use OUTPUT_VAR or sArgVar here because ExpandArgs() isn't called prior to PerformAssign().
+	if (   !(p_output_var = ResolveVarOfArg(0))   ) // Fix for v1.0.46.07: Must do this check in case of illegal dynamically-build variable name.
+		return FAIL;
+	p_output_var = p_output_var->ResolveAlias(); // Resolve alias now to detect "source_is_being_appended_to_target" and perhaps other things.
+	Var &output_var = *p_output_var; // For performance.
 	// Now output_var.Type() must be clipboard or normal because otherwise load-time validation (or
 	// ResolveVarOfArg() in GetExpandedArgSize, if it's dynamic) would have prevented us from getting this far.
 
@@ -6449,7 +6451,7 @@ ResultType Line::PerformAssign()
 			{
 				// Check if target is mentioned more than once in source, e.g. Var = %Var%Some Text%Var%
 				// would be disqualified for the "fast append" method because %Var% occurs more than once.
-				if (deref->var->ResolveAlias() == &output_var) // deref->is_function was checked above just in case.
+				if (deref->var->ResolveAlias() == p_output_var) // deref->is_function was checked above just in case.
 				{
 					source_is_being_appended_to_target = false;
 					break;
@@ -6457,7 +6459,7 @@ ResultType Line::PerformAssign()
 			}
 			else
 			{
-				if (deref->var->ResolveAlias() == &output_var) // deref->is_function was checked above just in case.
+				if (deref->var->ResolveAlias() == p_output_var) // deref->is_function was checked above just in case.
 				{
 					target_is_involved_in_source = true;
 					// The below disqualifies both of the following cases from the simple-append mode:
@@ -9817,6 +9819,7 @@ DYNARESULT DynaCall(int aFlags, void *aFunction, DYNAPARM aParam[], int aParamCo
 // return value processing.
 {
 	aException = 0;  // Set default output parameter for caller.
+	SetLastError(g.LastError); // v1.0.46.07: In case the function about to be called doesn't change last-error, this line serves to retain the script's previous last-error rather than some arbitrary one produced by AutoHotkey's own internal API calls.  This line has no measurable impact on performance.
 
 	// Declaring all variables early should help minimize stack interference of C code with asm.
 	DWORD *our_stack;
@@ -11081,7 +11084,7 @@ void RegExReplace(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPar
 				empty_string_is_not_a_match = 0; // Reset so that the next iteration starts off with the normal matching method.
 				result[result_length++] = *haystack_pos; // This can't overflow because the size calculations in a previous iteration reserved 3 bytes: 1 for this character, 1 for the possible LF that follows CR, and 1 for the terminator.
 				++aStartingOffset; // Advance to next candidate section of haystack.
-				// v1.0.46.06: This following section was added to to avoid finding a match between a CR and LF
+				// v1.0.46.06: This following section was added to avoid finding a match between a CR and LF
 				// when PCRE_NEWLINE_ANY mode is in effect.  The fact that this is the only change for
 				// PCRE_NEWLINE_ANY relies on the belief that any pattern that matches the empty string in between
 				// a CR and LF must also match the empty string that occurs right before the CRLF (even if that
@@ -11090,7 +11093,7 @@ void RegExReplace(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPar
 				// because the empty string found immediately prior to this CRLF will put us into
 				// empty_string_is_not_a_match mode, which will then execute this section of code (unless
 				// empty_string_is_not_a_match mode actually found a match, in which case the logic here seems
-				// superceded by that match?)  Even if this reasoning is not a complete solution, it might be
+				// superseded by that match?)  Even if this reasoning is not a complete solution, it might be
 				// adequate if patterns that match empty strings are rare, which I believe they are.  In fact,
 				// they might be so rare that arguably this could be documented as a known limitation rather than
 				// having added the following section of code in the first place.

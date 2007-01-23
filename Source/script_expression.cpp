@@ -1006,18 +1006,18 @@ end_of_infix_to_postfix:
 	{
 		ExprTokenType &this_token = *postfix[i];  // For performance and convenience.
 
-		// At this stage, operands in the postfix array should be either SYM_OPERAND or SYM_STRING.
+		// At this stage, operands in the postfix array should be SYM_OPERAND, SYM_STRING, or SYM_DYNAMIC.
 		// But all are checked since that operation is just as fast:
 		if (IS_OPERAND(this_token.symbol)) // If it's an operand, just push it onto stack for use by an operator in a future iteration.
 		{
 			if (this_token.symbol == SYM_DYNAMIC) // CONVERTED HERE/EARLY TO SOMETHING *OTHER* THAN SYM_DYNAMIC so that no later stages need any handling for them as operands. SYM_DYNAMIC is quite similar to SYM_FUNC/BIF in this respect.
 			{
-				if (!SYM_DYNAMIC_IS_DOUBLE_DEREF(this_token)) // It's an environment variable or built-in variable.
+				if (!SYM_DYNAMIC_IS_DOUBLE_DEREF(this_token)) // It's a built-in variable or potential environment variable.
 				{
 					result_size = this_token.var->Get() + 1; // Get() is used even for environment vars because it has a cache that improves their performance.
 					if (result_size == 1)
 					{
-						if (this_token.var->Type() == VAR_NORMAL)
+						if (this_token.var->Type() == VAR_NORMAL) // It's an empty variable, so treated as a non-environment (normal) var.
 						{
 							// The following is done here rather than during infix creation/tokenizing because
 							// 1) It's more correct because it's conceivable that some part of the expression
@@ -1042,7 +1042,17 @@ end_of_infix_to_postfix:
 						}
 						goto push_this_token;
 					}
-					// Otherwise, it's not an empty string, so need some memory to store it.
+					// Otherwise, it's not an empty string.  But there's a slight chance it could be a normal
+					// variable rather than a built-in or environment variable.  This happens when another
+					// part of this same expression (such as a UDF via ByRef) has put contents into this
+					// variable since the time this item was made SYM_DYNAMIC.  In other words, we wouldn't
+					// have made it SYM_DYNAMIC in the first place if we'd known that was going to happen.
+					if (this_token.var->Type() == VAR_NORMAL && this_token.var->Length()) // v1.0.46.07: It's not a built-in or environment variable.
+					{
+						this_token.symbol = SYM_VAR; // The fact that a SYM_VAR operand is always VAR_NORMAL (with one limited exception) is relied upon in several places such as built-in functions.
+						goto push_this_token;
+					}
+					// Otherwise, it's an environment variable or built-in variable. Need some memory to store it.
 					// The following section is similar to that in the make_result_persistent section further
 					// below.  So maintain them together and see it for more comments.
 					// Must cast to int to avoid loss of negative values:
@@ -2721,7 +2731,7 @@ ResultType Line::ExpandArgs(VarSizeType aSpaceNeeded, Var *aArgVar[])
 	{
 		// KNOWN LIMITATION: The memory utilization of *recursive* user-defined functions is rather high because
 		// of the size of DEREF_BUF_EXPAND_INCREMENT, which is used to create a new deref buffer for each
-		// layer of recursion.  So if a UDF recurses deeply, say 100 layers, about 3200 MB (32KB*100) of
+		// layer of recursion.  So if a UDF recurses deeply, say 100 layers, about 1600 MB (16KB*100) of
 		// memory would be temporarily allocated, which in a worst-case scenario would cause swapping and
 		// kill performance.  Perhaps the best solution to this is to dynamically change the size of
 		// DEREF_BUF_EXPAND_INCREMENT (via a new global variable) in the expression evaluation section that
