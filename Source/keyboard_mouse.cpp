@@ -1284,10 +1284,14 @@ LRESULT CALLBACK RecordProc(int aCode, WPARAM wParam, LPARAM lParam)
 		EVENTMSG &event = *(PEVENTMSG)lParam;
 		PlaybackEvent &dest_event = sEventPB[sEventCount];
 		dest_event.message = event.message;
-		if (event.message >= WM_MOUSEFIRST && event.message <= WM_MOUSELAST) // Mouse event.
+		if (event.message >= WM_MOUSEFIRST && event.message <= WM_MOUSELAST) // Mouse event, including wheel.
 		{
 			if (event.message != WM_MOUSEMOVE)
 			{
+				// WHEEL: No info comes in about which direction the wheel was turned (nor by how many notches).
+				// In addition, it appears impossible to specify such info when playing back the event.
+				// Therefore, playback usually produces downward wheel movement (but upward in some apps like
+				// Visual Studio).
 				dest_event.x = event.paramL;
 				dest_event.y = event.paramH;
 				++sEventCount;
@@ -2474,6 +2478,10 @@ void PutMouseEventIntoArray(DWORD aEventFlags, DWORD aData, DWORD aX, DWORD aY)
 		case MOUSEEVENTF_XDOWN:      this_event.message = WM_XBUTTONDOWN; break;
 		case MOUSEEVENTF_XUP:        this_event.message = WM_XBUTTONUP; break;
 		case MOUSEEVENTF_WHEEL:      this_event.message = WM_MOUSEWHEEL; break;
+		// WHEEL: No info comes into journal-record about which direction the wheel was turned (nor by how many
+		// notches).  In addition, it appears impossible to specify such info when playing back the event.
+		// Therefore, playback usually produces downward wheel movement (but upward in some apps like
+		// Visual Studio).
 		}
 		// COORD_UNSPECIFIED_SHORT is used so that the very first event can be a click with unspecified
 		// coordinates: it seems best to have the cursor's position fetched during playback rather than

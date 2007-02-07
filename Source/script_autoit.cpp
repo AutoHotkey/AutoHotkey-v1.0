@@ -1865,17 +1865,7 @@ void Line::Util_GetFullPathName(const char *szIn, char *szOut)
 {
 	char	*szFilePart;
 	GetFullPathName(szIn, _MAX_PATH, szOut, &szFilePart);
-	Util_StripTrailingDir(szOut);
-}
-
-
-
-void Line::Util_StripTrailingDir(char *szPath)
-// Makes sure a filename does not have a trailing //
-{
-	size_t index = strlen(szPath) - 1;
-	if (szPath[index] == '\\')
-		szPath[index] = '\0';
+	strip_trailing_backslash(szOut);
 }
 
 

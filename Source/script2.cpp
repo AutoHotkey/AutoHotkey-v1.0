@@ -5511,7 +5511,7 @@ ResultType ShowMainWindow(MainWindowModes aMode, bool aRestricted)
 ResultType GetAHKInstallDir(char *aBuf)
 // Caller must ensure that aBuf is at least MAX_PATH in capacity.
 {
-	return RegReadString(HKEY_LOCAL_MACHINE, "SOFTWARE\\AutoHotkey", "InstallDir", aBuf, MAX_PATH);
+	return ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\AutoHotkey", "InstallDir", aBuf, MAX_PATH);
 }
 
 
@@ -10077,13 +10077,50 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 	// Set default result in case of early return; a blank value:
 	aResultToken.symbol = SYM_STRING;
 	aResultToken.marker = "";
+	HMODULE hmodule_to_free = NULL; // Set default in case of early goto; mostly for maintainability.
 
 	// Check that the mandatory first parameter (DLL+Function) is valid.
 	// (load-time validation has ensured at least one parameter is present).
-	if (IS_NUMERIC(aParam[0]->symbol))
+	void *function; // Will hold the address of the function to be called.
+
+	switch(aParam[0]->symbol)
 	{
-		g_ErrorLevel->Assign("-1"); // Stage 1 error: Blank/invalid first param.
-		return;
+		case SYM_STRING: // By far the most common, so it's listed first for performance. Also for performance, don't even consider the possibility that a quoted literal string like "33" is a function-address.
+			function = NULL; // Indicate that no function has been specified yet.
+			break;
+		// v1.0.46.08: Allow script to specify the address of a function, which might be useful for
+		// calling functions that the script discovers through unusual means such as C++ member functions.
+		case SYM_INTEGER:
+			// The following is commented out due to  rarity because it can only occur via expressions that produce
+			// a SYM_INTEGER (numeric literals aren't SYM_INTEGER).  If the address is negative, the same result
+			// will occur as for any other invalid address: an ErrorLevel of 0xc0000005.
+			//if (aParam[0]->value_int64 <= 0) // Must be checked before assigning it to "function" so that negatives are still visible (since "function" is unsigned).
+			//{
+			//	g_ErrorLevel->Assign("-1"); // Stage 1 error: Invalid first param.
+			//	return;
+			//}
+			// Otherwise, assume it's a valid address:
+			function = (void *)aParam[0]->value_int64;
+			break;
+		case SYM_FLOAT:
+			g_ErrorLevel->Assign("-1"); // Stage 1 error: Invalid first param.
+			return;
+		default: // SYM_VAR or SYM_OPERAND (SYM_OPERAND is typically a numeric literal, which it seems best to support since it doesn't add any code size or adversely affect performance).
+			char *param1 = (aParam[0]->symbol == SYM_VAR) ? aParam[0]->var->Contents() : aParam[0]->marker;
+			if (IsPureNumeric(param1, false, false, false))
+			{
+				__int64 temp64 = ATOI64(param1);
+				// Due to rarity, it doesn't seem worth the code size to check it (same as the other check above):
+				//if (temp64 <= 0)
+				//{
+				//	g_ErrorLevel->Assign("-1"); // Stage 1 error: Invalid first param.
+				//	return;
+				//}
+				// Otherwise, assume it's a valid address:
+				function = (void *)temp64;
+			}
+			else // Not a pure number, so fall back to normal method of considering it to be path+name.
+				function = NULL; // Indicate that no function has been specified yet.
 	}
 
 	// Determine the type of return value.
@@ -10302,71 +10339,72 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 		}
 	}
     
-	void *function = NULL;
-	HMODULE hmodule, hmodule_to_free = NULL;
-	char param1_buf[MAX_PATH*2], *function_name, *dll_name; // Must use MAX_PATH*2 because the function name is INSIDE the Dll file, and thus MAX_PATH can be exceeded.
-
-	// Define the standard libraries here. If they reside in %SYSTEMROOT%\system32 it is not
-	// necessary to specify the full path (it wouldn't make sense anyway).
-	static HMODULE sStdModule[] = {GetModuleHandle("user32"), GetModuleHandle("kernel32")
-		, GetModuleHandle("comctl32"), GetModuleHandle("gdi32")}; // user32 is listed first for performance.
-	static int sStdModule_count = sizeof(sStdModule) / sizeof(HMODULE);
-
-	// Make a modifiable copy of param1 so that the DLL name and function name can be parsed out easily:
-	strlcpy(param1_buf, aParam[0]->symbol == SYM_VAR ? aParam[0]->var->Contents() : aParam[0]->marker, sizeof(param1_buf) - 1); // -1 to reserve space for the "A" suffix later below.
-	if (   !(function_name = strrchr(param1_buf, '\\'))   ) // No DLL name specified, so a search among standard defaults will be done.
+	if (!function) // The function's address hasn't yet been determined.
 	{
-		dll_name = NULL;
-		function_name = param1_buf;
+		char param1_buf[MAX_PATH*2], *function_name, *dll_name; // Must use MAX_PATH*2 because the function name is INSIDE the Dll file, and thus MAX_PATH can be exceeded.
+		// Define the standard libraries here. If they reside in %SYSTEMROOT%\system32 it is not
+		// necessary to specify the full path (it wouldn't make sense anyway).
+		static HMODULE sStdModule[] = {GetModuleHandle("user32"), GetModuleHandle("kernel32")
+			, GetModuleHandle("comctl32"), GetModuleHandle("gdi32")}; // user32 is listed first for performance.
+		static int sStdModule_count = sizeof(sStdModule) / sizeof(HMODULE);
 
-		// Since no DLL was specified, search for the specified function among the standard modules.
-		for (i = 0; i < sStdModule_count; ++i)
-			if (   sStdModule[i] && (function = (void *)GetProcAddress(sStdModule[i], function_name))   )
-				break;
-		if (!function)
+		// Make a modifiable copy of param1 so that the DLL name and function name can be parsed out easily:
+		strlcpy(param1_buf, aParam[0]->symbol == SYM_VAR ? aParam[0]->var->Contents() : aParam[0]->marker, sizeof(param1_buf) - 1); // -1 to reserve space for the "A" suffix later below.
+		if (   !(function_name = strrchr(param1_buf, '\\'))   ) // No DLL name specified, so a search among standard defaults will be done.
 		{
-			// Since the absence of the "A" suffix (e.g. MessageBoxA) is so common, try it that way
-			// but only here with the standard libraries since the risk of ambiguity (calling the wrong
-			// function) seems unacceptably high in a custom DLL.  For example, a custom DLL might have
-			// function called "AA" but not one called "A".
-			strcat(function_name, "A"); // 1 byte of memory was already reserved above for the 'A'.
+			dll_name = NULL;
+			function_name = param1_buf;
+
+			// Since no DLL was specified, search for the specified function among the standard modules.
 			for (i = 0; i < sStdModule_count; ++i)
 				if (   sStdModule[i] && (function = (void *)GetProcAddress(sStdModule[i], function_name))   )
 					break;
-		}
-	}
-	else // DLL file name is explicitly present.
-	{
-		dll_name = param1_buf;
-		*function_name = '\0';  // Terminate dll_name to split it off from function_name.
-		++function_name; // Set it to the character after the last backslash.
-
-		// Get module handle. This will work when DLL is already loaded and might improve performance if
-		// LoadLibrary is a high-overhead call even when the library already being loaded.  If
-		// GetModuleHandle() fails, fall back to LoadLibrary().
-		if (   !(hmodule = GetModuleHandle(dll_name))    )
-			if (   !(hmodule = hmodule_to_free = LoadLibrary(dll_name))   )
+			if (!function)
 			{
-				g_ErrorLevel->Assign("-3"); // Stage 3 error: DLL couldn't be loaded.
-				return;
+				// Since the absence of the "A" suffix (e.g. MessageBoxA) is so common, try it that way
+				// but only here with the standard libraries since the risk of ambiguity (calling the wrong
+				// function) seems unacceptably high in a custom DLL.  For example, a custom DLL might have
+				// function called "AA" but not one called "A".
+				strcat(function_name, "A"); // 1 byte of memory was already reserved above for the 'A'.
+				for (i = 0; i < sStdModule_count; ++i)
+					if (   sStdModule[i] && (function = (void *)GetProcAddress(sStdModule[i], function_name))   )
+						break;
 			}
-		if (   !(function = (void *)GetProcAddress(hmodule, function_name))   )
-		{
-			// v1.0.34: If it's one of the standard libraries, try the "A" suffix.
-			for (i = 0; i < sStdModule_count; ++i)
-				if (hmodule == sStdModule[i]) // Match found.
-				{
-					strcat(function_name, "A"); // 1 byte of memory was already reserved above for the 'A'.
-					function = (void *)GetProcAddress(hmodule, function_name);
-					break;
-				}
 		}
-	}
+		else // DLL file name is explicitly present.
+		{
+			dll_name = param1_buf;
+			*function_name = '\0';  // Terminate dll_name to split it off from function_name.
+			++function_name; // Set it to the character after the last backslash.
 
-	if (!function)
-	{
-		g_ErrorLevel->Assign("-4"); // Stage 4 error: Function could not be found in the DLL(s).
-		goto end;
+			// Get module handle. This will work when DLL is already loaded and might improve performance if
+			// LoadLibrary is a high-overhead call even when the library already being loaded.  If
+			// GetModuleHandle() fails, fall back to LoadLibrary().
+			HMODULE hmodule;
+			if (   !(hmodule = GetModuleHandle(dll_name))    )
+				if (   !(hmodule = hmodule_to_free = LoadLibrary(dll_name))   )
+				{
+					g_ErrorLevel->Assign("-3"); // Stage 3 error: DLL couldn't be loaded.
+					return;
+				}
+			if (   !(function = (void *)GetProcAddress(hmodule, function_name))   )
+			{
+				// v1.0.34: If it's one of the standard libraries, try the "A" suffix.
+				for (i = 0; i < sStdModule_count; ++i)
+					if (hmodule == sStdModule[i]) // Match found.
+					{
+						strcat(function_name, "A"); // 1 byte of memory was already reserved above for the 'A'.
+						function = (void *)GetProcAddress(hmodule, function_name);
+						break;
+					}
+			}
+		}
+
+		if (!function)
+		{
+			g_ErrorLevel->Assign("-4"); // Stage 4 error: Function could not be found in the DLL(s).
+			goto end;
+		}
 	}
 
 	////////////////////////
@@ -10385,11 +10423,11 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 		// salvage this instance of the program because there's no knowing how much static data adjacent to
 		// sEmptyString has been overwritten and corrupted.
 		*Var::sEmptyString = '\0';
+		// Don't bother with freeing hmodule_to_free since a critical error like this calls for minimal cleanup.
+		// The OS almost certainly frees it upon termination anyway.
 		// Call ScriptErrror() so that the user knows *which* DllCall is at fault:
 		g_script.ScriptError("This DllCall requires a prior VarSetCapacity. The program is now unstable and will exit.");
 		g_script.ExitApp(EXIT_CRITICAL); // Called this way, it will run the OnExit routine, which is debatable because it could cause more good than harm, but might avoid loss of data if the OnExit routine does something important.
-		// Don't bother with "goto end" since a critical error like this calls for minimal cleanup.  The OS
-		// almost certainly frees hmodule_to_free upon termination anyway.
 	}
 
 	// It seems best to have the above take precedence over "exception_occurred" below.
@@ -10482,9 +10520,9 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 			aResultToken.symbol = SYM_FLOAT; // There is no SYM_DOUBLE since all floats are stored as doubles.
 			aResultToken.value_double = return_value.Double;
 			break;
-		default: // Should never be reached unless there's a bug.
-			aResultToken.symbol = SYM_STRING;
-			aResultToken.marker = "";
+		//default: // Should never be reached unless there's a bug.
+		//	aResultToken.symbol = SYM_STRING;
+		//	aResultToken.marker = "";
 		} // switch(return_attrib.type)
 	} // Storing the return value when no exception occurred.
 

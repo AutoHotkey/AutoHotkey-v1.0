@@ -642,19 +642,13 @@ VarSizeType Var::Get(char *aBuf)
 			//    if Var = Test
 			//    ...
 			static Var *cached_empty_var = NULL; // Doubles the speed of accessing empty variables that aren't environment variables (i.e. most of them).
-			if (!(cached_empty_var == this && aBuf) && (result = GetEnvironmentVariable(mName, buf_temp, sizeof(buf_temp))))
+			if (!(cached_empty_var == this && aBuf) && (result = GetEnvironmentVariable(mName, buf_temp, 0)))
 			{
-				cached_empty_var = NULL; // i.e. one use only to avoid cache from hiding the fact that an environment variable has newly come into existence since the previous call.
 				// This env. var exists.
+				cached_empty_var = NULL; // i.e. one use only to avoid cache from hiding the fact that an environment variable has newly come into existence since the previous call.
 				if (!aBuf)
 					return result - 1;  // since GetEnvironmentVariable() returns total size needed in this case.
-				// The caller has ensured, probably via previous call to this function with aBuf == NULL,
-				// that aBuf is large enough to hold the result.  Also, don't use a size greater than
-				// 32767 because that will cause it to fail on Win95 (tested by Robert Yalkin).
-				// (size probably must be under 64K, but that is untested.  Just stick with 32767)
-				// According to MSDN, 32767 is exactly large enough to handle the largest variable plus
-				// its zero terminator:
-				aBuf += GetEnvironmentVariable(mName, aBuf, 32767);
+				aBuf += GET_ENV_VAR_RELIABLE(mName, aBuf); // The caller has ensured, probably via previous call to this function with aBuf == NULL, that aBuf is large enough to hold the result.
 				break;
 			}
 			else // No matching env. var. or the cache indicates that GetEnvironmentVariable() need not be called.
@@ -819,17 +813,17 @@ VarSizeType Var::Get(char *aBuf)
 	case VAR_USERNAME: if (!aBuf) return g_script.GetUserOrComputer(true); aBuf += g_script.GetUserOrComputer(true, aBuf); break;
 
 	case VAR_COMSPEC: // Sizes/lengths/-1/return-values/etc. have been verified correct.
-		if (!aBuf) // Avoids subtracting 1 to be conservative and to reduce code size (due to the need to otherwise check for zero and avoid subtracting 1 in that case).
-			return GetEnvironmentVariable("comspec", buf_temp, 0);
+		if (!aBuf)
+			return GetEnvironmentVariable("comspec", buf_temp, 0); // Avoids subtracting 1 to be conservative and to reduce code size (due to the need to otherwise check for zero and avoid subtracting 1 in that case).
 		// Otherwise:
-		aBuf += GetEnvironmentVariable("comspec", aBuf, 32767); // Going higher than 32767 causes it to fail on Win9x.
+		aBuf += GET_ENV_VAR_RELIABLE("comspec", aBuf); // v1.0.46.08: GET_ENV_VAR_RELIABLE() is a new function to fix this on Windows 9x.
 		break;
 
 	case VAR_WINDIR: // Sizes/lengths/-1/return-values/etc. have been verified correct.
 		if (!aBuf) // Avoids subtracting 1 to be conservative and to reduce code size (due to the need to otherwise check for zero and avoid subtracting 1 in that case).
 			return GetWindowsDirectory(buf_temp, 0);
 		// Otherwise:
-		aBuf += GetWindowsDirectory(aBuf, MAX_PATH);
+		aBuf += GetWindowsDirectory(aBuf, MAX_PATH); // MAX_PATH is kept in case it's needed on Win9x for reasons similar to those in GetEnvironmentVarWin9x().
 		break;
 
 	case VAR_TEMP: // Sizes/lengths/-1/return-values/etc. have been verified correct.

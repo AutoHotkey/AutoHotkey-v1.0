@@ -1550,7 +1550,42 @@ void GetVirtualDesktopRect(RECT &aRect)
 
 
 
-ResultType RegReadString(HKEY aRootKey, char *aSubkey, char *aValueName, char *aBuf, size_t aBufSize)
+DWORD GetEnvironmentVarWin9x(char *aEnvVarName, char *aBuf)
+// Returns the length of what has been copied into aBuf.
+// Caller has ensured that aBuf is large enough (though anything >=32767 is always large enough).
+// This function was added in v1.0.46.08 to fix a long-standing bug that was more fully revealed
+// by 1.0.46.07's reduction of DEREF_BUF_EXPAND_INCREMENT from 32 to 16K (which allowed the Win9x
+// version of GetEnvironmentVariable() to detect that we were lying about the buffer being 32767
+// in size).  The reason for lying is that we don't know exactly how big the buffer is, but we do
+// know it's large enough. So we just pass 32767 in an attempt to make it always succeed
+// (mostly because GetEnvironmentVariable() is such a slow call, so it's best to avoid calling it
+// a second time just to get the length).  See other comments below.
+{
+	// Windows 9x is apparently capable of detecting a lie about the buffer size.
+	// For example, if the memory capacity is only 16K but we pass 32767, it sometimes/always detects that
+	// and returns 0, even if the string being retrieved is short enough (which it is because the caller
+	// already verified it).  To work around this, give it a genuinely large buffer with an accurate size,
+	// then copy the result out into the caller's variable.  This is almost certainly much faster than
+	// doing a second call to GetEnvironmentVariable() to get the length because GetEnv() is known to be a
+	// very slow call.
+	//
+	// Don't use a size greater than 32767 because that will cause it to fail on Win95 (tested by Robert Yalkin).
+	// According to MSDN, 32767 is exactly large enough to handle the largest variable plus its zero terminator.
+	char buf[32767];
+	DWORD length = GetEnvironmentVariable(aEnvVarName, buf, sizeof(buf));
+	// GetEnvironmentVariable() could be called twice, the first time to get the actual size.  But that would
+	// probably perform worse since GetEnvironmentVariable() is a very slow function.  In addition, it would
+	// add code complexity, so it seems best to fetch it into a large buffer then just copy it to dest-var.
+	if (length) // Probably always true under the conditions in effect for our callers.
+		memcpy(aBuf, buf, length + 1); // memcpy() usually benches a little faster than strcpy().
+	else // Failure. The buffer's contents might be undefined in this case.
+		*aBuf = '\0'; // Caller's buf should always have room for an empty string. So make it empty for maintainability, even if not strictly required by caller.
+	return length;
+}
+
+
+
+ResultType ReadRegString(HKEY aRootKey, char *aSubkey, char *aValueName, char *aBuf, size_t aBufSize)
 {
 	*aBuf = '\0'; // Set default output parameter.  Some callers rely on this being set even if failure occurs.
 	HKEY hkey;

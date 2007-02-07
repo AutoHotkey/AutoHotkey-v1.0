@@ -59,7 +59,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Ref\\ImageSearch\\TEST SUITE\\MAIN.ahk";
 		char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\New Text Document.ahk";
 	#else
-		char *script_filespec = NAME_P ".ini";  // Use this extension for better file association with editor(s).
+		char *script_filespec = NULL; // Set default as "unspecified/omitted".
 	#endif
 #endif
 
@@ -112,21 +112,24 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		}
 	}
 
+#ifndef AUTOHOTKEYSC
+	if (script_filespec)// Script filename was explicitly specified, so check if it has the special conversion flag.
+	{
+		size_t filespec_length = strlen(script_filespec);
+		if (filespec_length >= CONVERSION_FLAG_LENGTH)
+		{
+			char *cp = script_filespec + filespec_length - CONVERSION_FLAG_LENGTH;
+			// Now cp points to the first dot in the CONVERSION_FLAG of script_filespec (if it has one).
+			if (!stricmp(cp, CONVERSION_FLAG))
+				return Line::ConvertEscapeChar(script_filespec);
+		}
+	}
+#endif
+
 	// Like AutoIt2, store the number of script parameters in the script variable %0%, even if it's zero:
 	if (   !(var = g_script.FindOrAddVar("0"))   )
 		return CRITICAL_ERROR;  // Realistically should never happen.
 	var->Assign(script_param_num - 1);
-
-#ifndef AUTOHOTKEYSC
-	size_t filespec_length = strlen(script_filespec);
-	if (filespec_length >= CONVERSION_FLAG_LENGTH)
-	{
-		char *cp = script_filespec + filespec_length - CONVERSION_FLAG_LENGTH;
-		// Now cp points to the first dot in the CONVERSION_FLAG of script_filespec (if it has one).
-		if (!stricmp(cp, CONVERSION_FLAG))
-			return Line::ConvertEscapeChar(script_filespec);
-	}
-#endif
 
 	global_init(g);  // Set defaults prior to the below, since below might override them for AutoIt2 scripts.
 

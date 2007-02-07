@@ -213,10 +213,10 @@ Script::~Script() // Destructor.
 ResultType Script::Init(char *aScriptFilename, bool aIsRestart)
 // Returns OK or FAIL.
 // Caller has provided an empty string for aScriptFilename if this is a compiled script.
+// Otherwise, aScriptFilename can be NULL if caller hasn't determined the filename of the script yet.
 {
 	mIsRestart = aIsRestart;
 	char buf[2048]; // Just to make sure we have plenty of room to do things with.
-	char *filename_marker;
 #ifdef AUTOHOTKEYSC
 	// Fix for v1.0.29: Override the caller's use of __argv[0] by using GetModuleFileName(),
 	// so that when the script is started from the command line but the user didn't type the
@@ -225,19 +225,35 @@ ResultType Script::Init(char *aScriptFilename, bool aIsRestart)
 	// It also provides more consistency.
 	GetModuleFileName(NULL, buf, sizeof(buf));
 #else
-	// In case the script is a relative filespec (relative to current working dir):
-	if (!GetFullPathName(aScriptFilename, sizeof(buf), buf, &filename_marker))
+	if (!aScriptFilename) // v1.0.46.08: Change in policy: store the default script in the My Documents directory rather than in Program Files.  It's more correct and solves issues that occur due to Vista's file-protection scheme.
 	{
-		MsgBox("GetFullPathName"); // Short msg since so rare.
-		return FAIL;
+		// Since no script-file was specified on the command line, use the default name.
+		// For backward compatibility, FIRST check if there's an AutoHotkey.ini file in the current
+		// directory.  If there is, that needs to be used to retain compatibility.
+		aScriptFilename = NAME_P ".ini";
+		if (GetFileAttributes(aScriptFilename) == 0xFFFFFFFF) // File doesn't exist, so fall back to new method.
+		{
+			aScriptFilename = buf;
+			VarSizeType filespec_length = GetMyDocuments(aScriptFilename); // e.g. C:\Documents and Settings\Home\My Documents
+			if (filespec_length	> sizeof(buf)-16) // Need room for 16 characters ('\\' + "AutoHotkey.ahk" + terminator).
+				return FAIL; // Very rare, so for simplicity just abort.
+			strcpy(aScriptFilename + filespec_length, "\\AutoHotkey.ahk"); // Append the filename: .ahk vs. .ini seems slightly better in terms of clarity and usefulness (e.g. the ability to double click the default script to launch it).
+			// Now everything is set up right because even if aScriptFilename is a nonexistent file, the
+			// user will be prompted to create it by a stage further below.
+		}
+		//else since the legacy .ini file exists, everything is now set up right. (The file might be a directory, but that isn't checked due to rarity.)
 	}
+	// In case the script is a relative filespec (relative to current working dir):
+	char *unused;
+	if (!GetFullPathName(aScriptFilename, sizeof(buf), buf, &unused)) // Succeeds even on nonexistent files.
+		return FAIL; // Due to rarity, no error msg, just abort.
 #endif
 	// Using the correct case not only makes it look better in title bar & tray tool tip,
 	// it also helps with the detection of "this script already running" since otherwise
 	// it might not find the dupe if the same script name is launched with different
 	// lowercase/uppercase letters:
-	ConvertFilespecToCorrectCase(buf);
-	// In case the above changed the length, e.g. due to expansion of 8.3 filename:
+	ConvertFilespecToCorrectCase(buf); // This might change the length, e.g. due to expansion of 8.3 filename.
+	char *filename_marker;
 	if (   !(filename_marker = strrchr(buf, '\\'))   )
 		filename_marker = buf;
 	else
@@ -825,13 +841,12 @@ LineNumberType Script::LoadFromFile()
 "; IMPORTANT INFO ABOUT GETTING STARTED: Lines that start with a\n"
 "; semicolon, such as this one, are comments.  They are not executed.\n"
 "\n"
-"; This script is a .INI file because it is a special script that is\n"
-"; automatically launched when you run the program directly. By contrast,\n"
-"; text files that end in .ahk are associated with the program, which\n"
-"; means that they can be launched simply by double-clicking them.\n"
-"; You can have as many .ahk files as you want, located in any folder.\n"
-"; You can also run more than one .ahk file simultaneously and each will\n"
-"; get its own tray icon.\n"
+"; This script has a special filename and path because it is automatically\n"
+"; launched when you run the program directly.  Also, any text file whose\n"
+"; name ends in .ahk is associated with the program, which means that it\n"
+"; can be launched simply by double-clicking it.  You can have as many .ahk\n"
+"; files as you want, located in any folder.  You can also run more than\n"
+"; one ahk file simultaneously and each will get its own tray icon.\n"
 "\n"
 "; Please read the QUICK-START TUTORIAL near the top of the help file.\n"
 "; It explains how to perform common automation tasks such as sending\n"
@@ -11817,13 +11832,13 @@ VarSizeType Script::GetLanguage(char *aBuf)
 	if (g_os.IsWinNT())  // NT/2k/XP+
 	{
 		if (g_os.IsWin2000orLater())
-			RegReadString(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Nls\\Language", "InstallLanguage", target_buf, MAX_PATH);
+			ReadRegString(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Nls\\Language", "InstallLanguage", target_buf, MAX_PATH);
 		else // NT4
-			RegReadString(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Nls\\Language", "Default", target_buf, MAX_PATH);
+			ReadRegString(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Nls\\Language", "Default", target_buf, MAX_PATH);
 	}
 	else // Win9x
 	{
-		RegReadString(HKEY_USERS, ".DEFAULT\\Control Panel\\Desktop\\ResourceLocale", "", target_buf, MAX_PATH);
+		ReadRegString(HKEY_USERS, ".DEFAULT\\Control Panel\\Desktop\\ResourceLocale", "", target_buf, MAX_PATH);
 		memmove(target_buf, target_buf + 4, strlen(target_buf + 4) + 1); // +1 to include the zero terminator.
 	}
 	return (VarSizeType)strlen(target_buf);
@@ -11845,7 +11860,7 @@ VarSizeType Script::GetProgramFiles(char *aBuf)
 {
 	char buf[MAX_PATH];
 	char *target_buf = aBuf ? aBuf : buf;
-	RegReadString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion", "ProgramFilesDir", target_buf, MAX_PATH);
+	ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion", "ProgramFilesDir", target_buf, MAX_PATH);
 	return (VarSizeType)strlen(target_buf);
 }
 
@@ -11855,9 +11870,11 @@ VarSizeType Script::GetAppData(bool aGetCommon, char *aBuf)
 	char *target_buf = aBuf ? aBuf : buf;
 	*target_buf = '\0'; // Set default.
 	if (aGetCommon)
-		RegReadString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common AppData", target_buf, MAX_PATH);
+		ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders"
+			, "Common AppData", target_buf, MAX_PATH);
 	if (!*target_buf) // Either the above failed or we were told to get the user/private dir instead.
-		RegReadString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "AppData", target_buf, MAX_PATH);
+		ReadRegString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders"
+			, "AppData", target_buf, MAX_PATH);
 	return (VarSizeType)strlen(target_buf);
 }
 
@@ -11867,9 +11884,9 @@ VarSizeType Script::GetDesktop(bool aGetCommon, char *aBuf)
 	char *target_buf = aBuf ? aBuf : buf;
 	*target_buf = '\0'; // Set default.
 	if (aGetCommon)
-		RegReadString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Desktop", target_buf, MAX_PATH);
+		ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Desktop", target_buf, MAX_PATH);
 	if (!*target_buf) // Either the above failed or we were told to get the user/private dir instead.
-		RegReadString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Desktop", target_buf, MAX_PATH);
+		ReadRegString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Desktop", target_buf, MAX_PATH);
 	return (VarSizeType)strlen(target_buf);
 }
 
@@ -11879,9 +11896,9 @@ VarSizeType Script::GetStartMenu(bool aGetCommon, char *aBuf)
 	char *target_buf = aBuf ? aBuf : buf;
 	*target_buf = '\0'; // Set default.
 	if (aGetCommon)
-		RegReadString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Start Menu", target_buf, MAX_PATH);
+		ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Start Menu", target_buf, MAX_PATH);
 	if (!*target_buf) // Either the above failed or we were told to get the user/private dir instead.
-		RegReadString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Start Menu", target_buf, MAX_PATH);
+		ReadRegString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Start Menu", target_buf, MAX_PATH);
 	return (VarSizeType)strlen(target_buf);
 }
 
@@ -11891,9 +11908,9 @@ VarSizeType Script::GetPrograms(bool aGetCommon, char *aBuf)
 	char *target_buf = aBuf ? aBuf : buf;
 	*target_buf = '\0'; // Set default.
 	if (aGetCommon)
-		RegReadString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Programs", target_buf, MAX_PATH);
+		ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Programs", target_buf, MAX_PATH);
 	if (!*target_buf) // Either the above failed or we were told to get the user/private dir instead.
-		RegReadString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Programs", target_buf, MAX_PATH);
+		ReadRegString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Programs", target_buf, MAX_PATH);
 	return (VarSizeType)strlen(target_buf);
 }
 
@@ -11903,22 +11920,23 @@ VarSizeType Script::GetStartup(bool aGetCommon, char *aBuf)
 	char *target_buf = aBuf ? aBuf : buf;
 	*target_buf = '\0'; // Set default.
 	if (aGetCommon)
-		RegReadString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Startup", target_buf, MAX_PATH);
+		ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Startup", target_buf, MAX_PATH);
 	if (!*target_buf) // Either the above failed or we were told to get the user/private dir instead.
-		RegReadString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Startup", target_buf, MAX_PATH);
+		ReadRegString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Startup", target_buf, MAX_PATH);
 	return (VarSizeType)strlen(target_buf);
 }
 
 VarSizeType Script::GetMyDocuments(char *aBuf)
+// This one is called from at least one unconventional place.
 {
 	char buf[MAX_PATH];
 	char *target_buf = aBuf ? aBuf : buf;
-	RegReadString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Personal", target_buf, MAX_PATH);
+	ReadRegString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders"
+		, "Personal", target_buf, MAX_PATH); // Some callers might rely on MAX_PATH being the limit, to avoid overflow.
 	// Since it is common (such as in networked environments) to have My Documents on the root of a drive
 	// (such as a mapped drive letter), remove the backslash from something like M:\ because M: is more
 	// appropriate for most uses:
-	Line::Util_StripTrailingDir(target_buf);
-	return (VarSizeType)strlen(target_buf);
+	return (VarSizeType)strip_trailing_backslash(target_buf);
 }
 
 

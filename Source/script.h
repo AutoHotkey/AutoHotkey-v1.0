@@ -1722,7 +1722,6 @@ public:
 	static bool Util_DoesFileExist(const char *szFilename);
 	static bool Util_IsDir(const char *szPath);
 	static void Util_GetFullPathName(const char *szIn, char *szOut);
-	static void Util_StripTrailingDir(char *szPath);
 	static bool Util_IsDifferentVolumes(const char *szPath1, const char *szPath2);
 };
 

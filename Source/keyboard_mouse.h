@@ -218,7 +218,7 @@ struct PlaybackEvent
 			SHORT x;
 			SHORT y;
 		};
-		DWORD time_to_wait; // This member is present only when message==0; otherwise, the struct below is present.
+		DWORD time_to_wait; // This member is present only when message==0; otherwise, a struct is present.
 	};
 };
 LRESULT CALLBACK PlaybackProc(int aCode, WPARAM wParam, LPARAM lParam);

@@ -267,6 +267,22 @@ inline size_t trim(char *aStr, size_t aLength = -1)
 	// performance of PerformAssign() and possibly other things.
 }
 
+inline size_t strip_trailing_backslash(char *aPath)
+// Removes any backslash (if there is one).
+// Returns length of the new string to allow some callers to avoid another strlen() call.
+{
+	size_t length = strlen(aPath);
+	if (!length) // Below relies on this check having been done to prevent underflow.
+		return length;
+	char *cp = aPath + length - 1;
+	if (*cp == '\\')
+	{
+		*cp = '\0';
+		return length - 1;
+	}
+	// Otherwise there no slash to remove, so return the current length.
+	return length;
+}
 
 
 // Transformation is the same in either direction because the end bytes are swapped
@@ -547,7 +563,14 @@ void WindowToScreen(int &aX, int &aY);
 void GetVirtualDesktopRect(RECT &aRect);
 LPVOID AllocInterProcMem(HANDLE &aHandle, DWORD aSize, HWND aHwnd);
 void FreeInterProcMem(HANDLE aHandle, LPVOID aMem);
-ResultType RegReadString(HKEY aRootKey, char *aSubkey, char *aValueName, char *aBuf, size_t aBufSize);
+
+// The following is done as a macro to conserve stack space and avoid the overhead of a function-call on NT/2k/XP+.
+#define GET_ENV_VAR_RELIABLE(env_var_name, buf)\
+	(g_os.IsWin9x() ? GetEnvironmentVarWin9x(env_var_name, buf)\
+	: GetEnvironmentVariable(env_var_name, buf, 32767)) // NT/2k/XP+: Do it the direct way, which is known to work.  32767 is used mostly for backward compatibilty (a larger value would probably also work on all NT based OSes).
+DWORD GetEnvironmentVarWin9x(char *aEnvVarName, char *aBuf);
+ResultType ReadRegString(HKEY aRootKey, char *aSubkey, char *aValueName, char *aBuf, size_t aBufSize);
+
 HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, int aIconNumber
 	, bool aUseGDIPlusIfAvailable);
 HBITMAP IconToBitmap(HICON ahIcon, bool aDestroyIcon);

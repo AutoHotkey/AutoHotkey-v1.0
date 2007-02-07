@@ -667,20 +667,21 @@ qmathTan@8
 
 ?URLDownloadToFileA@Line@@AAE?AW4ResultType@@PAD0@Z
 
+?Util_GetFullPathName@Line@@SAXPBDPAD@Z
+?strip_trailing_backslash@@YAIPAD@Z  ; script.obj
+
 ?Util_CopyDir@Line@@SA_NPBD0_N@Z
 ?Util_CopyFile@Line@@SAHPBD0_N1@Z
 ?Util_CreateDir@Line@@SA_NPBD@Z
 ?Util_DoesFileExist@Line@@SA_NPBD@Z
 ?Util_ExpandFilenameWildcard@Line@@SAXPBD0PAD@Z
 ?Util_ExpandFilenameWildcardPart@Line@@SAXPBD0PAD@Z
-?Util_GetFullPathName@Line@@SAXPBDPAD@Z
 ?Util_IsDifferentVolumes@Line@@SA_NPBD0@Z
 ?Util_IsDir@Line@@SA_NPBD@Z
 ?Util_MoveDir@Line@@SA_NPBD0H@Z
 ?Util_RemoveDir@Line@@SA_NPBD_N@Z
 ?Util_Shutdown@@YA_NH@Z
 ?Util_ShutdownHandler@@YAHPAUHWND__@@K@Z
-?Util_StripTrailingDir@Line@@SAXPAD@Z
 ?Util_WinKill@@YAXPAUHWND__@@@Z
 ?WinMenuSelectItem@Line@@AAE?AW4ResultType@@PAD0000000000@Z
 
@@ -803,7 +804,8 @@ qmathTan@8
 ??0GdiplusStartupInput@Gdiplus@@QAE@P6GXW4DebugEventLevel@1@PAD@ZHH@Z
 
 ?MySetWindowTheme@@YAJPAUHWND__@@PBG1@Z
-?RegReadString@@YA?AW4ResultType@@PAUHKEY__@@PAD11I@Z
+?ReadRegString@@YA?AW4ResultType@@PAUHKEY__@@PAD11I@Z  ; util.obj
+?GetEnvironmentVarWin9x@@YAKPAD0@Z  ; util.obj
 ?ScreenToWindow@@YAXAAUtagPOINT@@PAUHWND__@@@Z
 
 ?lstrcasestr@@YAPADPBD0@Z
