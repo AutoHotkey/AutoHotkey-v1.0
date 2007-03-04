@@ -365,10 +365,10 @@ ResultType Script::CreateWindows()
 	wc.lpszClassName = WINDOW_CLASS_MAIN;
 	wc.hInstance = g_hInstance;
 	wc.lpfnWndProc = MainWindowProc;
-	// Provided from some example code:
-	wc.style = 0;  // CS_HREDRAW | CS_VREDRAW
-	wc.cbClsExtra = 0;
-	wc.cbWndExtra = 0;
+	// The following are left at the default of NULL/0 set higher above:
+	//wc.style = 0;  // CS_HREDRAW | CS_VREDRAW
+	//wc.cbClsExtra = 0;
+	//wc.cbWndExtra = 0;
 	wc.hIcon = wc.hIconSm = (HICON)LoadImage(g_hInstance, MAKEINTRESOURCE(IDI_MAIN), IMAGE_ICON, 0, 0, LR_SHARED); // Use LR_SHARED to conserve memory (since the main icon is loaded for so many purposes).
 	wc.hCursor = LoadCursor((HINSTANCE) NULL, IDC_ARROW);
 	wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);  // Needed for ProgressBar. Old: (HBRUSH)GetStockObject(WHITE_BRUSH);
@@ -382,7 +382,7 @@ ResultType Script::CreateWindows()
 	// Register a second class for the splash window.  The only difference is that
 	// it doesn't have the menu bar:
 	wc.lpszClassName = WINDOW_CLASS_SPLASH;
-	wc.lpszMenuName = NULL;
+	wc.lpszMenuName = NULL; // Override the non-NULL value set higher above.
 	if (!RegisterClassEx(&wc))
 	{
 		MsgBox("RegClass"); // Short/generic msg since so rare.
@@ -814,7 +814,11 @@ void Script::TerminateApp(int aExitCode)
 
 
 
+#ifdef AUTOHOTKEYSC
 LineNumberType Script::LoadFromFile()
+#else
+LineNumberType Script::LoadFromFile(bool aScriptWasNotspecified)
+#endif
 // Returns the number of non-comment lines that were loaded, or LOADING_FAILED on error.
 {
 	mNoHotkeyLabels = true;  // Indicate that there are no hotkey labels, since we're (re)loading the entire file.
@@ -826,7 +830,16 @@ LineNumberType Script::LoadFromFile()
 	if (attr == MAXDWORD) // File does not exist or lacking the authorization to get its attributes.
 	{
 		char buf[MAX_PATH + 256];
-		snprintf(buf, sizeof(buf), "The script file \"%s\" does not exist.  Create it now?", mFileSpec);
+		if (aScriptWasNotspecified) // v1.0.46.09: Give a more descriptive prompt to help users get started.
+		{
+			snprintf(buf, sizeof(buf),
+"To help you get started, would you like to create a sample script in the My Documents folder?\n"
+"\n"
+"Press YES to create and display the sample script.\n"
+"Press NO to exit.\n");
+		}
+		else // Mostly for backward compatibility, also prompt to create if an explicitly specified script doesn't exist.
+			snprintf(buf, sizeof(buf), "The script file \"%s\" does not exist.  Create it now?", mFileSpec);
 		int response = MsgBox(buf, MB_YESNO);
 		if (response != IDYES)
 			return 0;
@@ -848,10 +861,6 @@ LineNumberType Script::LoadFromFile()
 "; files as you want, located in any folder.  You can also run more than\n"
 "; one ahk file simultaneously and each will get its own tray icon.\n"
 "\n"
-"; Please read the QUICK-START TUTORIAL near the top of the help file.\n"
-"; It explains how to perform common automation tasks such as sending\n"
-"; keystrokes and mouse clicks.  It also explains how to use hotkeys.\n"
-"\n"
 "; SAMPLE HOTKEYS: Below are two sample hotkeys.  The first is Win+Z and it\n"
 "; launches a web site in the default browser.  The second is Control+Alt+N\n"
 "; and it launches a new Notepad window (or activates an existing one).  To\n"
@@ -869,6 +878,11 @@ LineNumberType Script::LoadFromFile()
 "\n"
 "; Note: From now on whenever you run AutoHotkey directly, this script\n"
 "; will be loaded.  So feel free to customize it to suit your needs.\n"
+"\n"
+"; Please read the QUICK-START TUTORIAL near the top of the help file.\n"
+"; It explains how to perform common automation tasks such as sending\n"
+"; keystrokes and mouse clicks.  It also explains more about hotkeys.\n"
+"\n"
 , fp2);
 		fclose(fp2);
 		// One or both of the below would probably fail -- at least on Win95 -- if mFileSpec ever
@@ -1146,12 +1160,12 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 	// For the line continuation mechanism:
 	bool do_ltrim, do_rtrim, literal_escapes, literal_derefs, literal_delimiters
 		, has_continuation_section, is_continuation_line;
-	#define CONTINUATION_SECTION_WITHOUT_COMMENTS 1 // MUST BE 1 because it's the default set by anything boolean-true.
+	#define CONTINUATION_SECTION_WITHOUT_COMMENTS 1 // MUST BE 1 because it's the default set by anything that's boolean-true.
 	#define CONTINUATION_SECTION_WITH_COMMENTS    2 // Zero means "not in a continuation section".
 	int in_continuation_section;
 
 	char *next_option, *option_end, orig_char, one_char_string[2], two_char_string[3]; // Line continuation mechanism's option parsing.
-	one_char_string[1] = '\0';  // Pre-terminate these to simplfy code later below.
+	one_char_string[1] = '\0';  // Pre-terminate these to simplify code later below.
 	two_char_string[2] = '\0';  //
 	int continuation_line_count;
 
@@ -2344,29 +2358,58 @@ size_t Script::GetLine(char *aBuf, int aMaxCharsToRead, int aInContinuationSecti
 		aBuf[--aBuf_length] = '\0';
 #endif
 
-	if (aInContinuationSection == CONTINUATION_SECTION_WITHOUT_COMMENTS)
+	if (aInContinuationSection)
 	{
-		// Caller relies on us to make detect the end of the continuation section so that trimming
-		// will be done on the final line of the section and so that a comment can immediately
-		// follow the closing parenthesis (on the same line).  Example:
-		// (
-		//	Text
-		// ) ; Same line comment.
 		char *cp = omit_leading_whitespace(aBuf);
-		if (*cp != ')')
-			return aBuf_length; // The above is responsible for keeping aBufLength up-to-date with any changes to aBuf.
+		if (aInContinuationSection == CONTINUATION_SECTION_WITHOUT_COMMENTS) // By default, continuation sections don't allow comments (lines beginning with a semicolon are treated as literal text).
+		{
+			// Caller relies on us to detect the end of the continuation section so that trimming
+			// will be done on the final line of the section and so that a comment can immediately
+			// follow the closing parenthesis (on the same line).  Example:
+			// (
+			//	Text
+			// ) ; Same line comment.
+			if (*cp != ')') // This isn't the last line of the continuation section, so leave the line untrimmed (caller will apply the ltrim setting on its own).
+				return aBuf_length; // Earlier sections are responsible for keeping aBufLength up-to-date with any changes to aBuf.
+			//else this line starts with ')', so continue on to later section that checks for a same-line comment on its right side.
+		}
+		else // aInContinuationSection == CONTINUATION_SECTION_WITH_COMMENTS (i.e. comments are allowed in this continuation section).
+		{
+			// Fix for v1.0.46.09+: The "com" option shouldn't put "ltrim" into effect.
+			if (!strncmp(cp, g_CommentFlag, g_CommentFlagLength)) // Case sensitive.
+			{
+				*aBuf = '\0'; // Since this line is a comment, have the caller ignore it.
+				return -2; // Callers tolerate -2 only when in a continuation section.  -2 indicates, "don't include this line at all, not even as a blank line to which the JOIN string (default "\n") will apply.
+			}
+			if (*cp == ')') // This isn't the last line of the continuation section, so leave the line untrimmed (caller will apply the ltrim setting on its own).
+			{
+				ltrim(aBuf); // Ltrim this line unconditionally so that caller will see that it starts with ')' without having to do extra steps.
+				aBuf_length = strlen(aBuf); // ltrim() doesn't always return an accurate length.
+			}
+		}
 	}
-	//else no continuation section or it allows comments, so the check above isn't necessary.
-
-	// Since above didn't return, either we're not in a continuation section, or this is the final line of one,
-	// or comments are allowed inside the section.
-	// Apply ltrim() to support semicolons after tabs or other whitespace.  Seems best to rtrim also:
-	aBuf_length = trim(aBuf);
-	if (!strncmp(aBuf, g_CommentFlag, g_CommentFlagLength)) // Case sensitive.
+	// Since above didn't return, either:
+	// 1) We're not in a continuation section at all, so apply ltrim() to support semicolons after tabs or
+	//    other whitespace.  Seems best to rtrim also.
+	// 2) CONTINUATION_SECTION_WITHOUT_COMMENTS but this line is the final line of the section.  Apply
+	//    trim() and other logic further below because caller might rely on it.
+	// 3) CONTINUATION_SECTION_WITH_COMMENTS (i.e. comments allowed), but this line isn't a comment (though
+	//    it may start with ')' and thus be the final line of this section). In either case, need to check
+	//    for same-line comments further below.
+	if (aInContinuationSection != CONTINUATION_SECTION_WITH_COMMENTS) // Case #1 & #2 above.
 	{
-		*aBuf = '\0';
-		return aInContinuationSection ? -2 : 0; // Callers tolerate -2 only when in a continuation section.  -2 indicates, "don't include this line at all, not even as a blank line to which the JOIN string (default "\n") will apply.
+		aBuf_length = trim(aBuf);
+		if (!strncmp(aBuf, g_CommentFlag, g_CommentFlagLength)) // Case sensitive.
+		{
+			// Due to other checks, aInContinuationSection==false whenever the above condition is true.
+			*aBuf = '\0';
+			return 0;
+		}
 	}
+	//else CONTINUATION_SECTION_WITH_COMMENTS, which due to other checking higher above, also means that
+	// this line isn't a comment (though it might have a comment on its right side, which is checked below).
+	// CONTINUATION_SECTION_WITHOUT_COMMENTS would already have returned higher above if this line isn't
+	// the last line of the continuation section.
 	if (g_AllowSameLineComments)
 	{
 		// Handle comment-flags that appear to the right of a valid line.  But don't
@@ -7757,7 +7800,7 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 								break;
 							if (strchr(EXPR_FORBIDDEN_BYREF, *cp)) // This character isn't allowed in something passed ByRef unless it's an assignment (which is checked below).
 							{
-								if (Line::StartsWithAssignmentOp(cp))
+								if (Line::StartsWithAssignmentOp(cp) || strstr(cp, " ? ")) // v1.0.46.09: Also allow a ternary unconditionally, because it can be an arbitrarily complex expression followed by two branches that yield variables.
 								{
 									// Skip over :=, +=, -=, *=, /=, ++, -- ... because they can be passed ByRef.
 									// In fact, don't even continue the loop because any assignment can be followed
@@ -13412,10 +13455,11 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 	// the extension (e.g. .exe) to differentiate "find" from "find.exe":
 	if (!shell_action_is_system_verb)
 	{
-		STARTUPINFO si = {0};  // Zero fill to be safer.
+		STARTUPINFO si = {0}; // Zero fill to be safer.
 		si.cb = sizeof(si);
-		si.lpReserved = si.lpDesktop = si.lpTitle = NULL;
-		si.lpReserved2 = NULL;
+		// The following are left at the default of NULL/0 set higher above:
+		//si.lpReserved = si.lpDesktop = si.lpTitle = NULL;
+		//si.lpReserved2 = NULL;
 		si.dwFlags = STARTF_USESHOWWINDOW;  // This tells it to use the value of wShowWindow below.
 		si.wShowWindow = (aRunShowMode && *aRunShowMode) ? Line::ConvertRunMode(aRunShowMode) : SW_SHOWNORMAL;
 		PROCESS_INFORMATION pi = {0};

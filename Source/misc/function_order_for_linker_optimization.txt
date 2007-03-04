@@ -1561,7 +1561,7 @@ WSAStartup@8
 ?AutoExecSection@Script@@QAE?AW4ResultType@@XZ
 
 ?SetWorkingDir@@YAXPAD@Z
-?LoadFromFile@Script@@QAEIXZ
+?LoadFromFile@Script@@QAEI_N@Z  ; script.obj
 ?LoadIncludedFile@Script@@QAE?AW4ResultType@@PAD_N1@Z
 ?IsDirective@Script@@AAE?AW4ResultType@@PAD@Z
 ?IsFunction@@YA_NPADPA_N@Z

@@ -155,7 +155,11 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	//CreateMutex(NULL, FALSE, script_filespec); // script_filespec seems a good choice for uniqueness.
 	//if (!g_ForceLaunch && !restart_mode && GetLastError() == ERROR_ALREADY_EXISTS)
 
+#ifdef AUTOHOTKEYSC
 	LineNumberType load_result = g_script.LoadFromFile();
+#else
+	LineNumberType load_result = g_script.LoadFromFile(script_filespec == NULL);
+#endif
 	if (load_result == LOADING_FAILED) // Error during load (was already displayed by the function call).
 		return CRITICAL_ERROR;  // Should return this value because PostQuitMessage() also uses it.
 	if (!load_result) // LoadFromFile() relies upon us to do this check.  No lines were loaded, so we're done.

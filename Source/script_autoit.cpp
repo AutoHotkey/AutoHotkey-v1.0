@@ -65,11 +65,11 @@ ResultType Script::DoRunAs(char *aCommandLine, char *aWorkingDir, bool aDisplayE
 	wsi.dwFlags		= STARTF_USESHOWWINDOW;
 	wsi.wShowWindow = aShowWindow;
 	// The following are left initialized to 0/NULL (initialized earlier above):
-	//wsi.lpReserved	= NULL;
+	//wsi.lpReserved = NULL;
 	//wsi.lpDesktop	= NULL;
-	//wsi.lpTitle		= NULL;
-	//wsi.cbReserved2	= 0;
-	//wsi.lpReserved2	= NULL;
+	//wsi.lpTitle = NULL;
+	//wsi.cbReserved2 = 0;
+	//wsi.lpReserved2 = NULL;
 
 	// Convert to wide character format:
 	WCHAR command_line_wide[LINE_SIZE], working_dir_wide[MAX_PATH];

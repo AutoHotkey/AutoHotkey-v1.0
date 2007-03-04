@@ -676,8 +676,8 @@ void Hotkey::TriggerJoyHotkeys(int aJoystickID, DWORD aButtonsNewlyDown)
 void Hotkey::Perform(HotkeyVariant &aVariant)
 // Caller is reponsible for having called PerformIsAllowed() before calling us.
 {
-	static bool dialog_is_displayed = false;  // Prevents double-display caused by key buffering.
-	if (dialog_is_displayed) // Another recursion layer is already displaying the warning dialog below.
+	static bool sDialogIsDisplayed = false;  // Prevents double-display caused by key buffering.
+	if (sDialogIsDisplayed) // Another recursion layer is already displaying the warning dialog below.
 		return; // Don't allow new hotkeys to fire during that time.
 
 	// Help prevent runaway hotkeys (infinite loops due to recursion in bad script files):
@@ -717,12 +717,12 @@ void Hotkey::Perform(HotkeyVariant &aVariant)
 
 		// This is now needed since hotkeys can still fire while a messagebox is displayed.
 		// Seems safest to do this even if it isn't always necessary:
-		dialog_is_displayed = true;
+		sDialogIsDisplayed = true;
 		g_AllowInterruption = false;
 		if (MsgBox(error_text, MB_YESNO) == IDNO)
 			g_script.ExitApp(EXIT_CRITICAL); // Might not actually Exit if there's an OnExit subroutine.
 		g_AllowInterruption = true;
-		dialog_is_displayed = false;
+		sDialogIsDisplayed = false;
 	}
 	// The display_warning var is needed due to the fact that there's an OR in this condition:
 	if (display_warning || time_until_now > (DWORD)g_HotkeyThrottleInterval)

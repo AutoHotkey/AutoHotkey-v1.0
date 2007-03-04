@@ -190,10 +190,19 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 			GuiIndexType control_index = gui.FindControl(aParam2); // Search on either the control's variable name or its ClassNN.
 			if (control_index != -1) // Must compare directly to -1 due to unsigned.
 			{
+				GuiControlType &control = gui.mControl[control_index]; // For maintainability, and might slightly reduce code size.
 				if (gui_command == GUI_CMD_LISTVIEW)
-					gui.mCurrentListView = gui.mControl + control_index;
-				else
-					gui.mCurrentTreeView = gui.mControl + control_index;
+				{
+					if (control.type == GUI_CONTROL_LISTVIEW) // v1.0.46.09: Must validate that it's the right type of control; otherwise some LV_* functions can crash due to the control not having malloc'd the special ListView struct that tracks column attributes.
+						gui.mCurrentListView = &control;
+					//else mismatched control type, so just leave it unchanged.
+				}
+				else // GUI_CMD_TREEVIEW
+				{
+					if (control.type == GUI_CONTROL_TREEVIEW)
+						gui.mCurrentTreeView = &control;
+					//else mismatched control type, so just leave it unchanged.
+				}
 			}
 			//else it seems best never to change ite to be "no control" since it doesn't seem to have much use.
 		}
@@ -1064,15 +1073,18 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 ResultType Line::GuiControlGet(char *aCommand, char *aControlID, char *aParam3)
 {
 	Var &output_var = *OUTPUT_VAR;
-	output_var.Assign(); // Set default to be blank for all commands, for consistency.
-
 	int window_index = g.GuiDefaultWindowIndex; // Which window to operate upon.  Initialized to thread's default.
 	GuiControlGetCmds guicontrolget_cmd = Line::ConvertGuiControlGetCmd(aCommand, &window_index);
 	if (guicontrolget_cmd == GUICONTROLGET_CMD_INVALID)
+	{
 		// This is caught at load-time 99% of the time and can only occur here if the sub-command name
 		// is contained in a variable reference.  Since it's so rare, the handling of it is debatable,
 		// but to keep it simple just set ErrorLevel:
+		output_var.Assign(); // For backward-compatibility and also serves as an additional indicator of failure.
 		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+	}
+	else if (guicontrolget_cmd != GUICONTROLGET_CMD_POS) // v1.0.46.09: Avoid resetting the variable for the POS mode, since it uses and array and the user might want the existing contents of the GUI variable retained.
+		output_var.Assign(); // Set default to be blank for all commands except POS, for consistency.
 	if (window_index < 0 || window_index >= MAX_GUI_WINDOWS || !g_gui[window_index]) // Relies on short-circuit boolean order.
 		// This departs from the tradition used by PerformGui() but since this type of error is rare,
 		// and since use ErrorLevel adds a little bit of flexibility (since the script's curretn thread

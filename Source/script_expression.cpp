@@ -201,6 +201,12 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 								// x++ y
 								// x ++ y
 								// x ++y
+								// The following implicit concat is deliberately unsupported:
+								//    "string" ++x
+								// The ++ above is seen as applying to the string because it doesn't seem worth
+								// the complexity to distinguish between expressions that can accept a post-op
+								// and those that can't (operands other than variables can have a post-op;
+								// e.g. (x:=y)++).
 								++cp; // An additional increment to have loop skip over the operator's second symbol.
 								this_infix_item.symbol = SYM_POST_INCREMENT;
 							}
@@ -1477,7 +1483,7 @@ end_of_infix_to_postfix:
 				if (done = EXPR_IS_DONE) // Resolve macro only once for use in more than one place below.
 				{
 					if (output_var // i.e. this is ACT_ASSIGNEXPR and we've now produced the final result.
-						&& !(var_backup && g.CurrentFunc == &func && output_var->IsNonStaticLocal())) // Ordered for short-circuit performance. See multiline comment above.
+						&& !(var_backup && g.CurrentFunc == &func && output_var->IsNonStaticLocal())) // Ordered for short-circuit performance.
 						// Above line is a fix for v1.0.45.03: It detects whether output_var is among the variables
 						// that are about to be restored from backup.  If it is, we can't assign to it now
 						// because it's currently a local that belongs to the instance we're in the middle of
@@ -1546,34 +1552,40 @@ end_of_infix_to_postfix:
 				// It's fairly rare that the following optimization is even be applicable because it requires
 				// an assignment *internal* to an expression, such as "if not var:=func()", or "a:=b, c:=func()".
 				// But it seems best to optimize these cases so that commas aren't penalized.
-				if (i < postfix_count-1 && postfix[i+1]->symbol == SYM_ASSIGN // Next operation is ":=".
-					&& stack_count && stack[stack_count-1]->symbol == SYM_VAR // i.e. let the next iteration handle it instead of doing it here.  Further below relies on this having been checked.
-					&& stack[stack_count-1]->var->Type() == VAR_NORMAL) // Don't do clipboard here because don't want its result to be SYM_VAR, yet there's no place to store that result (i.e. need to continue on to make-persistent further below to get some memory for it).
+				if (i < postfix_count-1 && postfix[i+1]->symbol == SYM_ASSIGN  // Next operation is ":=".
+					&& stack_count && stack[stack_count-1]->symbol == SYM_VAR) // i.e. let the next iteration handle it instead of doing it here.  Further below relies on this having been checked.
 				{
 					// This section is an optimization that avoids memory allocation and an extra memcpy()
 					// whenever this result is going to be assigned to a variable as the very next step.
 					// See the comment section higher above for examples.
-					ExprTokenType &left = *STACK_POP; // Above has already confirmed that it's SYM_VAR and VAR_NORMAL.
-					// The following section is similar to one higher above, so maintain them together.
-					result_length = (VarSizeType)strlen(result);
-					// 1.0.46.06: If the UDF has stored its result in its deref buffer, take possession
-					// of that buffer, which saves a memcpy of a potentially huge string.  The cost
-					// of this is that if there are any other UDF-calls pending after this one, the
-					// code in their bodies will have to create another deref buffer if they need one.
-					if (result == sDerefBuf && result_length >= MAX_ALLOC_SIMPLE) // Result is in their buffer and it's longer than what can fit in a SimpleHeap variable (avoids wasting SimpleHeap memory).
+					Var &output_var_internal = *stack[stack_count-1]->var; // Above has already confirmed that it's SYM_VAR and VAR_NORMAL.
+					if (output_var_internal.Type() == VAR_NORMAL // Don't do clipboard here because don't want its result to be SYM_VAR, yet there's no place to store that result (i.e. need to continue on to make-persistent further below to get some memory for it).
+						&& !(var_backup && g.CurrentFunc == &func && output_var_internal.IsNonStaticLocal())) // Ordered for short-circuit performance.
+						// v1.0.46.09: The above line is a fix for a bug caused by 1.0.46.06's optimization below.
+						// For details, see comments in a similar line higher above.
 					{
-						// AcceptNewMem() will shrink the memory for us, via _expand(), if there's a lot of
-						// extra/unused space in it.
-						left.var->AcceptNewMem(result, result_length);
-						NULLIFY_S_DEREF_BUF // Force any UDFs called subsequently by us to get a new deref buffer because this one was just hung onto a variable.
+						--stack_count; // This officially pops the lvalue off the stack (now that we know we will be handling this operation here).
+						// The following section is similar to one higher above, so maintain them together.
+						result_length = (VarSizeType)strlen(result);
+						// 1.0.46.06: If the UDF has stored its result in its deref buffer, take possession
+						// of that buffer, which saves a memcpy of a potentially huge string.  The cost
+						// of this is that if there are any other UDF-calls pending after this one, the
+						// code in their bodies will have to create another deref buffer if they need one.
+						if (result == sDerefBuf && result_length >= MAX_ALLOC_SIMPLE) // Result is in their buffer and it's longer than what can fit in a SimpleHeap variable (avoids wasting SimpleHeap memory).
+						{
+							// AcceptNewMem() will shrink the memory for us, via _expand(), if there's a lot of
+							// extra/unused space in it.
+							output_var_internal.AcceptNewMem(result, result_length);
+							NULLIFY_S_DEREF_BUF // Force any UDFs called subsequently by us to get a new deref buffer because this one was just hung onto a variable.
+						}
+						else
+							output_var_internal.Assign(result, result_length);
+						this_token.circuit_token = postfix[++i]->circuit_token; // this_token.circuit_token should have been NULL prior to this because the final right-side result of an assignment shouldn't be the last item of an AND/OR/IFF's left branch. The assignment itself would be that.
+						this_token.var = &output_var_internal;   // Make the result a variable rather than a normal operand so that its
+						this_token.symbol = SYM_VAR; // address can be taken, and it can be passed ByRef. e.g. &(x:=1)
+						Var::FreeAndRestoreFunctionVars(func, var_backup, var_backup_count); // Do end-of-function-call cleanup (see comment above). No need to do make_result_persistent section.
+						goto push_this_token;
 					}
-					else
-						left.var->Assign(result, result_length);
-					this_token.circuit_token = postfix[++i]->circuit_token; // this_token.circuit_token should have been NULL prior to this because the final right-side result of an assignment shouldn't be the last item of an AND/OR/IFF's left branch. The assignment itself would be that.
-					this_token.var = left.var;   // Make the result a variable rather than a normal operand so that its
-					this_token.symbol = SYM_VAR; // address can be taken, and it can be passed ByRef. e.g. &(x:=1)
-					Var::FreeAndRestoreFunctionVars(func, var_backup, var_backup_count); // Do end-of-function-call cleanup (see comment above). No need to do make_result_persistent section.
-					goto push_this_token;
 				}
 				// Since above didn't goto:
 				// The result just returned may need to be copied to a more persistent location.  This is done right
@@ -1842,6 +1854,20 @@ end_of_infix_to_postfix:
 						// variable whenever a variable came in.  This allows its address to be taken, and it
 						// to be passed byreference, and other SYM_VAR behaviors, even if the operation itself
 						// produces a blank value.
+						// KNOWN LIMITATION: Although this behavior is convenient to have have, I realize now
+						// that it produces at least one weird effect: whenever a binary operator's operands
+						// both use a pre-op on the same variable, or whenever two or more of a function-call's
+						// parameters both do a pre-op on the same variable, that variable will have the same
+						// value at the time the binary operator or function-call is evaluated.  For example:
+						//    y = 1
+						//    x = ++y + ++y  ; Yields 6 not 5.
+						// However, if you think about the situations anyone would intentionally want to do
+						// the above or a function-call with two or more pre-ops in its parameters, it seems
+						// so extremely rare that retaining the existing behavior might be superior because of:
+						// 1) Convenience: It allows ++x to be passed ByRef, it's address taken.  Less importantly,
+						//    it also allows ++++x to work.
+						// 2) Backward compatibility: Some existing scripts probably already rely on the fact that
+						//    ++x and --x produce an lvalue (though it's undocumented).
 						if (right.var->Type() == VAR_NORMAL)
 						{
 							this_token.var = right.var;  // Make the result a variable rather than a normal operand so that its
@@ -1875,7 +1901,7 @@ end_of_infix_to_postfix:
 				this_token.value_int64 = (right.symbol == SYM_INTEGER) ? right.value_int64 : ATOI64(right_contents);
 				right.var->Assign(this_token.value_int64 + delta);
 			}
-			else // right_is_number must be PURE_FLOAT because it's the only alternative remaining.
+			else // right_is_number must be PURE_FLOAT because it's the only remaining alternative.
 			{
 				// Uses atof() because no need to have the overhead of ATOF() since PURE_FLOAT is never hex.
 				this_token.value_double = (right.symbol == SYM_FLOAT) ? right.value_double : atof(right_contents);

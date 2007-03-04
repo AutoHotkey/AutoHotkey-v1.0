@@ -2346,7 +2346,11 @@ public:
 	ResultType Reload(bool aDisplayErrors);
 	ResultType ExitApp(ExitReasons aExitReason, char *aBuf = NULL, int ExitCode = 0);
 	void TerminateApp(int aExitCode);
+#ifdef AUTOHOTKEYSC
 	LineNumberType LoadFromFile();
+#else
+	LineNumberType LoadFromFile(bool aScriptWasNotspecified);
+#endif
 	ResultType LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude, bool aIgnoreLoadFailure);
 	ResultType UpdateOrCreateTimer(Label *aLabel, char *aPeriod, char *aPriority, bool aEnable
 		, bool aUpdatePriorityOnly);
