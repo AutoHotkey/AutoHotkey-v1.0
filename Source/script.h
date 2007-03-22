@@ -39,7 +39,7 @@ enum ExecUntilMode {NORMAL_MODE, UNTIL_RETURN, UNTIL_BLOCK_END, ONLY_ONE_LINE};
 // If it is storing a pointer for a given Action Type, be sure never to compare it
 // for equality against these constants because by coincidence, the pointer value
 // might just match one of them:
-#define ATTR_NONE (void *)0
+#define ATTR_NONE (void *)0  // Some places migh rely on this being zero.
 #define ATTR_TRUE (void *)1
 #define ATTR_LOOP_UNKNOWN (void *)1 // Same value as the above.        // KEEP IN SYNC WITH BELOW.
 #define ATTR_LOOP_IS_UNKNOWN_OR_NONE(attr) (attr <= ATTR_LOOP_UNKNOWN) // KEEP IN SYNC WITH ABOVE.
@@ -428,6 +428,20 @@ enum MenuCommands {MENU_CMD_INVALID, MENU_CMD_SHOW, MENU_CMD_USEERRORLEVEL
 	, MENU_CMD_DELETE, MENU_CMD_DELETEALL, MENU_CMD_TIP, MENU_CMD_ICON, MENU_CMD_NOICON
 	, MENU_CMD_CLICK, MENU_CMD_MAINWINDOW, MENU_CMD_NOMAINWINDOW
 };
+
+#define AHK_LV_SELECT       0x0100
+#define AHK_LV_DESELECT     0x0200
+#define AHK_LV_FOCUS        0x0400
+#define AHK_LV_DEFOCUS      0x0800
+#define AHK_LV_CHECK        0x1000
+#define AHK_LV_UNCHECK      0x2000
+#define AHK_LV_DROPHILITE   0x4000
+#define AHK_LV_UNDROPHILITE 0x8000
+// Although there's no room remaining in the BYTE for LVIS_CUT (AHK_LV_CUT) [assuming it's ever needed],
+// it might be possible to squeeze more info into it as follows:
+// Each pair of bits can represent three values (other than zero).  But since only two values are needed
+// (since an item can't be both selected an deselected simultaneously), one value in each pair is available
+// for future use such as LVIS_CUT.
 
 enum GuiCommands {GUI_CMD_INVALID, GUI_CMD_OPTIONS, GUI_CMD_ADD, GUI_CMD_MARGIN, GUI_CMD_MENU
 	, GUI_CMD_SHOW, GUI_CMD_SUBMIT, GUI_CMD_CANCEL, GUI_CMD_MINIMIZE, GUI_CMD_MAXIMIZE, GUI_CMD_RESTORE

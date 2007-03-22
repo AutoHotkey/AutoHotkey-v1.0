@@ -6650,13 +6650,19 @@ ResultType Line::StringSplit(char *aArrayName, char *aInputString, char *aDelimi
 	strlcpy(var_name, aArrayName, MAX_VAR_NAME_LENGTH+1); // This prefix is copied into it only once, for performance.
 	char *var_name_suffix = var_name + strlen(var_name);
 
-	strcpy(var_name_suffix, "0");
-	// ALWAYS_PREFER_LOCAL below allows any existing local variable that matches array0's name
-	// (e.g. Array0) to be given preference over creating a new global variable if the function's
-	// mode is to assume globals:
-	Var *array0 = g_script.FindOrAddVar(var_name, 0, ALWAYS_PREFER_LOCAL);
-	if (!array0)
-		return FAIL;  // It will have already displayed the error.
+	Var *array0;
+	if (mAttribute != ATTR_NONE) // 1.0.46.10: Fixed to rely on loadtime's determination of whether ArrayName0 is truly local or global (only loadtime currently has any awareness of declarations, so the determination must be made there unless "ArrayName" itself is a dynamic variable, which seems too rare to worry about).
+		array0 = (Var *)mAttribute;
+	else
+	{
+		var_name_suffix[0] = '0';
+		var_name_suffix[1] = '\0';
+		// ALWAYS_PREFER_LOCAL below allows any existing local variable that matches array0's name
+		// (e.g. Array0) to be given preference over creating a new global variable if the function's
+		// mode is to assume globals:
+		if (   !(array0 = g_script.FindOrAddVar(var_name, 0, ALWAYS_PREFER_LOCAL))   )
+			return FAIL;  // It will have already displayed the error.
+	}
 	int always_use = array0->IsLocal() ? ALWAYS_USE_LOCAL : ALWAYS_USE_GLOBAL;
 
 	if (!*aInputString) // The input variable is blank, thus there will be zero elements.
@@ -12602,8 +12608,11 @@ void BIF_LV_AddInsertModify(ExprTokenType &aResultToken, ExprTokenType *aParam[]
 			next_option += 5;
 			if (*next_option && !ATOI(next_option)) // If it's Check0, invert the mode to become "unchecked".
 				adding = !adding;
-			lvi.stateMask |= LVIS_STATEIMAGEMASK;
-			lvi.state |= adding ? 0x2000 : 0x1000; // The #1 image is "unchecked" and the #2 is "checked".
+			if (mode == 'M') // v1.0.46.10: Do this section only for Modify, not Add/Insert, to avoid generating an extra "unchecked" notification when a row is added/inserted with an initial state of "checked".  In other words, the script now receives only a "checked" notification, not an "unchecked+checked". Search on is_checked for more comments.
+			{
+				lvi.stateMask |= LVIS_STATEIMAGEMASK;
+				lvi.state |= adding ? 0x2000 : 0x1000; // The #1 image is "unchecked" and the #2 is "checked".
+			}
 			is_checked = adding;
 		}
 		else if (!strnicmp(next_option, "Col", 3))

@@ -2384,7 +2384,7 @@ size_t Script::GetLine(char *aBuf, int aMaxCharsToRead, int aInContinuationSecti
 			if (*cp == ')') // This isn't the last line of the continuation section, so leave the line untrimmed (caller will apply the ltrim setting on its own).
 			{
 				ltrim(aBuf); // Ltrim this line unconditionally so that caller will see that it starts with ')' without having to do extra steps.
-				aBuf_length = strlen(aBuf); // ltrim() doesn't always return an accurate length.
+				aBuf_length = strlen(aBuf); // ltrim() doesn't always return an accurate length, so do it this way.
 			}
 		}
 	}
@@ -2406,7 +2406,7 @@ size_t Script::GetLine(char *aBuf, int aMaxCharsToRead, int aInContinuationSecti
 			return 0;
 		}
 	}
-	//else CONTINUATION_SECTION_WITH_COMMENTS, which due to other checking higher above, also means that
+	//else CONTINUATION_SECTION_WITH_COMMENTS (case #3 above), which due to other checking also means that
 	// this line isn't a comment (though it might have a comment on its right side, which is checked below).
 	// CONTINUATION_SECTION_WITHOUT_COMMENTS would already have returned higher above if this line isn't
 	// the last line of the continuation section.
@@ -5248,7 +5248,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_SETBATCHLINES:
 		if (aArgc > 0 && !line.ArgHasDeref(1))
 		{
-			if (!strcasestr(new_raw_arg1, "ms") && !IsPureNumeric(new_raw_arg1, true, false))
+			if (!strcasestr(new_raw_arg1, "ms") && !IsPureNumeric(new_raw_arg1, true, false)) // For simplicity and due to rarity, new_arg[0].is_expression isn't checked, so a line with no variables or function-calls like "SetBatchLines % 1+1" will be wrongly seen as a syntax error.
 				return ScriptError(ERR_PARAM1_INVALID, new_raw_arg1);
 		}
 		break;
@@ -5293,8 +5293,18 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 
 	case ACT_STRINGSPLIT:
 		if (*new_raw_arg1 && !line.ArgHasDeref(1)) // The output array must be a legal name.
-			if (!Var::ValidateName(new_raw_arg1)) // It already displayed the error.
-				return FAIL;
+		{
+			// 1.0.46.10: Fixed to look up ArrayName0 in advance (here at loadtime) so that runtime can
+			// know whether it's local or global.  This is necessary because only here at loadtime
+			// is there any awareness of the current function's list of declared variables (to conserve
+			// memory, that list is longer available at runtime).
+			char temp_var_name[MAX_VAR_NAME_LENGTH + 10]; // Provide extra room for trailing "0", and to detect names that are too long.
+			snprintf(temp_var_name, sizeof(temp_var_name), "%s0", new_raw_arg1);
+			if (   !(the_new_line->mAttribute = FindOrAddVar(temp_var_name))   )
+				return FAIL;  // The above already displayed the error.
+		}
+		//else it's a dynamic array name.  Since that's very rare, just use the old runtime behavior for
+		// backward compatibility.
 		break;
 
 	case ACT_REGREAD:
@@ -8128,13 +8138,15 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 		} // ActionType is "IF".
 
 		// Since above didn't continue, do the switch:
+		char *line_raw_arg1 = LINE_RAW_ARG1; // Resolve only once to help reduce code size.
+		char *line_raw_arg2 = LINE_RAW_ARG2; //
+
 		switch (line->mActionType)
 		{
 		case ACT_BLOCK_BEGIN:
 			line = PreparseIfElse(line->mNextLine, UNTIL_BLOCK_END, aLoopTypeFile, aLoopTypeReg, aLoopTypeRead
 				, aLoopTypeParse);
-			// line is now either NULL due to an error, or the location
-			// of the END_BLOCK itself.
+			// "line" is now either NULL due to an error, or the location of the END_BLOCK itself.
 			if (line == NULL)
 				return NULL; // Error.
 			break;
@@ -8144,7 +8156,7 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 				 // end-block.  UPDATE: I think this is impossible because callers only use
 				 // aMode == ONLY_ONE_LINE when aStartingLine's ActionType is already
 				 // known to be an IF or a BLOCK_BEGIN:
-				return line->PreparseError("Q"); // Placeholder.  Formerly "Unexpected end-of-block (single)."
+				return line->PreparseError("Q"); // Placeholder (see above). Formerly "Unexpected end-of-block (single)."
 			if (UNTIL_BLOCK_END)
 				// Return line rather than line->mNextLine because, if we're at the end of
 				// the script, it's up to the caller to differentiate between that condition
@@ -8152,7 +8164,7 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 				return line;
 			// Otherwise, we found an end-block we weren't looking for.  This should be
 			// impossible since the block pre-parsing already balanced all the blocks?
-			return line->PreparseError("Q"); // Placeholder.  Formerly "Unexpected end-of-block (multi)."
+			return line->PreparseError("Q"); // Placeholder (see above). Formerly "Unexpected end-of-block (multi)."
 		case ACT_BREAK:
 		case ACT_CONTINUE:
 			if (!aLoopTypeFile && !aLoopTypeReg && !aLoopTypeRead && !aLoopTypeParse)
@@ -8172,25 +8184,26 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 		// These next 4 must also be done here (i.e. *after* all the script lines have been added),
 		// so that labels both above and below this line can be resolved:
 		case ACT_ONEXIT:
-			if (*LINE_RAW_ARG1 && !line->ArgHasDeref(1))
-				if (   !(line->mAttribute = FindLabel(LINE_RAW_ARG1))   )
+			if (*line_raw_arg1 && !line->ArgHasDeref(1))
+				if (   !(line->mAttribute = FindLabel(line_raw_arg1))   )
 					return line->PreparseError(ERR_NO_LABEL);
 			break;
 
 		case ACT_HOTKEY:
-			if (   *LINE_RAW_ARG2 && !line->ArgHasDeref(2)
-				&& !line->ArgHasDeref(1) && strnicmp(LINE_RAW_ARG1, "IfWin", 5)   ) // v1.0.42: Omit IfWinXX from validation.
-				if (   !(line->mAttribute = FindLabel(LINE_RAW_ARG2))   )
-					if (!Hotkey::ConvertAltTab(LINE_RAW_ARG2, true))
+			if (   *line_raw_arg2 && !line->ArgHasDeref(2)
+				&& !line->ArgHasDeref(1) && strnicmp(line_raw_arg1, "IfWin", 5)   ) // v1.0.42: Omit IfWinXX from validation.
+				if (   !(line->mAttribute = FindLabel(line_raw_arg2))   )
+					if (!Hotkey::ConvertAltTab(line_raw_arg2, true))
 						return line->PreparseError(ERR_NO_LABEL);
 			break;
 
 		case ACT_SETTIMER:
 			if (!line->ArgHasDeref(1))
-				if (   !(line->mAttribute = FindLabel(LINE_RAW_ARG1))   )
+				if (   !(line->mAttribute = FindLabel(line_raw_arg1))   )
 					return line->PreparseError(ERR_NO_LABEL);
-			if (*LINE_RAW_ARG2 && !line->ArgHasDeref(2))
-				if (!Line::ConvertOnOff(LINE_RAW_ARG2) && !IsPureNumeric(LINE_RAW_ARG2))
+			if (*line_raw_arg2 && !line->ArgHasDeref(2))
+				if (!Line::ConvertOnOff(line_raw_arg2) && !IsPureNumeric(line_raw_arg2)
+					&& !line->mArg[1].is_expression) // v1.0.46.10: Don't consider expressions THAT CONTAIN NO VARIABLES OR FUNCTION-CALLS like "% 2*500" to be a syntax error.
 					return line->PreparseError(ERR_PARAM2_INVALID);
 			break;
 

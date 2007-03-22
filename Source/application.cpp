@@ -207,7 +207,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 	int i, gui_count;
 	bool msg_was_handled;
 	HWND fore_window, focused_control, focused_parent, criterion_found_hwnd;
-	char wnd_class_name[32];
+	char wnd_class_name[32], gui_action_errorlevel[16], *walk;
 	UserMenuItem *menu_item;
 	Hotkey *hk;
 	HotkeyVariant *variant;
@@ -1078,10 +1078,8 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 			switch (msg.message)
 			{
 			case AHK_GUI_ACTION: // Listed first for performance.
-				// Set g.GuiEvent to indicate whether a double-click or other non-standard event launched it.
-				g.GuiEvent = gui_action; // Set default, which is possibly overridden below.
-				// Below overrides the default g.GuiEvent and gui_event_info (set higher above), if appropriate.
-				// It also sets g.GuiPoint (to support A_GuiX and A_GuiY) if appropriate.
+				*gui_action_errorlevel = '\0'; // Set default, which is possibly overridden below.
+				// When appropriate, the below sets g.GuiPoint (to support A_GuiX and A_GuiY).
 				switch(gui_action)
 				{
 				case GUI_EVENT_CONTEXTMENU:
@@ -1142,13 +1140,14 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 					break; // case GUI_CONTEXT_MENU.
 
 				case GUI_EVENT_DROPFILES:
+					g.GuiEvent = gui_action; // i.e. set to GUI_EVENT_DROPFILES for special use by GetGuiEvent().
 					g.GuiPoint = msg.pt; // v1.0.38: More accurate/customary to use msg.pt than GetCursorPos().
 					ScreenToWindow(g.GuiPoint, pgui->mHwnd);
 					// Visually indicate that drops aren't allowed while and existing drop is still being
 					// processed. Fix for v1.0.31.02: The window's current ExStyle is fetched every time
 					// in case a non-GUI command altered it (such as making it transparent):
 					SetWindowLong(pgui->mHwnd, GWL_EXSTYLE, GetWindowLong(pgui->mHwnd, GWL_EXSTYLE) & ~WS_EX_ACCEPTFILES);
-					break; // g.GuiEvent stays set to GUI_EVENT_DROPFILES for special use by GetGuiEvent().
+					break;
 
 				case GUI_EVENT_CLOSE:
 				case GUI_EVENT_ESCAPE:
@@ -1160,14 +1159,42 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 						g.GuiPoint.x = gui_size;
 					break;
 				default: // Control-generated event (i.e. event_is_control_generated==true).
-					if (pcontrol->type == GUI_CONTROL_STATUSBAR) // An earlier stage has ensured pcontrol isn't NULL in this case.
+					switch(pcontrol->type)
 					{
+					case GUI_CONTROL_STATUSBAR: // An earlier stage has ensured pcontrol isn't NULL in this case.
 						// For performance reasons, this isn't done for all GUI events, just ones that
 						// have a typical use for the coords.
 						g.GuiPoint = msg.pt;
 						ScreenToWindow(g.GuiPoint, pgui->mHwnd);
+						break;
+					case GUI_CONTROL_LISTVIEW: // v1.0.46.10: Added this section to support notifying the script of HOW the item changed.
+						if (LOBYTE(gui_action) == 'I')
+						{
+							walk = gui_action_errorlevel;
+							if (gui_action & AHK_LV_SELECT) // Keep this one first, and the others below in the same order, in case any scripts come to rely on the ordering of the letters within the string.
+								*walk++ = 'S';
+							else if (gui_action & AHK_LV_DESELECT)
+								*walk++ = 's';
+							if (gui_action & AHK_LV_FOCUS)
+								*walk++ = 'F';
+							else if (gui_action & AHK_LV_DEFOCUS)
+								*walk++ = 'f';
+							if (gui_action & AHK_LV_CHECK)
+								*walk++ = 'C';
+							else if (gui_action & AHK_LV_UNCHECK)
+								*walk++ = 'c';
+							// Search on "AHK_LV_DROPHILITE" for comments about why the below is commented out:
+							//if (gui_action & AHK_LV_DROPHILITE)
+							//	*walk++ = 'D';
+							//else if (gui_action & AHK_LV_UNDROPHILITE)
+							//	*walk++ = 'd';
+							*walk = '\0'; // Provide terminator inside gui_action_errorlevel.
+							gui_action = 'I'; // Done only after we're done using it above. This clears out the flags above to leave only a naked 'I'.
+						}
+						break;
+					//default: No action for any other control-generated events since caller already set things up properly.
 					}
-					// No action for any other control-generated events since caller already set things up properly.
+					g.GuiEvent = gui_action; // Set g.GuiEvent to indicate whether a double-click or other non-standard event launched it.
 				} // switch (msg.message)
 
 				// We're still in case AHK_GUI_ACTION; other cases have their own handling for g.EventInfo.
@@ -1180,7 +1207,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				if (gui_action == GUI_EVENT_RESIZE || gui_action == GUI_EVENT_DROPFILES)
 					g_ErrorLevel->Assign(gui_event_info); // For backward compatibility.
 				else
-					g_ErrorLevel->Assign(); // Helps reserve it for future use. See explanation above.
+					g_ErrorLevel->Assign(gui_action_errorlevel); // Helps reserve it for future use. See explanation above.
 
 				// Set last found window (as documented).  It's not necessary to check IsWindow/IsWindowVisible/
 				// DetectHiddenWindows since GetValidLastUsedWindow() takes care of that whenever the script

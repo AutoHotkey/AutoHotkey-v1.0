@@ -7069,8 +7069,51 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 				// It's also received for checking/unchecking an item.  Extending a selection via Shift-ArrowKey
 				// generates between 1 and 3 of them, perhaps at random?  Maybe all we can count on is that you
 				// get at least one when the selection has changed or a box is (un)checked.
-				gui_event = 'I';
-				event_info = 1 + ((LPNMLISTVIEW)lParam)->iItem;
+				if (control.attrib & GUI_CONTROL_ATTRIB_ALTSUBMIT) // Script asked for item-change notifications.
+				{
+					gui_event = 'I'; // Set default to be a plain I.
+					NMLISTVIEW &lv = *(LPNMLISTVIEW)lParam;
+					event_info = 1 + lv.iItem; // MSDN: If iItem is -1, the change has been applied to all items in the list view.
+
+					// Although the OS currently generates focus+select together, it sends de-focus and de-select
+					// separately.  However, since this behavior might vary in past/future OSes, it seems best to
+					// use a method that will work regardless of what combinations are possible.
+					UINT newly_changed =  lv.uNewState ^ lv.uOldState; // uChanged doesn't seem accurate: it's always 8?  So derive the "correct" value of which flags have actually changed.
+					UINT newly_on = newly_changed & lv.uNewState;
+					UINT newly_off = newly_changed & lv.uOldState;
+					if (newly_on & LVIS_FOCUSED)
+						gui_event |= AHK_LV_FOCUS;
+					else if (newly_off & LVIS_FOCUSED)
+						gui_event |= AHK_LV_DEFOCUS;
+					if (newly_on & LVIS_SELECTED)
+						gui_event |= AHK_LV_SELECT;
+					else if (newly_off & LVIS_SELECTED)
+						gui_event |= AHK_LV_DESELECT;
+					// The following are commented out for possible future use because currently, I think they
+					// don't happen at all (not for dropping of files anyway).  If dragging & dropping within
+					// a ListView or between two different ListViews ever becomes a built-in feature, this
+					// section (and its counterpart in the main event loop) can be re-enabled.
+					// In those very rare cases when a script needs LVIS_DROPHILITED, it can use OnMessage().
+					//if (newly_on & LVIS_DROPHILITED) // MSDN: LVIS_DROPHILITED means "the item is highlighted as a drag-and-drop target."
+					//	gui_event |= AHK_LV_DROPHILITE;
+					//else if (newly_off & LVIS_DROPHILITED)
+					//	gui_event |= AHK_LV_UNDROPHILITE;
+
+					// Below must occur only after all of the checks above:
+					if (newly_changed & LVIS_STATEIMAGEMASK) // State image changed.
+					{
+						if (lv.uOldState & LVIS_STATEIMAGEMASK) // Image is changing from a non-blank image to a different non-blank image.
+							// For simplicity, assume checkboxes are present rather than custom images.
+							// User can use OnMessage() to do custom handling in the rare event of having
+							// images other than checkboxes.
+							gui_event |= ((lv.uNewState & LVIS_STATEIMAGEMASK) == 0x1000) ? AHK_LV_UNCHECK : AHK_LV_CHECK; // The #1 image is "unchecked" and the #2 (or anything higher) is considered "checked".
+						else // State image changed from blank/none to some new image.  v1.0.46.10: Omit this event because it seems to do more harm than good in 99% of cases (especially since it typically only occurs when the script calls LV_Add/Insert).
+							if (gui_event == 'I') // But only omit the even if there are no other changes/reasons for it.
+								is_actionable = false;
+					}
+				}
+				//else script isn't being notifid of item-changes, so leave everything uninitialized or at their
+				// defaults (it won't matter because further below, no event will be sent to the script).
 				break;
 
 			case LVN_BEGINSCROLL: gui_event = 'S'; break;
