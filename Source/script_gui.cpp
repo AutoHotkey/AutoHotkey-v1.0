@@ -4919,7 +4919,7 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 				for (u = 0; u < mControlCount; ++u)
 					if (mControl[u].output_var == candidate_var)
 						return aControl.hwnd ? g_ErrorLevel->Assign(ERRORLEVEL_ERROR)
-							: g_script.ScriptError("The same variable cannot be used for more than one control per window."
+							: g_script.ScriptError("The same variable cannot be used for more than one control." // It used to say "one control per window" but that seems more confusing than it's worth.
 								ERR_ABORT, next_option - 1);
 				aControl.output_var = candidate_var;
 				break;

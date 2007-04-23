@@ -294,8 +294,8 @@ __int64 FileTimeSecondsUntil(FILETIME *pftStart, FILETIME *pftEnd)
 
 
 
-SymbolType IsPureNumeric(char *aBuf, bool aAllowNegative, bool aAllowAllWhitespace
-	, bool aAllowFloat, bool aAllowImpure)
+SymbolType IsPureNumeric(char *aBuf, BOOL aAllowNegative, BOOL aAllowAllWhitespace
+	, BOOL aAllowFloat, BOOL aAllowImpure)  // BOOL vs. bool might squeeze a little more performance out of this frequently-called function.
 // String can contain whitespace.
 // If aBuf doesn't contain something purely numeric, PURE_NOT_NUMERIC is returned.  The same happens if
 // aBuf contains a float but aAllowFloat is false.  Otherwise, PURE_INTEGER or PURE_FLOAT is returned.
@@ -318,17 +318,31 @@ SymbolType IsPureNumeric(char *aBuf, bool aAllowNegative, bool aAllowAllWhitespa
 		++aBuf;
 
 	// Relies on short circuit boolean order to prevent reading beyond the end of the string:
-	bool is_hex = IS_HEX(aBuf);
+	BOOL is_hex = IS_HEX(aBuf); // BOOL vs. bool might squeeze a little more performance out this frequently-called function.
 	if (is_hex)
 		aBuf += 2;  // Skip over the 0x prefix.
 
 	// Set defaults:
-	bool has_decimal_point = false;
-	bool has_at_least_one_digit = false; // i.e. a string consisting of only "+", "-" or "." is not considered numeric.
+	BOOL has_decimal_point = false;
+	BOOL has_at_least_one_digit = false; // i.e. a string consisting of only "+", "-" or "." is not considered numeric.
+	char c;
 
-	for (; *aBuf && !IS_SPACE_OR_TAB(*aBuf); ++aBuf)
+	for (;; ++aBuf)
 	{
-		if (*aBuf == '.')
+		c = *aBuf;
+		if (IS_SPACE_OR_TAB(c))
+		{
+			if (*omit_leading_whitespace(aBuf)) // But that space or tab is followed by something other than whitespace.
+				if (!aAllowImpure) // e.g. "123 456" is not a valid pure number.
+					return PURE_NOT_NUMERIC;
+				// else fall through to the bottom logic.
+			// else since just whitespace at the end, the number qualifies as pure, so fall through to the bottom
+			// logic (it would already have returned in the loop if it was impure)
+			break;
+		}
+		if (!c) // End of string was encountered.
+			break; // The number qualifies as pure, so fall through to the logic at the bottom. (It would already have returned elsewhere in the loop if the number is impure).
+		if (c == '.')
 		{
 			if (!aAllowFloat || has_decimal_point || is_hex)
 				// i.e. if aBuf contains 2 decimal points, it can't be a valid number.
@@ -341,7 +355,8 @@ SymbolType IsPureNumeric(char *aBuf, bool aAllowNegative, bool aAllowAllWhitespa
 		}
 		else
 		{
-			if (is_hex ? !isxdigit(*aBuf) : (*aBuf < '0' || *aBuf > '9')) // And since we're here, it's not '.' either.
+			if (is_hex ? !isxdigit(c) : (c < '0' || c > '9')) // And since we're here, it's not '.' either.
+			{
 				if (aAllowImpure) // Since aStr starts with a number (as verified above), it is considered a number.
 				{
 					if (has_at_least_one_digit)
@@ -350,20 +365,26 @@ SymbolType IsPureNumeric(char *aBuf, bool aAllowNegative, bool aAllowAllWhitespa
 						return PURE_NOT_NUMERIC;
 				}
 				else
-					return PURE_NOT_NUMERIC;
-			else
+				{
+					// As written below, this actually tolerates malformed scientific notation such as numbers
+					// containing two or more E's (e.g. 1.0e4e+5e-6,).  But for performance and due to rarity,
+					// it seems best not to check for them.
+					if (toupper(c) != 'E' // v1.0.46.11: Support scientific notation in floating point numbers.
+						|| !(has_decimal_point && has_at_least_one_digit)) // But it must have a decimal point and at least one digit to the left of the 'E'. This avoids variable names like "1e4" from being seen as sci-notation literals (for backward compatibility). Some callers rely on this check.
+						return PURE_NOT_NUMERIC;
+					if (aBuf[1] == '-' || aBuf[1] == '+') // The optional sign is present on the exponent.
+						++aBuf; // Omit it from further consideration so that the outer loop doesn't see it as an extra/illegal sign.
+					if (aBuf[1] < '0' || aBuf[1] > '9')
+						// Even if it is an 'e', ensure what follows it is a valid exponent.  Some callers rely
+						// on this check, such as ones that expect "0.6e" to be non-numeric (for "SetFormat Float") 
+						return PURE_NOT_NUMERIC;
+				}
+			}
+			else // This character is a valid digit or hex-digit.
 				has_at_least_one_digit = true;
 		}
-	}
-	if (*aBuf) // The loop was broken because a space or tab was encountered.
-		if (*omit_leading_whitespace(aBuf)) // But that space or tab is followed by something other than whitespace.
-			if (!aAllowImpure) // e.g. "123 456" is not a valid pure number.
-				return PURE_NOT_NUMERIC;
-			// else fall through to the bottom logic.
-		// else since just whitespace at the end, the number qualifies as pure, so fall through.
-		// (it would already have returned in the loop if it was impure)
-	// else since end of string was encountered, the number qualifies as pure, so fall through.
-	// (it would already have returned in the loop if it was impure).
+	} // for()
+
 	if (has_at_least_one_digit)
 		return has_decimal_point ? PURE_FLOAT : PURE_INTEGER;
 	else

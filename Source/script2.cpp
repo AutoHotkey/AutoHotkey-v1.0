@@ -11318,7 +11318,7 @@ void RegExReplace(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPar
 					break; // Seems best to treat it as literal (strictly speaking the script should have escaped it).
 
 				default:
-					if (isdigit(char_after_dollar)) // Treat it as a single-digit backreference. CONSEQUENTLY, $15 is really $1 followed by a literal '5'.
+					if (char_after_dollar >= '0' && char_after_dollar <= '9') // Treat it as a single-digit backreference. CONSEQUENTLY, $15 is really $1 followed by a literal '5'.
 					{
 						ref_num = char_after_dollar - '0'; // $0 is the whole pattern rather than a subpattern.
 						src += 1 + extra_offset; // Set things up for the next iteration to resume at the char after $d. Consequently, $19 is seen as $1 followed by a literal 9.
@@ -11925,7 +11925,8 @@ void BIF_Round(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 		// someday to omit certain calls when very simply situations allow it).  In addition, twice as slow is
 		// not going to impact the vast majority of scripts since as mentioned above, Round (in its param2>0
 		// mode) is almost always used for displaying data, not for intensive operations within a expressions.
-		// Note: the script can force Round(x, 2) to obey SetFormat by adding 0 to the result (if it wants).
+		// AS DOCUMENTED: Round(..., positive_number) doesn't obey SetFormat (nor scientific notation).
+		// The script can force Round(x, 2) to obey SetFormat by adding 0 to the result (if it wants).
 		// Also, a new parameter an be added someday to trim excess trailing zeros from param2>0's result
 		// (e.g. Round(3.50, 2, true) can be 3.5 rather than 3.50), but this seems less often desired due to
 		// column alignment and other goals where consistency is important.

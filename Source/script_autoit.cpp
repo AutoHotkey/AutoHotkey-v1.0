@@ -417,6 +417,7 @@ ResultType Line::Control(char *aCmd, char *aValue, char *aControl, char *aTitle,
 	LPARAM lparam;
 	vk_type vk;
 	int key_count;
+	char temp_buf[32];
 
 	switch(control_cmd)
 	{
@@ -524,6 +525,11 @@ ResultType Line::Control(char *aCmd, char *aValue, char *aControl, char *aTitle,
 		break;
 
 	case CONTROL_CMD_ADD:
+		if (!*aControl) // Fix for v1.0.46.11: If aControl is blank, the control ID came in via a WinTitle of "ahk_id xxx".
+		{
+			GetClassName(control_window, temp_buf, sizeof(temp_buf));
+			aControl = temp_buf;
+		}
 		if (strcasestr(aControl, "Combo")) // v1.0.42: Changed to strcasestr vs. !strnicmp for TListBox/TComboBox.
 			msg = CB_ADDSTRING;
 		else if (strcasestr(aControl, "List"))
@@ -543,6 +549,11 @@ ResultType Line::Control(char *aCmd, char *aValue, char *aControl, char *aTitle,
 		control_index = ATOI(aValue) - 1;
 		if (control_index < 0)
 			return OK;
+		if (!*aControl) // Fix for v1.0.46.11: If aControl is blank, the control ID came in via a WinTitle of "ahk_id xxx".
+		{
+			GetClassName(control_window, temp_buf, sizeof(temp_buf));
+			aControl = temp_buf;
+		}
 		if (strcasestr(aControl, "Combo")) // v1.0.42: Changed to strcasestr vs. strnicmp for TListBox/TComboBox.
 			msg = CB_DELETESTRING;
 		else if (strcasestr(aControl, "List"))
@@ -561,6 +572,11 @@ ResultType Line::Control(char *aCmd, char *aValue, char *aControl, char *aTitle,
 		control_index = ATOI(aValue) - 1;
 		if (control_index < 0)
 			return OK;  // Let ErrorLevel tell the story.
+		if (!*aControl) // Fix for v1.0.46.11: If aControl is blank, the control ID came in via a WinTitle of "ahk_id xxx".
+		{
+			GetClassName(control_window, temp_buf, sizeof(temp_buf));
+			aControl = temp_buf;
+		}
 		if (strcasestr(aControl, "Combo")) // v1.0.42: Changed to strcasestr vs. strnicmp for TListBox/TComboBox.
 		{
 			msg = CB_SETCURSEL;
@@ -602,6 +618,11 @@ ResultType Line::Control(char *aCmd, char *aValue, char *aControl, char *aTitle,
 		break;
 
 	case CONTROL_CMD_CHOOSESTRING:
+		if (!*aControl) // Fix for v1.0.46.11: If aControl is blank, the control ID came in via a WinTitle of "ahk_id xxx".
+		{
+			GetClassName(control_window, temp_buf, sizeof(temp_buf));
+			aControl = temp_buf;
+		}
 		if (strcasestr(aControl, "Combo")) // v1.0.42: Changed to strcasestr vs. strnicmp for TListBox/TComboBox.
 		{
 			msg = CB_SELECTSTRING;
@@ -680,7 +701,7 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 	DWORD dwResult, index, length, item_length, start, end, u, item_count;
 	UINT msg, x_msg, y_msg;
 	int control_index;
-	char *cp, *dyn_buf, hex_buf[32];
+	char *cp, *dyn_buf, temp_buf[32];
 
 	switch(control_cmd)
 	{
@@ -705,6 +726,11 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 		break;
 
 	case CONTROLGET_CMD_FINDSTRING:
+		if (!*aControl) // Fix for v1.0.46.11: If aControl is blank, the control ID came in via a WinTitle of "ahk_id xxx".
+		{
+			GetClassName(control_window, temp_buf, sizeof(temp_buf));
+			aControl = temp_buf;
+		}
 		if (strcasestr(aControl, "Combo")) // v1.0.42: Changed to strcasestr vs. strnicmp for TListBox/TComboBox.
 			msg = CB_FINDSTRINGEXACT;
 		else if (strcasestr(aControl, "List"))
@@ -718,6 +744,11 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 		break;
 
 	case CONTROLGET_CMD_CHOICE:
+		if (!*aControl) // Fix for v1.0.46.11: If aControl is blank, the control ID came in via a WinTitle of "ahk_id xxx".
+		{
+			GetClassName(control_window, temp_buf, sizeof(temp_buf));
+			aControl = temp_buf;
+		}
 		if (strcasestr(aControl, "Combo")) // v1.0.42: Changed to strcasestr vs. strnicmp for TListBox/TComboBox.
 		{
 			msg = CB_GETCURSEL;
@@ -756,6 +787,11 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 		break;
 
 	case CONTROLGET_CMD_LIST:
+		if (!*aControl) // Fix for v1.0.46.11: If aControl is blank, the control ID came in via a WinTitle of "ahk_id xxx".
+		{
+			GetClassName(control_window, temp_buf, sizeof(temp_buf));
+			aControl = temp_buf;
+		}
 		if (!strnicmp(aControl, "SysListView32", 13)) // Tried strcasestr(aControl, "ListView") to get it to work with IZArc's Delphi TListView1, but none of the modes or options worked.
 			return ControlGetListView(output_var, control_window, aValue); // It will also set ErrorLevel to "success" if successful.
 		// This is done here as the special LIST sub-command rather than just being built into
@@ -906,14 +942,14 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 
 	case CONTROLGET_CMD_STYLE:
 		// Seems best to always format as hex, since it has more human-readable meaning then:
-		sprintf(hex_buf, "0x%08X", GetWindowLong(control_window, GWL_STYLE));
-		output_var.Assign(hex_buf);
+		sprintf(temp_buf, "0x%08X", GetWindowLong(control_window, GWL_STYLE));
+		output_var.Assign(temp_buf);
 		break;
 
 	case CONTROLGET_CMD_EXSTYLE:
 		// Seems best to always format as hex, since it has more human-readable meaning then:
-		sprintf(hex_buf, "0x%08X", GetWindowLong(control_window, GWL_EXSTYLE));
-		output_var.Assign(hex_buf);
+		sprintf(temp_buf, "0x%08X", GetWindowLong(control_window, GWL_EXSTYLE));
+		output_var.Assign(temp_buf);
 		break;
 
 	case CONTROLGET_CMD_HWND:

@@ -526,8 +526,8 @@ char *SystemTimeToYYYYMMDD(char *aBuf, SYSTEMTIME &aTime);
 __int64 YYYYMMDDSecondsUntil(char *aYYYYMMDDStart, char *aYYYYMMDDEnd, bool &aFailed);
 __int64 FileTimeSecondsUntil(FILETIME *pftStart, FILETIME *pftEnd);
 
-SymbolType IsPureNumeric(char *aBuf, bool aAllowNegative = false
-	, bool aAllowAllWhitespace = true, bool aAllowFloat = false, bool aAllowImpure = false);
+SymbolType IsPureNumeric(char *aBuf, BOOL aAllowNegative = false // BOOL vs. bool might squeeze a little more performance out of this frequently-called function.
+	, BOOL aAllowAllWhitespace = true, BOOL aAllowFloat = false, BOOL aAllowImpure = false);
 
 void strlcpy(char *aDst, const char *aSrc, size_t aDstSize);
 int snprintf(char *aBuf, int aBufSize, const char *aFormat, ...);

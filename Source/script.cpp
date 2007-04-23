@@ -3818,9 +3818,17 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 			// In other words, don't be too permissive about what gets marked as a stand-alone expression.
 		}
 		if (!aActionType) // Above still didn't find a valid action (i.e. check aActionType again in case the above changed it).
-			// v1.0.40: Give a more specific error message now now that hotkeys can make it here due to
-			// the change that avoids the need to escape double-colons:
-			return ScriptError(strstr(aLineText, HOTKEY_FLAG) ? "Invalid hotkey." : ERR_UNRECOGNIZED_ACTION, aLineText);
+		{
+			if (*action_args == '(' && strchr(action_args, g_delimiter)) // v1.0.46.11: Recognize as multi-statements that start with a function, like "fn(), x:=4".
+			{
+				aActionType = ACT_EXPRESSION; // Mark this line as a stand-alone expression.
+				action_args = aLineText; // Since this is a function-call followed by a comma and some other expression, use the line's full text for later parsing.
+			}
+			else
+				// v1.0.40: Give a more specific error message now now that hotkeys can make it here due to
+				// the change that avoids the need to escape double-colons:
+				return ScriptError(strstr(aLineText, HOTKEY_FLAG) ? "Invalid hotkey." : ERR_UNRECOGNIZED_ACTION, aLineText);
+		}
 	}
 
 	Action &this_action = aActionType ? g_act[aActionType] : g_old_act[aOldActionType];
@@ -4840,7 +4848,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 								break;
 							}
 						}
-					}
+					} // End of check for AND/OR/NOT.
+
 					// Temporarily terminate, which avoids at least the below issue:
 					// Two or more extremely long var names together could exceed MAX_VAR_NAME_LENGTH
 					// e.g. LongVar%LongVar2% would be too long to store in a buffer of size MAX_VAR_NAME_LENGTH.
@@ -4896,17 +4905,32 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 							// don't set it to the address of the first param or closing-paren-if-no-params):
 							deref[deref_count].marker = op_begin;
 							deref[deref_count].length = (DerefLengthType)operand_length;
-							if (deref[deref_count].is_function = is_function) // Assign.
+							if (deref[deref_count].is_function = is_function) // It's a function not a variable.
 								// Set to NULL to catch bugs.  It must and will be filled in at a later stage
 								// because the setting of each function's mJumpToLine relies upon the fact that
 								// functions are added to the linked list only upon being formally defined
 								// so that the most recently defined function is always last in the linked
 								// list, awaiting its mJumpToLine that will appear beneath it.
 								deref[deref_count].func = NULL;
-							else
+							else // It's a variable (or a scientific-notation literal) rather than a function.
+							{
+								if (toupper(op_end[-1]) == 'E' && (orig_char == '+' || orig_char == '-') // Listed first for short-circuit performance with the below.
+									&& strchr(op_begin, '.')) // v1.0.46.11: This item appears to be a scientific-notation literal with the OPTIONAL +/- sign PRESENT on the exponent (e.g. 1.0e+001), so check that before checking if it's a variable name.
+								{
+									*op_end = orig_char; // Undo the temporary termination.
+									do // Skip over the sign and its exponent; e.g. the "+1" in "1.0e+1".  There must be a sign in this particular sci-notation number or we would never have arrived here.
+										++op_end;
+									while (*op_end >= '0' && *op_end <= '9'); // Avoid isdigit() because it sometimes causes a debug assertion failure at: (unsigned)(c + 1) <= 256 (probably only in debug mode).
+									// No need to do the following because a number can't validly be followed by the ".=" operator:
+									//if (*op_end == '=' && op_end[-1] == '.') // v1.0.46.01: Support .=, but not any use of '.' because that is reserved as a struct/member operator.
+									//	--op_end;
+									continue; // Pure number, which doesn't need any processing at this stage.
+								}
+								// Since above didn't "continue", treat this item as a variable name:
 								if (   !(deref[deref_count].var = FindOrAddVar(op_begin, operand_length))   )
 									return FAIL; // The called function already displayed the error.
-							++deref_count;
+							}
+							++deref_count; // Since above didn't "continue" or "return".
 						}
 					}
 					//else purely numeric or '?'.  Do nothing since pure numbers and '?' don't need any
@@ -5593,7 +5617,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			{
 				if (aArgc > 1 && !line.ArgHasDeref(2))
 				{
-					if (!IsPureNumeric(new_raw_arg2, true, false, true)
+					if (!IsPureNumeric(new_raw_arg2, true, false, true, true) // v1.0.46.11: Allow impure numbers to support scientific notation; e.g. 0.6e or 0.6E.
 						|| strlen(new_raw_arg2) >= sizeof(g.FormatFloat) - 2)
 						return ScriptError(ERR_PARAM2_INVALID, new_raw_arg2);
 				}
@@ -11157,10 +11181,10 @@ __forceinline ResultType Line::Perform() // __forceinline() currently boosts per
 			__int64 precision = dot_pos ? ATOI64(dot_pos + 1) : 0;
 			if (width + precision + 2 > MAX_FORMATTED_NUMBER_LENGTH) // +2 to allow room for decimal point itself and leading minus sign.
 				return OK; // Don't change it.
-			// Create as "%ARG2f".  Add a dot if none was specified so that "0" is the same as "0.", which
-			// seems like the most user-friendly approach; it's also easier to document in the help file.
-			// Note that %f can handle doubles in MSVC++:
-			sprintf(g.FormatFloat, "%%%s%sf", ARG2, dot_pos ? "" : ".");
+			// Create as "%ARG2f".  Note that %f can handle doubles in MSVC++:
+			sprintf(g.FormatFloat, "%%%s%s%s", ARG2
+				, dot_pos ? "" : "." // Add a dot if none was specified so that "0" is the same as "0.", which seems like the most user-friendly approach; it's also easier to document in the help file.
+				, IsPureNumeric(ARG2, true, true, true) ? "f" : ""); // If it's not pure numeric, assume the user already included the desired letter (e.g. SetFormat, Float, 0.6e).
 		}
 		else if (!stricmp(ARG1, "Integer"))
 		{
@@ -11591,7 +11615,10 @@ VarSizeType Script::GetFormatFloat(char *aBuf)
 {
 	if (!aBuf)
 		return (VarSizeType)strlen(g.FormatFloat);  // Include the extra chars since this is just an estimate.
-	strlcpy(aBuf, g.FormatFloat + 1, strlen(g.FormatFloat + 1));   // Omit the leading % and the trailing 'f'.
+	char *str_with_leading_percent_omitted = g.FormatFloat + 1;
+	size_t length = strlen(str_with_leading_percent_omitted);
+	strlcpy(aBuf, str_with_leading_percent_omitted
+		, length + !(length && str_with_leading_percent_omitted[length-1] == 'f')); // Omit the trailing character only if it's an 'f', not any other letter such as the 'e' in "%0.6e" (for backward compatibility).
 	return (VarSizeType)strlen(aBuf); // Must return exact length when aBuf isn't NULL.
 }
 

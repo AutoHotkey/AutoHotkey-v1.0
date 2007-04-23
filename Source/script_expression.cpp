@@ -271,6 +271,8 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 						if ((cp1 >= '0' && cp1 <= '9') || cp1 == '.') // v1.0.46.01: Recognize dot too, to support numbers like -.5.
 						{
 							for (op_end = cp + 2; !strchr(EXPR_OPERAND_TERMINATORS, *op_end); ++op_end); // Find the end of this number (can be '\0').
+							// 1.0.46.11: Due to obscurity, no changes have been made here to support scientific
+							// notation followed by the power operator; e.g. -1.0e+1**5.
 							if (!this_deref || op_end < this_deref->marker) // Detect numeric double derefs such as one created via "12%i% = value".
 							{
 								// Because the power operator takes precedence over unary minus, don't collapse
@@ -571,6 +573,17 @@ numeric_literal:
 					// because load-time validation would have caught them.  And any kind of unquoted alphanumeric
 					// characters (other than "NOT", which was detected above) wouldn't have reached this point
 					// because load-time pre-parsing would have marked it as a deref/var, not raw/literal text.
+					if (toupper(op_end[-1]) == 'E' // v1.0.46.11: It looks like scientific notation...
+						&& cp[0] != '0' && toupper(cp[1]) != 'X') // ... and it's not a hex number (this check avoids falsely detecting hex numbers that end in 'E' as exponents).
+					{
+						// Since op_end[-1] is the 'E' or an exponent, the only valid things for op_end[0] to be
+						// are + or - (it can't be a digit because the loop above would never have stopped op_end
+						// at a digit).  If it isn't + or -, it's some kind of syntax error, so doing the following
+						// seems harmless in any case:
+						do // Skip over the sign and its exponent; e.g. the "+1" in "1.0e+1".  There must be a sign in this particular sci-notation number or we would never have arrived here.
+							++op_end;
+						while (*op_end >= '0' && *op_end <= '9'); // Avoid isdigit() because it sometimes causes a debug assertion failure at: (unsigned)(c + 1) <= 256 (probably only in debug mode).
+					}
 					if (infix_count && YIELDS_AN_OPERAND(infix[infix_count - 1].symbol)) // If it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
 					{
 						if (infix_count > MAX_TOKENS - 2) // -2 to ensure room for this operator and the operand further below.

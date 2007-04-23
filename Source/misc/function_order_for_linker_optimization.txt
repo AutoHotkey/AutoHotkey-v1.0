@@ -78,7 +78,7 @@ atoi             ; Used for 32-bit integers, which are less frequently called/co
 ?ATOI64@@YA_JPAD@Z
 _atoi64
 ?omit_leading_whitespace@@YAPADPAD@Z  ; Works a little better here than next to IsHex.
-?IsPureNumeric@@YA?AW4SymbolType@@PAD_N111@Z
+?IsPureNumeric@@YA?AW4SymbolType@@PADHHHH@Z  ; util.obj
 ; Probably intrinsic: strchr (warning LNK4065: '_strchr' cannot be ordered)
 
 ?FreeAndRestoreFunctionVars@Var@@SAXAAVFunc@@AAPAUVarBkp@@AAH@Z
