@@ -574,7 +574,7 @@ numeric_literal:
 					// characters (other than "NOT", which was detected above) wouldn't have reached this point
 					// because load-time pre-parsing would have marked it as a deref/var, not raw/literal text.
 					if (toupper(op_end[-1]) == 'E' // v1.0.46.11: It looks like scientific notation...
-						&& cp[0] != '0' && toupper(cp[1]) != 'X') // ... and it's not a hex number (this check avoids falsely detecting hex numbers that end in 'E' as exponents).
+						&& !(cp[0] == '0' && toupper(cp[1]) == 'X')) // ... and it's not a hex number (this check avoids falsely detecting hex numbers that end in 'E' as exponents). This line fixed in v1.0.46.12.
 					{
 						// Since op_end[-1] is the 'E' or an exponent, the only valid things for op_end[0] to be
 						// are + or - (it can't be a digit because the loop above would never have stopped op_end
@@ -582,7 +582,7 @@ numeric_literal:
 						// seems harmless in any case:
 						do // Skip over the sign and its exponent; e.g. the "+1" in "1.0e+1".  There must be a sign in this particular sci-notation number or we would never have arrived here.
 							++op_end;
-						while (*op_end >= '0' && *op_end <= '9'); // Avoid isdigit() because it sometimes causes a debug assertion failure at: (unsigned)(c + 1) <= 256 (probably only in debug mode).
+						while (*op_end >= '0' && *op_end <= '9'); // Avoid isdigit() because it sometimes causes a debug assertion failure at: (unsigned)(c + 1) <= 256 (probably only in debug mode), and maybe only when bad data got in it due to some other bug.
 					}
 					if (infix_count && YIELDS_AN_OPERAND(infix[infix_count - 1].symbol)) // If it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
 					{
