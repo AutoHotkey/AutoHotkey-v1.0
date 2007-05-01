@@ -1774,7 +1774,8 @@ enum FuncParamDefaults {PARAM_DEFAULT_NONE, PARAM_DEFAULT_STR, PARAM_DEFAULT_INT
 struct FuncParam
 {
 	Var *var;
-	FuncParamDefaults default_type;
+	WORD is_byref; // Boolean, but defined as WORD in case it helps data alignment and/or performance.
+	WORD default_type;
 	union {char *default_str; __int64 default_int64; double default_double;};
 };
 
@@ -2382,8 +2383,7 @@ public:
 	Var *FindVar(char *aVarName, size_t aVarNameLength = 0, int *apInsertPos = NULL
 		, int aAlwaysUse = ALWAYS_USE_DEFAULT, bool *apIsException = NULL
 		, bool *apIsLocal = NULL);
-	Var *AddVar(char *aVarName, size_t aVarNameLength, int aInsertPos, bool aIsLocal
-		, VarTypeType aVarType = VAR_INVALID); // Not currently needed (e.g. for VAR_ATTRIB_PARAM): , VarAttribType aAttrib = 0);
+	Var *AddVar(char *aVarName, size_t aVarNameLength, int aInsertPos, int aIsLocal);
 	static VarTypes GetVarType(char *aVarName);
 
 	WinGroup *FindGroup(char *aGroupName, bool aCreateIfNotFound = false);

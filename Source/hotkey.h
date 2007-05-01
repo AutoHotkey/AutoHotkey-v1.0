@@ -210,7 +210,7 @@ public:
 	static bool PrefixHasNoEnabledSuffixes(int aVKorSC, bool aIsSC);
 	HotkeyVariant *CriterionAllowsFiring(HWND *aFoundHWND = NULL);
 	static HotkeyVariant *CriterionAllowsFiring(HotkeyIDType aHotkeyID, HWND &aFoundHWND);
-	static bool CriterionFiringIsCertain(HotkeyIDType aHotkeyIDwithFlags, bool aKeyUp, UCHAR &aNoSuppress
+	static bool CriterionFiringIsCertain(HotkeyIDType &aHotkeyIDwithFlags, bool aKeyUp, UCHAR &aNoSuppress
 		, bool &aFireWithNoSuppress, char *aSingleChar);
 	static void TriggerJoyHotkeys(int aJoystickID, DWORD aButtonsNewlyDown);
 	void Perform(HotkeyVariant &aVariant);
@@ -221,7 +221,7 @@ public:
 	struct HotkeyProperties // Struct used by TextToModifiers() and its callers.
 	{
 		mod_type modifiers;
-		modLR_type modifirsLR;
+		modLR_type modifiersLR;
 		char prefix_text[32];  // Has to be large enough to hold the largest key name in g_key_to_vk,
 		char suffix_text[32];  // which is probably "Browser_Favorites" (17).
 		bool suffix_has_tilde; // As opposed to "prefix has tilde".

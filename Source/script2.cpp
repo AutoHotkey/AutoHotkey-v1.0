@@ -12170,7 +12170,7 @@ void BIF_OnMessage(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 			if (func->mIsBuiltIn || func->mParamCount > 4 || func->mMinParams < func->mParamCount) // Too many params, or some are optional.
 				return; // Yield the default return value set earlier.
 			for (int i = 0; i < func->mParamCount; ++i) // Check if any formal parameters are ByRef.
-				if (func->mParam[i].var->IsByRef())
+				if (func->mParam[i].is_byref)
 					return; // Yield the default return value set earlier.
 		}
 		else // Explicitly blank function name ("") means delete this item.  By contrast, an omitted second parameter means "give me current function of this message".

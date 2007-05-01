@@ -34,12 +34,8 @@ enum AllocMethod {ALLOC_NONE, ALLOC_SIMPLE, ALLOC_MALLOC};
 enum VarTypes
 {
   VAR_INVALID
-// VAR_BYREF is used when a VAR_ALIAS variable doesn't yet have a target, which avoids the need to check whether
-// mAliasFor is NULL in many places.  In other words, a var of type VAR_ALIAS always has a non-NULL mAliasFor.
-, VAR_BYREF // VAR_BYREF and VAR_ALIAS are for internal use (external users of variables never see them). VAR_BYREF is
-, VAR_ALIAS // never seen because it has always become VAR_ALIAS by the time anyone uses them.  ALIAS is never seen because external users call Var::Type(), which automatically resolves ALIAS to some other type.
-// ABOVE MUST BE KEPT FIRST AND MUST BE KEPT ADJACENT TO VAR_FIRST_NON_BYREF BELOW. 
-, VAR_FIRST_NON_BYREF, VAR_NORMAL = VAR_FIRST_NON_BYREF  // Most variables are this type.
+, VAR_ALIAS  // VAR_ALIAS must always have a non-NULL mAliasFor.  In other ways it's the same as VAR_NORMAL.  VAR_ALIAS is never seen because external users call Var::Type(), which automatically resolves ALIAS to some other type.
+, VAR_NORMAL // Most variables are this type.
 , VAR_CLIPBOARD
 , VAR_LAST_UNRESERVED = VAR_CLIPBOARD  // Keep this in sync with any changes to the set of unreserved variables.
 #define VAR_IS_RESERVED(var) ((var).Type() > VAR_LAST_UNRESERVED)
@@ -201,11 +197,6 @@ public:
 		return (mType == VAR_ALIAS) ? mAliasFor->mType : mType;
 	}
 
-	__forceinline bool IsByRef()
-	{
-		return mType < VAR_FIRST_NON_BYREF;
-	}
-
 	__forceinline bool IsLocal()
 	{
 		// Since callers want to know whether this variable is local, even if it's a local alias for a
@@ -300,10 +291,26 @@ public:
 		return (mType == VAR_ALIAS) ? mAliasFor : this; // Return target if it's an alias, or itself if not.
 	}
 
-	__forceinline void UpdateAlias(Var *aTargetVar) // __forceinline because it's currently only called from one place.
-	// Caller must ensure that this variable is VAR_BYREF or VAR_ALIAS and that aTargetVar isn't NULL.
+	__forceinline void EnsureItIsNotAlias() // __forceinline because it's currently only called from one place.
+	// When this function actually converts an alias into a normal variable, the variable's old
+	// attributes (especially mContents and mCapacity) become dominant again.  This prevents a memory
+	// leak in a case where a UDF is defined to provide a default value for a ByRef parameter, and is
+	// called both with and without that parameter.
 	{
-		// BELOW IS THE MEANS BY WHICH ALIASES AREN'T ALLOWED TO POINT TO OTHER ALIASES, ONLY DIRECTLY TO THE TARGET VAR.
+		mAliasFor = NULL; // This also sets its counterpart in the union (mLength) to zero, which is appropriate because mContents should have been set to blank by a previous call to Free().
+		mType = VAR_NORMAL; // It might already be this type, so this is just in case it's VAR_ALIAS.
+	}
+
+	__forceinline void UpdateAlias(Var *aTargetVar) // __forceinline because it's currently only called from one place.
+	// Caller must ensure that aTargetVar isn't NULL.
+	// When this function actually converts a normal variable into an alias , the variable's old
+	// attributes (especially mContents and mCapacity) are hidden/suppressed by virtue of all Var:: methods
+	// obeying VAR_ALIAS and resolving it to be the target variable.  This prevents a memory
+	// leak in a case where a UDF is defined to provide a default value for a ByRef parameter, and is
+	// called both with and without that parameter.
+	{
+		// BELOW IS THE MEANS BY WHICH ALIASES AREN'T ALLOWED TO POINT TO OTHER ALIASES, ONLY DIRECTLY TO
+		// THE TARGET VAR.
 		// Resolve aliases-to-aliases for performance and to increase the expectation of
 		// reliability since a chain of aliases-to-aliases might break if an alias in
 		// the middle is ever allowed to revert to a non-alias (or gets deleted).
@@ -315,15 +322,12 @@ public:
 		// The following is done only after the above in case there's ever a way for the above
 		// to circle back to become this variable.
 		// Prevent potential infinite loops in other methods by refusing to change an alias
-		// to point to itself.  This case probably only matters the first time this alias is
-		// updated (i.e. while it's still of type VAR_BYREF), since once it's a valid alias,
-		// changing it to point to itself would be handled correctly by the code further below
-		// (it would set mAliasFor to be the same value that it had previously):
+		// to point to itself.
 		if (aTargetVar == this)
 			return;
 
 		mAliasFor = aTargetVar; // Should always be non-NULL due to various checks elsewhere.
-		mType = VAR_ALIAS; // Only actually needed the first time (to convert it from VAR_BYREF).
+		mType = VAR_ALIAS; // It might already be this type, so this is just in case it's VAR_NORMAL.
 	}
 
 	ResultType Close(bool aIsBinaryClip = false)
@@ -343,7 +347,7 @@ public:
 	}
 
 	// Constructor:
-	Var(char *aVarName, VarTypeType aType, bool aIsLocal)  // Not currently needed (e.g. for VAR_ATTRIB_PARAM): , VarAttribType aAttrib = 0)  [also would need to change mAttrib(aAttrib)] in initializier]
+	Var(char *aVarName, VarTypeType aType, bool aIsLocal)
 		// The caller must ensure that aVarName is non-null.
 		: mCapacity(0), mContents(sEmptyString) // Invariant: Anyone setting mCapacity to 0 must also set mContents to the empty string.
 		, mLength(0) // This also initializes mAliasFor within the same union.

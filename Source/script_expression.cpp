@@ -503,6 +503,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 					// MUST NOT REFER TO this_infix_item IN CASE ABOVE DID ++infix_count:
 					infix[infix_count].symbol = SYM_STRING; // Marked explicitly as string vs. SYM_OPERAND to prevent it from being seen as a number, e.g. if (var == "12.0") would be false if var contains "12" with no trailing ".0".
 					infix[infix_count].marker = target; // Point it to its position in the buffer (populated below).
+					// The following section is nearly identical to one in DefineFunc().
 					// Find the end of this string literal, noting that a pair of double quotes is
 					// a literal double quote inside the string:
 					for (++cp;;) // Omit the starting-quote from consideration, and from the resulting/built string.
@@ -1347,7 +1348,7 @@ end_of_infix_to_postfix:
 							// --s below moves on to the next item in the stack (without popping):  A check higher
 							// above has already ensured that this won't cause stack underflow:
 							ExprTokenType &this_stack_token = *stack[--s]; // Traditional, but doesn't measurably reduce code size and it's unlikely to help performance due to actual flow of control in this case.
-							if (this_stack_token.symbol == SYM_VAR && !func.mParam[j].var->IsByRef())
+							if (this_stack_token.symbol == SYM_VAR && !func.mParam[j].is_byref)
 							{
 								// Since this formal parameter is passed by value, if it's SYM_VAR, convert it to
 								// SYM_OPERAND to allow the variables to be backed up and reset further below without
@@ -1387,6 +1388,8 @@ end_of_infix_to_postfix:
 					FuncParam &this_formal_param = func.mParam[j]; // For performance and convenience.
 					if (j >= actual_param_count) // No actual to go with it (should be possible only if the parameter is optional or has a default value).
 					{
+						if (this_formal_param.is_byref) // v1.0.46.13: Allow ByRef parameters to by optional by converting an omitted-actual into a non-alias formal/local.
+							this_formal_param.var->EnsureItIsNotAlias(); // Convert from alias-to-normal, if necessary.
 						switch(this_formal_param.default_type)
 						{
 						case PARAM_DEFAULT_STR:
@@ -1416,7 +1419,7 @@ end_of_infix_to_postfix:
 						Var::FreeAndRestoreFunctionVars(func, var_backup, var_backup_count);
 						goto abort;
 					}
-					if (this_formal_param.var->IsByRef())
+					if (this_formal_param.is_byref)
 					{
 						// Note that the previous loop might not have checked things like the following because that
 						// loop never ran unless a backup was needed:

@@ -82,8 +82,8 @@ _atoi64
 ; Probably intrinsic: strchr (warning LNK4065: '_strchr' cannot be ordered)
 
 ?FreeAndRestoreFunctionVars@Var@@SAXAAVFunc@@AAPAUVarBkp@@AAH@Z
+?EnsureItIsNotAlias@Var@@QAEXXZ  ; script_expression.obj
 ?UpdateAlias@Var@@QAEXPAV1@@Z
-?IsByRef@Var@@QAE_NXZ
 ?LengthIgnoreBinaryClip@Var@@QAEKXZ
 ?length@?3??Length@Var@@QAEAAKXZ@4KA  ; Possibly corresponds to: static VarSizeType length
 ?Length@Var@@QAEAAKXZ
@@ -184,7 +184,7 @@ _vsnprintf  ; Sandwiching this function between the other two seems likely to yi
 ??3Hotkey@@CAXPAX@Z
 ?AddHotkey@Hotkey@@SAPAV1@PAVLabel@@GPAD_N2@Z
 ?ConvertAltTab@Hotkey@@SAGPAD_N@Z
-?CriterionFiringIsCertain@Hotkey@@SA_NG_NAAEAA_NPAD@Z
+?CriterionFiringIsCertain@Hotkey@@SA_NAAG_NAAEAA_NPAD@Z  ; hotkey.obj
 ?DisableParent@Hotkey@@AAE_NXZ
 ?Dynamic@Hotkey@@SA?AW4ResultType@@PAD00PAVLabel@@@Z
 ?EnableParent@Hotkey@@AAE_NXZ
@@ -482,7 +482,7 @@ EnterCriticalSection@4
 ?BIF_VarSetCapacity@@YAXAAUExprTokenType@@QAPAU1@H@Z
 ??0Var@@QAE@PADE_N@Z  ; Constructor.
 ??2Var@@SAPAXI@Z  ; Operator-New.
-?AddVar@Script@@QAEPAVVar@@PADIH_NE@Z
+?AddVar@Script@@QAEPAVVar@@PADIHH@Z  ; script.obj
 ?Capacity@Var@@QAEKXZ
 ?Close@Var@@QAE?AW4ResultType@@_N@Z
 ?ArgLength@Line@@QAEIH@Z

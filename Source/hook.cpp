@@ -1373,6 +1373,8 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 				if (   !(firing_is_certain = Hotkey::CriterionFiringIsCertain(hotkey_id_with_flags
 					, aKeyUp, this_key.no_suppress, fire_with_no_suppress, &pKeyHistoryCurr->event_type))   )
 					return AllowKeyToGoToSystem; // This should handle pForceToggle for us, suppressing if necessary.
+				else // The naked hotkey ID may have changed, so update it (flags currently don't matter in this case).
+					hotkey_id_temp = hotkey_id_with_flags & HOTKEY_ID_MASK; // Update in case CriterionFiringIsCertain() changed it.
 			pPrefixKey->was_just_used = AS_PREFIX_FOR_HOTKEY;
 		}
 		//else: No "else if" here to avoid an extra indentation for the whole section below (it's not needed anyway).
@@ -1657,6 +1659,7 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 		&& !firing_is_certain  // i.e. CriterionFiringIsCertain() wasn't already called earlier.
 		&& !Hotkey::CriterionFiringIsCertain(hotkey_id_with_flags, aKeyUp, this_key.no_suppress, fire_with_no_suppress, &pKeyHistoryCurr->event_type))
 		return AllowKeyToGoToSystem;
+	hotkey_id_temp = hotkey_id_with_flags & HOTKEY_ID_MASK; // Update in case CriterionFiringIsCertain() changed the naked/raw ID.
 
 	// Now above has ensured that everything is in place for an action to be performed.
 	// Determine the final ID at this late stage to improve maintainability:

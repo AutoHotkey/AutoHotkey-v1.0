@@ -1239,12 +1239,12 @@ void Var::Backup(VarBkp &aVarBkp)
 	// when the program exits).
 	// Now reset this variable (caller has ensured it's non-static) to create a "new layer" for it, keeping
 	// its backup intact but allowing this variable (or formal parameter) to be given a new value in the future:
-	mCapacity = 0;             // Invariant: Anyone setting mCapacity to 0 must also set
-	mContents = sEmptyString;  // mContents to the empty string.
-	if (mType != VAR_ALIAS) // Fix for v1.0.42.07: Don't reset mLength if the other member of the union is in 
-		mLength = 0;        // effect.  Otherwise, functions that recursively pass ByRef parameters can crash because mType is left as VAR_ALIAS.
+	mCapacity = 0;             // Invariant: Anyone setting mCapacity to 0 must also set...
+	mContents = sEmptyString;  // ...mContents to the empty string.
+	if (mType != VAR_ALIAS) // Fix for v1.0.42.07: Don't reset mLength if the other member of the union is in effect.
+		mLength = 0;        // Otherwise, functions that recursively pass ByRef parameters can crash because mType stays as VAR_ALIAS.
 	mHowAllocated = ALLOC_MALLOC; // Never NONE because that would permit SIMPLE. See comments higher above.
-	mAttrib &= ~VAR_ATTRIB_BINARY_CLIP; // But the VAR_ATTRIB_PARAM/STATIC flags are not altered.
+	mAttrib &= ~VAR_ATTRIB_BINARY_CLIP; // But the VAR_ATTRIB_STATIC flag isn't altered.
 }
 
 
@@ -1259,11 +1259,11 @@ void Var::FreeAndRestoreFunctionVars(Func &aFunc, VarBkp *&aVarBackup, int &aVar
 
 	// The freeing (above) MUST be done prior to the restore-from-backup below (otherwise there would be
 	// a memory leak).  Static variables are never backed up and thus do not exist in the aVarBackup array.
-	// This is because by definition, the contents of statics are not freed or altered by the calling process
+	// This is because by definition, the contents of statics are not freed or altered by the calling procedure
 	// (regardless how how recursive or multi-threaded the function is).
 	if (aVarBackup) // This is the indicator that a backup was made; thus a restore is also needed.
 	{
-		for (i = 0; i < aVarBackupCount; ++i) // Static variables were never backed up so they won't be in this array.
+		for (i = 0; i < aVarBackupCount; ++i) // Static variables were never backed up so they won't be in this array. See comments above.
 		{
 			VarBkp &bkp = aVarBackup[i]; // Resolve only once for performance.
 			Var &var = *bkp.mVar;        //

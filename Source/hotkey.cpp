@@ -575,14 +575,14 @@ HotkeyVariant *Hotkey::CriterionAllowsFiring(HWND *aFoundHWND)
 
 
 
-bool Hotkey::CriterionFiringIsCertain(HotkeyIDType aHotkeyIDwithFlags, bool aKeyUp, UCHAR &aNoSuppress
+bool Hotkey::CriterionFiringIsCertain(HotkeyIDType &aHotkeyIDwithFlags, bool aKeyUp, UCHAR &aNoSuppress
 	, bool &aFireWithNoSuppress, char *aSingleChar)
 // v1.0.44: Caller has ensured that aFireWithNoSuppress is true if has already been decided and false if undecided.
 // Upon return, caller can assume that the value in it is now decided rather than undecided.
 // v1.0.42: Caller must not call this for AltTab hotkeys IDs, but this will always return NULL in such cases.
 // aHotkeyToFireUponRelease is sometimes modified for the caller here, as is *aSingleChar (if aSingleChar isn't NULL).
 // Caller has ensured that aHotkeyIDwithFlags contains a valid/existing hotkey ID.
-// Technically, aHotkeyIDwithMask can be with or without a the flags in the high bits.
+// Technically, aHotkeyIDwithMask can be with or without the flags in the high bits.
 // If present, they're removed.
 {
 	// aHookAction isn't checked because this should never be called for alt-tab hotkeys (see other comments above).
@@ -611,12 +611,59 @@ bool Hotkey::CriterionFiringIsCertain(HotkeyIDType aHotkeyIDwithFlags, bool aKey
 				return true;
 	}
 
+	// The following section is similar to one further below, so maintain them together:
 	HotkeyVariant *vp;
 	if (vp = hk.CriterionAllowsFiring())
 	{
 		if (!aFireWithNoSuppress) // Caller hasn't yet determined its value with certainty (currently, this statement might always be true).
 			aFireWithNoSuppress = vp->mNoSuppress;
 		return true; // It found an eligible variant to fire.
+	}
+
+	if (!(hk.mModifierVK || hk.mModifierSC || hk.mHookAction)) // Rule out those that aren't susceptible to the bug due to their lack of support for wildcards.
+	{
+		// Fix for v1.0.46.13: Although the sectio higher above found no variant to fire for the
+		// caller-specified hotkey ID, it's possible that some other hotkey (one with a wildcard) is
+		// eligible to fire due to the eclipsing behavior of wildcard hotkeys.  For example:
+		//    #IfWinNotActive Untitled
+		//    q::tooltip %A_ThisHotkey% Non-notepad
+		//    #IfWinActive Untitled
+		//    *q::tooltip %A_ThisHotkey% Notepad
+		// However, the logic here might not be a perfect solution because it fires the first available
+		// hotkey that has a variant whose criteria are met (which might not be exactly the desired rules
+		// of precedence).  However, I think it's extremely rare that there would be more than one hotkey
+		// that matches the original hotkey (VK, SC, has-wildcard) etc.  Even in the rare cases that there
+		// is more than one, the rarity is compounded by the rarity of the bug even occurring, which probably
+		// makes the odds vanishingly small.  That's why the following simple, high-performance loop is used
+		// rather than more a more complex one that "locates the smallest (most specific) eclipsed wildcard
+		// hotkey", or "the uppermost variant among all eclipsed wildcards that is eligible to fire".
+		for (int i = 0; i < sHotkeyCount; ++i) // This loop is undesirable; but its performance impact probably isn't measurable in the majority of cases.
+		{
+			Hotkey &hk2 = *shk[i]; // For performance and convenience.
+			if (   hk2.mVK == hk.mVK // VK and SC (one of which is typically zero) must both match for
+				&& hk2.mSC == hk.mSC // this bug to have wrongly eclipsed a qualified variant of some other hotkey.
+				&& hk2.mAllowExtraModifiers // To be eclipsable by the original hotkey, a candidate must have a wildcard.
+				&& hk2.mKeyUp == aKeyUp // Seems necessary that up/down nature is the same in both.
+				&& !hk2.mModifierVK // Avoid accidental matching of normal hotkeys with custom-combo "&"
+				&& !hk2.mModifierSC // hotkeys that happen to have the same mVK/SC.
+				&& !hk2.mHookAction // Might be unnecessary to check this; but just in case.
+				&& hk2.mID != hotkey_id // Don't consider the original hotkey because it's was already found ineligible.
+				&& (hk.mAllowExtraModifiers // Either the original hotkey must allow extra modifiers or the candidate must not have any modifiers present on the original (otherwise the user probably isn't holding down the right keys to trigger this hotkey).
+					|| !((hk.mModifiersConsolidatedLR ^ hk2.mModifiersConsolidatedLR) & hk2.mModifiersConsolidatedLR)) // "The modifiers that are different intersected with those present on the candidate", which are those present on the candidate that are absent from this original.
+				//&& hk2.mType != HK_JOYSTICK // Seems unnecessary since joystick hotkeys don't call us and even if they did, probably should be included.
+				//&& hk2.mParentEnabled   ) // CriterionAllowsFiring() will check this for us.
+				)
+			{
+				// The following section is similar to one higher above, so maintain them together:
+				if (vp = hk2.CriterionAllowsFiring())
+				{
+					if (!aFireWithNoSuppress) // Caller hasn't yet determined its value with certainty (currently, this statement might always be true).
+						aFireWithNoSuppress = vp->mNoSuppress;
+					aHotkeyIDwithFlags = hk2.mID; // Caller currently doesn't need the flags put onto it, so they're omitted.
+					return true; // It found an eligible variant to fire.
+				}
+			}
+		}
 	}
 
 	// Otherwise, this hotkey has no variants that can fire.  Caller wants a few things updated in that case.
@@ -1539,7 +1586,7 @@ char *Hotkey::TextToModifiers(char *aText, Hotkey *aThisHotkey, HotkeyProperties
 	mod_type temp_modifiers;
 	mod_type &modifiers = aProperties ? aProperties->modifiers : (aThisHotkey ? aThisHotkey->mModifiers : temp_modifiers);
 	modLR_type temp_modifiersLR;
-	modLR_type &modifiersLR = aProperties ? aProperties->modifirsLR: (aThisHotkey ? aThisHotkey->mModifiersLR : temp_modifiersLR);
+	modLR_type &modifiersLR = aProperties ? aProperties->modifiersLR: (aThisHotkey ? aThisHotkey->mModifiersLR : temp_modifiersLR);
 
 	// Improved for v1.0.37.03: The loop's condition is now marker[1] vs. marker[0] so that
 	// the last character is never considered a modifier.  This allows a modifier symbol
@@ -1957,12 +2004,15 @@ Hotkey *Hotkey::FindHotkeyByTrueNature(char *aName, bool &aSuffixHasTilde)
 	{
 		TextToModifiers(shk[i]->mName, NULL, &prop_existing);
 		if (   prop_existing.modifiers == prop_candidate.modifiers
-			&& prop_existing.modifirsLR == prop_candidate.modifirsLR
+			&& prop_existing.modifiersLR == prop_candidate.modifiersLR
 			&& prop_existing.is_key_up == prop_candidate.is_key_up
 			// Treat wildcard (*) as an entirely separate hotkey from one without a wildcard.  This is because
 			// the hook has special handling for wildcards that allow non-wildcard hotkeys that overlap them to
-			// take precedence, sort of like "clip children".  By contrast, in v1.0.44 pass-through (~) is considered
-			// an attribute of each variant of a particular hotkey, not something that makes an entirely new hotkey.
+			// take precedence, sort of like "clip children".  The logic that builds the eclipsing array would
+			// need to be redesigned, which might not even be possible given the complexity of interactions
+			// between variant-precedence and hotkey/wildcard-precedence.
+			// By contrast, in v1.0.44 pass-through (~) is considered an attribute of each variant of a
+			// particular hotkey, not something that makes an entirely new hotkey.
 			// This was done because the old method of having them distinct appears to have only one advantage:
 			// the ability to dynamically enable/disable ~x separately from x (since if both were in effect
 			// simultaneously, one would override the other due to two different hotkey IDs competing for the same

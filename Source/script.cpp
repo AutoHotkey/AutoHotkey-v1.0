@@ -6321,8 +6321,7 @@ ResultType Script::DefineFunc(char *aBuf, Var *aFuncExceptionVar[])
 	size_t param_length, value_length;
 	FuncParam param[MAX_FUNCTION_PARAMS];
 	int param_count = 0;
-	char buf[MAX_FORMATTED_NUMBER_LENGTH + 1];
-	VarTypeType var_type; // Whether or not it will be ByRef.
+	char buf[LINE_SIZE], *target;
 	bool param_must_have_default = false;
 
 	for (param_start = omit_leading_whitespace(param_start + 1);;)
@@ -6333,76 +6332,103 @@ ResultType Script::DefineFunc(char *aBuf, Var *aFuncExceptionVar[])
 		// Must start the search at param_start, not param_start+1, so that something like fn(, x) will be properly handled:
 		if (   !*param_start || !(param_end = StrChrAny(param_start, ", \t=)"))   ) // Look for first comma, space, tab, =, or close-paren.
 			return ScriptError(ERR_MISSING_CLOSE_PAREN, aBuf);
+
+		if (param_count >= MAX_FUNCTION_PARAMS)
+			return ScriptError("Too many params.", param_start); // Short msg since so rare.
+		FuncParam &this_param = param[param_count]; // For performance and convenience.
+
 		// To enhance syntax error catching, consider ByRef to be a keyword; i.e. that can never be the name
 		// of a formal parameter:
-		var_type = strlicmp(param_start, "ByRef", (UINT)(param_end - param_start)) ? VAR_NORMAL : VAR_BYREF;
-		if (var_type == VAR_BYREF)
+		if (this_param.is_byref = !strlicmp(param_start, "ByRef", (UINT)(param_end - param_start))) // ByRef.
 		{
 			// Omit the ByRef keyword from further consideration:
 			param_start = omit_leading_whitespace(param_end);
 			if (   !*param_start || !(param_end = StrChrAny(param_start, ", \t=)"))   ) // Look for first comma, space, tab, =, or close-paren.
 				return ScriptError(ERR_MISSING_CLOSE_PAREN, aBuf);
 		}
+
 		if (   !(param_length = param_end - param_start)   )
 			return ScriptError(ERR_BLANK_PARAM, aBuf); // Reporting aBuf vs. param_start seems more informative since Vicinity isn't shown.
-
-		if (param_count >= MAX_FUNCTION_PARAMS)
-			return ScriptError("Too many params.", param_start); // Short msg since so rare.
-
-		FuncParam &this_param = param[param_count]; // For performance and convenience.
 
 		// This will search for local variables, never globals, by virtue of the fact that this
 		// new function's mDefaultVarType is always VAR_ASSUME_NONE at this early stage of its creation:
 		if (this_param.var = FindVar(param_start, param_length, &insert_pos))  // Assign.
 			return ScriptError("Duplicate parameter.", param_start);
-		if (   !(this_param.var = AddVar(param_start, param_length, insert_pos, true, var_type))   )  //, VAR_ATTRIB_PARAM))   )
+		if (   !(this_param.var = AddVar(param_start, param_length, insert_pos, 2))   ) // Pass 2 as last parameter to mean "it's a local but more specifically a function's parameter".
 			return FAIL; // It already displayed the error, including attempts to have reserved names as parameter names.
 
 		// v1.0.35: Check if a default value is specified for this parameter and set up for the next iteration.
+		// The following section is similar to that used to support initializers for static variables.
+		// So maybe maintain them together.
 		this_param.default_type = PARAM_DEFAULT_NONE;  // Set default.
 		param_start = omit_leading_whitespace(param_end);
 		if (*param_start == '=') // This is the default value of the param just added.
 		{
-			if (var_type == VAR_BYREF)
-				return ScriptError("Default value not allowed with ByRef.", this_param.var->mName);
 			param_start = omit_leading_whitespace(param_start + 1); // Start of the default value.
-			if (!(param_end = StrChrAny(param_start, ", \t=)"))) // Somewhat debatable but stricter seems better.
-				return ScriptError(ERR_MISSING_COMMA, aBuf); // Reporting aBuf vs. param_start seems more informative since Vicinity isn't shown.
-			value_length = param_end - param_start;
-			if (value_length > MAX_FORMATTED_NUMBER_LENGTH) // Too rare to justify elaborate handling or error reporting.
-				value_length = MAX_FORMATTED_NUMBER_LENGTH;
-			// The following section is similar to that used to support initializers for static variables.
-			// So maybe maintain them together.
-			strlcpy(buf, param_start, value_length + 1);  // Make a temp copy to simplify the below (especially IsPureNumeric).
-			if (!strcmp(buf, "\"\"")) // Empty pair of quotes "".
+			if (*param_start == '\"') // Quoted literal string, or the empty string.
 			{
-				this_param.default_type = PARAM_DEFAULT_STR;
-				this_param.default_str = "";
-			}
-			else if (!stricmp(buf, "false"))
-			{
-				this_param.default_type = PARAM_DEFAULT_INT;
-				this_param.default_int64 = 0;
-			}
-			else if (!stricmp(buf, "true"))
-			{
-				this_param.default_type = PARAM_DEFAULT_INT;
-				this_param.default_int64 = 1;
-			}
-			else // The only other thing than the above that's supported is a pure integer or number.
-			{
-				switch(IsPureNumeric(buf, true, false, true))
+				// The following section is nearly identical to one in ExpandExpression().
+				// Find the end of this string literal, noting that a pair of double quotes is
+				// a literal double quote inside the string.
+				for (target = buf, param_end = param_start + 1;;) // Omit the starting-quote from consideration, and from the resulting/built string.
 				{
-				case PURE_INTEGER:
+					if (!*param_end) // No matching end-quote. Probably impossible due to load-time validation.
+						return ScriptError(ERR_MISSING_CLOSE_QUOTE, param_start); // Reporting param_start vs. aBuf seems more informative in the case of quoted/literal strings.
+					if (*param_end == '"') // And if it's not followed immediately by another, this is the end of it.
+					{
+						++param_end;
+						if (*param_end != '"') // String terminator or some non-quote character.
+							break;  // The previous char is the ending quote.
+						//else a pair of quotes, which resolves to a single literal quote. So fall through
+						// to the below, which will copy of quote character to the buffer. Then this pair
+						// is skipped over and the loop continues until the real end-quote is found.
+					}
+					//else some character other than '\0' or '"'.
+					*target++ = *param_end++;
+				}
+				*target = '\0'; // Terminate it in the buffer.
+				// The above has also set param_end for use near the bottom of the loop.
+				ConvertEscapeSequences(buf, g_EscapeChar, false); // Raw escape sequences like `n haven't been converted yet, so do it now.
+				this_param.default_type = PARAM_DEFAULT_STR;
+				this_param.default_str = *buf ? SimpleHeap::Malloc(buf, target-buf) : "";
+			}
+			else // A default value other than a quoted/literal string.
+			{
+				if (!(param_end = StrChrAny(param_start, ", \t=)"))) // Somewhat debatable but stricter seems better.
+					return ScriptError(ERR_MISSING_COMMA, aBuf); // Reporting aBuf vs. param_start seems more informative since Vicinity isn't shown.
+				value_length = param_end - param_start;
+				if (value_length > MAX_FORMATTED_NUMBER_LENGTH) // Too rare to justify elaborate handling or error reporting.
+					value_length = MAX_FORMATTED_NUMBER_LENGTH;
+				strlcpy(buf, param_start, value_length + 1);  // Make a temp copy to simplify the below (especially IsPureNumeric).
+				if (!stricmp(buf, "false"))
+				{
 					this_param.default_type = PARAM_DEFAULT_INT;
-					this_param.default_int64 = ATOI64(buf);
-					break;
-				case PURE_FLOAT:
-					this_param.default_type = PARAM_DEFAULT_FLOAT;
-					this_param.default_double = ATOF(buf);
-					break;
-				default: // Not numeric.
-					return ScriptError("Bad default value.", buf);
+					this_param.default_int64 = 0;
+				}
+				else if (!stricmp(buf, "true"))
+				{
+					this_param.default_type = PARAM_DEFAULT_INT;
+					this_param.default_int64 = 1;
+				}
+				else // The only things supported other than the above are integers and floats.
+				{
+					// Vars could be supported here via FindVar(), but only globals ABOVE this point in
+					// the script would be supported (since other globals don't exist yet). So it seems
+					// best to wait until full/comprehesive support for expressions is studied/designed
+					// for both static initializers and parameter-default-values.
+					switch(IsPureNumeric(buf, true, false, true))
+					{
+					case PURE_INTEGER:
+						this_param.default_type = PARAM_DEFAULT_INT;
+						this_param.default_int64 = ATOI64(buf);
+						break;
+					case PURE_FLOAT:
+						this_param.default_type = PARAM_DEFAULT_FLOAT;
+						this_param.default_double = ATOF(buf);
+						break;
+					default: // Not numeric (and also not a quoted string because that was handled earlier).
+						return ScriptError("Unsupported parameter default.", aBuf);
+					}
 				}
 			}
 			param_must_have_default = true;  // For now, all other params after this one must also have default values.
@@ -6412,7 +6438,7 @@ ResultType Script::DefineFunc(char *aBuf, Var *aFuncExceptionVar[])
 		else // This parameter does not have a default value specified.
 		{
 			if (param_must_have_default)
-				return ScriptError("Default value required.", this_param.var->mName);
+				return ScriptError("Parameter default required.", this_param.var->mName);
 			++func.mMinParams;
 		}
 		++param_count;
@@ -6427,7 +6453,7 @@ ResultType Script::DefineFunc(char *aBuf, Var *aFuncExceptionVar[])
 		}
 		//else it's ')', in which case the next iteration will handle it.
 		// Above has ensured that param_start now points to the next parameter, or ')' if none.
-	}
+	} // for() each formal parameter.
 
 	if (param_count)
 	{
@@ -7199,15 +7225,14 @@ Var *Script::FindVar(char *aVarName, size_t aVarNameLength, int *apInsertPos, in
 
 
 
-Var *Script::AddVar(char *aVarName, size_t aVarNameLength, int aInsertPos, bool aIsLocal, VarTypeType aVarType)
-// Not currently needed (e.g. for VAR_ATTRIB_PARAM):	, VarAttribType aAttrib)
+Var *Script::AddVar(char *aVarName, size_t aVarNameLength, int aInsertPos, int aIsLocal)
+// Returns the address of the new variable or NULL on failure.
 // Caller must ensure that g.CurrentFunc!=NULL whenever aIsLocal==true.
 // Caller must ensure that aVarName isn't NULL and that this isn't a duplicate variable name.
 // In addition, it has provided aInsertPos, which is the insertion point so that the list stays sorted.
 // Finally, aIsLocal has been provided to indicate which list, global or local, should receive this
-// new variable.  And aVarType should be != VAR_INVALID only when the caller wants us to add a variable
-// that is also the formal parameter of a function.
-// Returns the address of the new variable or NULL on failure.
+// new variable.  aIsLocal is normally 0 or 1 (boolean), but it may be 2 to indicate "it's a local AND a
+// function's parameter".
 {
 	if (!*aVarName) // Should never happen, so just silently indicate failure.
 		return NULL;
@@ -7242,17 +7267,14 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, int aInsertPos, bool 
 	VarTypeType var_type = GetVarType(var_name);
 	if (aIsLocal && (var_type != VAR_NORMAL || !stricmp(var_name, "ErrorLevel"))) // Attempt to create built-in variable as local.
 	{
-		if (aVarType == VAR_INVALID) // Caller didn't specify, so fall back to the global built-in variable of this name rather than displaying an error.
+		if (aIsLocal == 1) // It's not a UDF's parameter, so fall back to the global built-in variable of this name rather than displaying an error.
 			return FindOrAddVar(var_name, aVarNameLength, ALWAYS_USE_GLOBAL); // Force find-or-create of global.
-		else
+		else // aIsLocal == 2, which means "this is a local variable and a function's parameter".
 		{
 			ScriptError("Illegal parameter name.", aVarName); // Short message since so rare.
 			return NULL;
 		}
 	}
-	// Otherwise, if caller provided a valid aVarType, namely VAR_BYREF or VAR_NORMAL, override ours with it:
-	if (aVarType != VAR_INVALID)
-		var_type = aVarType;
 
 	// Allocate some dynamic memory to pass to the constructor:
 	char *new_name = SimpleHeap::Malloc(var_name, aVarNameLength);
@@ -7261,7 +7283,7 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, int aInsertPos, bool 
 		// to bother varying the error message to include ERR_ABORT if this occurs during runtime.
 		return NULL;
 
-	Var *the_new_var = new Var(new_name, var_type, aIsLocal); // , aAttrib);
+	Var *the_new_var = new Var(new_name, var_type, aIsLocal != 0); // , aAttrib);
 	if (the_new_var == NULL)
 	{
 		ScriptError(ERR_OUTOFMEM);
@@ -7818,7 +7840,7 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 					// If this parameter is formally declared as ByRef, report a load-time error if
 					// the actual-parameter is obviously not a variable (can't catch everything, such
 					// as invalid double derefs, e.g. Array%VarContainingSpaces%):
-					if (!func.mIsBuiltIn && func.mParam[deref->param_count].var->IsByRef())
+					if (!func.mIsBuiltIn && func.mParam[deref->param_count].is_byref)
 					{
 						// First check if there are any EXPR_TELLTALES characters in this param, since the
 						// presence of an expression for this parameter means it can't resolve to a variable
