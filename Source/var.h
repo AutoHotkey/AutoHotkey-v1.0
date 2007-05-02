@@ -291,7 +291,7 @@ public:
 		return (mType == VAR_ALIAS) ? mAliasFor : this; // Return target if it's an alias, or itself if not.
 	}
 
-	__forceinline void EnsureItIsNotAlias() // __forceinline because it's currently only called from one place.
+	__forceinline void ConvertToNonAliasIfNecessary() // __forceinline because it's currently only called from one place.
 	// When this function actually converts an alias into a normal variable, the variable's old
 	// attributes (especially mContents and mCapacity) become dominant again.  This prevents a memory
 	// leak in a case where a UDF is defined to provide a default value for a ByRef parameter, and is

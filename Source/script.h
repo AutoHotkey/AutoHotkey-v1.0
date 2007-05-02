@@ -1774,7 +1774,7 @@ enum FuncParamDefaults {PARAM_DEFAULT_NONE, PARAM_DEFAULT_STR, PARAM_DEFAULT_INT
 struct FuncParam
 {
 	Var *var;
-	WORD is_byref; // Boolean, but defined as WORD in case it helps data alignment and/or performance.
+	WORD is_byref; // Boolean, but defined as WORD in case it helps data alignment and/or performance (BOOL vs. WORD didn't help benchmarks).
 	WORD default_type;
 	union {char *default_str; __int64 default_int64; double default_double;};
 };

@@ -82,7 +82,7 @@ _atoi64
 ; Probably intrinsic: strchr (warning LNK4065: '_strchr' cannot be ordered)
 
 ?FreeAndRestoreFunctionVars@Var@@SAXAAVFunc@@AAPAUVarBkp@@AAH@Z
-?EnsureItIsNotAlias@Var@@QAEXXZ  ; script_expression.obj
+?ConvertToNonAliasIfNecessary@Var@@QAEXXZ  ; script_expression.obj
 ?UpdateAlias@Var@@QAEXPAV1@@Z
 ?LengthIgnoreBinaryClip@Var@@QAEKXZ
 ?length@?3??Length@Var@@QAEAAKXZ@4KA  ; Possibly corresponds to: static VarSizeType length

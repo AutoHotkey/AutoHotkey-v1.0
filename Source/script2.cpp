@@ -1030,7 +1030,7 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 		{
 			switch(*ucp)
 			{
-			case '\"':  // &quot;
+			case '"':  // &quot;
 				length += 6;
 				break;
 			case '&': // &amp;
@@ -1060,7 +1060,7 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 		{
 			switch(*ucp)
 			{
-			case '\"':  // &quot;
+			case '"':  // &quot;
 				strcpy(contents, "&quot;");
 				contents += 6;
 				break;

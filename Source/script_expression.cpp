@@ -989,7 +989,7 @@ end_of_infix_to_postfix:
 	///////////////////////////////////////////////////
 	// EVALUATE POSTFIX EXPRESSION (constructed above).
 	///////////////////////////////////////////////////
-	int i;
+	int i, j, s, actual_param_count, delta;
 	SymbolType right_is_number, left_is_number, result_symbol;
 	double right_double, left_double;
 	__int64 right_int64, left_int64;
@@ -998,7 +998,6 @@ end_of_infix_to_postfix:
 	size_t right_length, left_length;
 	char left_buf[MAX_FORMATTED_NUMBER_LENGTH + 1];  // BIF_OnMessage and SYM_DYNAMIC rely on this one being large enough to hold MAX_VAR_NAME_LENGTH.
 	char right_buf[MAX_FORMATTED_NUMBER_LENGTH + 1]; // Only needed for holding numbers
-	int j, s, actual_param_count, delta;
 	Func *prev_func;
 	char *result; // "result" is used for return values and also the final result.
 	VarSizeType result_length;
@@ -1339,27 +1338,26 @@ end_of_infix_to_postfix:
 					// one will never execute if a backup isn't needed).  Note that this loop that reviews all
 					// actual parameters is necessary as a separate loop from the one further below because this
 					// first one's conversion must occur prior to calling BackupFunctionVars().  In addition, there
-					// might be other interdepencies between formals and actuals if a function is calling itself
+					// might be other interdependencies between formals and actuals if a function is calling itself
 					// recursively.
-					for (j = func.mParamCount - 1, s = stack_count; j > -1; --j) // For each formal parameter (reverse order to mirror the nature of the stack).
+					for (j = (actual_param_count < func.mParamCount ? actual_param_count : func.mParamCount) - 1
+						, s = stack_count // Above line starts at the first formal parameter that has an actual.
+						; j > -1; --j) // For each formal parameter (reverse order to mirror the nature of the stack).
 					{
-						if (j < actual_param_count) // This formal has an actual on the stack.
+						// --s below moves on to the next item in the stack (without popping):  A check higher
+						// above has already ensured that this won't cause stack underflow:
+						ExprTokenType &this_stack_token = *stack[--s]; // Traditional, but doesn't measurably reduce code size and it's unlikely to help performance due to actual flow of control in this case.
+						if (this_stack_token.symbol == SYM_VAR && !func.mParam[j].is_byref)
 						{
-							// --s below moves on to the next item in the stack (without popping):  A check higher
-							// above has already ensured that this won't cause stack underflow:
-							ExprTokenType &this_stack_token = *stack[--s]; // Traditional, but doesn't measurably reduce code size and it's unlikely to help performance due to actual flow of control in this case.
-							if (this_stack_token.symbol == SYM_VAR && !func.mParam[j].is_byref)
-							{
-								// Since this formal parameter is passed by value, if it's SYM_VAR, convert it to
-								// SYM_OPERAND to allow the variables to be backed up and reset further below without
-								// corrupting any SYM_VARs that happen to be locals or params of this very same
-								// function.
-								// DllCall() relies on the fact that this transformation is only done for user
-								// functions, not built-in ones such as DllCall().  This is because DllCall()
-								// sometimes needs the variable of a parameter for use as an output parameter.
-								this_stack_token.marker = this_stack_token.var->Contents();
-								this_stack_token.symbol = SYM_OPERAND;
-							}
+							// Since this formal parameter is passed by value, if it's SYM_VAR, convert it to
+							// SYM_OPERAND to allow the variables to be backed up and reset further below without
+							// corrupting any SYM_VARs that happen to be locals or params of this very same
+							// function.
+							// DllCall() relies on the fact that this transformation is only done for user
+							// functions, not built-in ones such as DllCall().  This is because DllCall()
+							// sometimes needs the variable of a parameter for use as an output parameter.
+							this_stack_token.marker = this_stack_token.var->Contents();
+							this_stack_token.symbol = SYM_OPERAND;
 						}
 					}
 					// BackupFunctionVars() will also clear each local variable and formal parameter so that
@@ -1379,38 +1377,34 @@ end_of_infix_to_postfix:
 				// instances of this function on the call-stack and yet SYM_VAR to be one of this function's own
 				// locals or formal params because it would have no legitimate origin.
 
+				j = func.mParamCount - 1; // The index of the last formal parameter. Relied upon by BOTH loops below.
+				// The following loop will have zero iterations unless at least one formal parameter lacks an actual,
+				// which should be possible only if the parameter is optional (i.e. has a default value).
+				for (; j >= actual_param_count; --j) // For each formal parameter (reverse order to mirror the nature of the stack).
+				{
+					// The following worsens performance in this case, perhaps because the compiler can do
+					// a better job than this explicit/manual optimization (though the manual optimization
+					// reduces code size by 16 bytes):
+					//FuncParam &this_formal_param = func.mParam[j]; // For performance and convenience.
+					if (func.mParam[j].is_byref) // v1.0.46.13: Allow ByRef parameters to by optional by converting an omitted-actual into a non-alias formal/local.
+						func.mParam[j].var->ConvertToNonAliasIfNecessary(); // Convert from alias-to-normal, if necessary.
+					switch(func.mParam[j].default_type)
+					{
+					case PARAM_DEFAULT_STR:   func.mParam[j].var->Assign(func.mParam[j].default_str);    break;
+					case PARAM_DEFAULT_INT:   func.mParam[j].var->Assign(func.mParam[j].default_int64);  break;
+					case PARAM_DEFAULT_FLOAT: func.mParam[j].var->Assign(func.mParam[j].default_double); break;
+					default: // PARAM_DEFAULT_NONE or some other value.  This is probably a bug; assign blank for now.
+						func.mParam[j].var->Assign(); // By not specifying "" as the first param, the var's memory is not freed, which seems best to help performance when the function is called repeatedly in a loop.
+						break;
+					}
+				}
 				// Pop the actual number of params involved in this function-call off the stack.  Load-time
 				// validation has ensured that this number is always less than or equal to the number of
 				// parameters formally defined by the function.  Therefore, there should never be any leftover
-				// params on the stack after this is done:
-				for (j = func.mParamCount - 1; j > -1; --j) // For each formal parameter (reverse order to mirror the nature of the stack).
+				// params on the stack after this is done.  Relies upon the value of j established above:
+				for (; j > -1; --j) // For each formal parameter (reverse order to mirror the nature of the stack).
 				{
-					FuncParam &this_formal_param = func.mParam[j]; // For performance and convenience.
-					if (j >= actual_param_count) // No actual to go with it (should be possible only if the parameter is optional or has a default value).
-					{
-						if (this_formal_param.is_byref) // v1.0.46.13: Allow ByRef parameters to by optional by converting an omitted-actual into a non-alias formal/local.
-							this_formal_param.var->EnsureItIsNotAlias(); // Convert from alias-to-normal, if necessary.
-						switch(this_formal_param.default_type)
-						{
-						case PARAM_DEFAULT_STR:
-							this_formal_param.var->Assign(this_formal_param.default_str);
-							break;
-						case PARAM_DEFAULT_INT:
-							this_formal_param.var->Assign(this_formal_param.default_int64);
-							break;
-						case PARAM_DEFAULT_FLOAT:
-							this_formal_param.var->Assign(this_formal_param.default_double);
-							break;
-						default: // PARAM_DEFAULT_NONE or some other value.  This is probably a bug; assign blank for now.
-							this_formal_param.var->Assign(); // By not specifying "" as the first param, the var's memory is not freed, which seems best to help performance when the function is called repeatedly in a loop.
-							break;
-						}
-						continue;
-					}
-					// Otherwise, assign actual parameter's value to the formal parameter (which is itself a
-					// local variable in the function).  A check higher above has already ensured that this
-					// won't cause stack underflow:
-					ExprTokenType &token = *STACK_POP;
+					ExprTokenType &token = *STACK_POP; // A check higher above has already ensured that this won't cause stack underflow.
 					// Below uses IS_OPERAND rather than checking for only SYM_OPERAND because the stack can contain
 					// both generic and specific operands.  Specific operands were evaluated by a previous iteration
 					// of this section.  Generic ones were pushed as-is onto the stack by a previous iteration.
@@ -1419,7 +1413,9 @@ end_of_infix_to_postfix:
 						Var::FreeAndRestoreFunctionVars(func, var_backup, var_backup_count);
 						goto abort;
 					}
-					if (this_formal_param.is_byref)
+					// Seems to worsen performance in this case:
+					//FuncParam &this_formal_param = func.mParam[j]; // For performance and convenience.
+					if (func.mParam[j].is_byref)
 					{
 						// Note that the previous loop might not have checked things like the following because that
 						// loop never ran unless a backup was needed:
@@ -1430,19 +1426,21 @@ end_of_infix_to_postfix:
 							// (though currently, only a double deref that resolves to a built-in variable
 							// would be able to get this far to trigger this error, because something like
 							// func(Array%VarContainingSpaces%) would have been caught at an earlier stage above.
-							LineError(ERR_BYREF ERR_ABORT, FAIL, this_formal_param.var->mName);
+							LineError(ERR_BYREF ERR_ABORT, FAIL, func.mParam[j].var->mName);
 							Var::FreeAndRestoreFunctionVars(func, var_backup, var_backup_count);
 							goto abort;
 						}
-						this_formal_param.var->UpdateAlias(token.var); // Make the formal parameter point directly to the actual parameter's contents.
+						func.mParam[j].var->UpdateAlias(token.var); // Make the formal parameter point directly to the actual parameter's contents.
 					}
 					else // This parameter is passed "by value".
+						// Assign actual parameter's value to the formal parameter (which is itself a
+						// local variable in the function).  
 						// If toketoken.var's Type() is always VAR_NORMAL (e.g. never the clipboard).
 						// A SYM_VAR token can still happen because the previous loop's conversion of all
 						// by-value SYM_VAR operands into SYM_OPERAND would not have happened if no
 						// backup was needed for this function.
-						this_formal_param.var->Assign(token);
-				}
+						func.mParam[j].var->Assign(token);
+				} // for()
 
 				result = ""; // Init to default in case function doesn't return a value or it EXITs or fails.
 
@@ -1512,9 +1510,9 @@ end_of_infix_to_postfix:
 						// v1.0.45: Take a shortcut for performance.  Doing it this way saves up to two memcpy's
 						// (make_result_persistent then copy into deref buffer).  In some cases, it also saves
 						// from having to make_result_persistent and prevents the need to expand the deref buffer.
-						// HOWEVER, the following optimization isn't done because not only does it complicate the
-						// code a lot (such as verifying that the variable isn't static, isn't ALLOC_SIMPLE, isn't
-						// a ByRef to a global or some other function's local, etc.), there's also currently
+						// HOWEVER, the optimization described next isn't done because not only does it complicate
+						// the code a lot (such as verifying that the variable isn't static, isn't ALLOC_SIMPLE,
+						// isn't a ByRef to a global or some other function's local, etc.), there's also currently
 						// no way to find out which function owns a particular local variable (a name lookup
 						// via binary search is a possibility, but its performance probably isn't worth it)
 						// Abandoned idea: When a user-defined function returns one of its local variables,

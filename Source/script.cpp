@@ -6365,8 +6365,9 @@ ResultType Script::DefineFunc(char *aBuf, Var *aFuncExceptionVar[])
 		if (*param_start == '=') // This is the default value of the param just added.
 		{
 			param_start = omit_leading_whitespace(param_start + 1); // Start of the default value.
-			if (*param_start == '\"') // Quoted literal string, or the empty string.
+			if (*param_start == '"') // Quoted literal string, or the empty string.
 			{
+				// v1.0.46.13: Adde support for quoted/literal strings beyond simply "".
 				// The following section is nearly identical to one in ExpandExpression().
 				// Find the end of this string literal, noting that a pair of double quotes is
 				// a literal double quote inside the string.
@@ -13416,10 +13417,10 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 		// operations as well as minmize the chance that executable names intended by the user to be parameters
 		// will not be considered to be the program to run (e.g. for use with a compiler, perhaps).
 		char *first_phrase, *first_phrase_end, *second_phrase;
-		if (*parse_buf == '\"')
+		if (*parse_buf == '"')
 		{
 			first_phrase = parse_buf + 1;  // Omit the double-quotes, for use with CreateProcess() and such.
-			first_phrase_end = strchr(first_phrase, '\"');
+			first_phrase_end = strchr(first_phrase, '"');
 		}
 		else
 		{
@@ -13476,7 +13477,7 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 				shell_action = parse_buf;
 				// +4 for the 3-char extension with the period:
 				shell_params = action_extension + 4;  // exec_params is now the start of params, or empty-string.
-				if (*shell_params == '\"')
+				if (*shell_params == '"')
 					// Exclude from shell_params since it's probably belongs to the action, not the params
 					// (i.e. it's paired with another double-quote at the start):
 					++shell_params;
