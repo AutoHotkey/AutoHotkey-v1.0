@@ -76,6 +76,13 @@ enum VariableTypeType {VAR_TYPE_INVALID, VAR_TYPE_NUMBER, VAR_TYPE_INTEGER, VAR_
 	if (threads_are_attached)\
 		AttachThreadInput(g_MainThreadID, target_thread, FALSE);
 
+#define RESEED_RANDOM_GENERATOR \
+{\
+	FILETIME ft;\
+	GetSystemTimeAsFileTime(&ft);\
+	init_genrand(ft.dwLowDateTime);\
+}
+
 // Notes about the below macro:
 // One of the menus in the menu bar has been displayed, and the we know the user is is still in
 // the menu bar, even moving to different menus and/or menu items, until WM_EXITMENULOOP is received.

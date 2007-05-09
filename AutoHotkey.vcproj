@@ -117,7 +117,7 @@
 				Name="VCMIDLTool"/>
 			<Tool
 				Name="VCPostBuildEventTool"
-				CommandLine="upx --best --compress-icons=0 release\AutoHotkey.exe"/>
+				CommandLine="upx --best --no-lzma --filter=73 --compress-icons=0 release\AutoHotkey.exe"/>
 			<Tool
 				Name="VCPreBuildEventTool"/>
 			<Tool

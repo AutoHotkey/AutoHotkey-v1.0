@@ -928,18 +928,15 @@ LineNumberType Script::LoadFromFile(bool aScriptWasNotspecified)
 	//if (mLastLine->mActionType == ACT_ELSE ||
 	//	ACT_IS_IF(mLastLine->mActionType)
 	//	...
-	++mCombinedLineNumber;
-	if (!AddLine(ACT_EXIT)) // First exit.
-		return LOADING_FAILED;
-
-	// Even if the last line of the script is already ACT_EXIT, always add another
-	// one in case the script ends in a label.  That way, every label will have
+	// Second ACT_EXIT: even if the last line of the script is already "exit", always add
+	// another one in case the script ends in a label.  That way, every label will have
 	// a non-NULL target, which simplifies other aspects of script execution.
 	// Making sure that all scripts end with an EXIT ensures that if the script
 	// file ends with ELSEless IF or an ELSE, that IF's or ELSE's mRelatedLine
 	// will be non-NULL, which further simplifies script execution.
 	// Not done since it's number doesn't much matter: ++mCombinedLineNumber;
-	if (!AddLine(ACT_EXIT)) // Second exit to guaranty non-NULL mRelatedLine(s).
+	++mCombinedLineNumber;  // So that the EXITs will both show up in ListLines as the line # after the last physical one in the script.
+	if (!(AddLine(ACT_EXIT) && AddLine(ACT_EXIT))) // Second exit guaranties non-NULL mRelatedLine(s).
 		return LOADING_FAILED;
 	mPlaceholderLabel->mJumpToLine = mLastLine; // To follow the rule "all labels should have a non-NULL line before the script starts running".
 
@@ -960,12 +957,11 @@ LineNumberType Script::LoadFromFile(bool aScriptWasNotspecified)
 		// used since it could be as large as 0.5 KB of non-compressed code.  A simple call to
 		// GetSystemTimeAsFileTime() seems just as good or better, since it produces
 		// a FILETIME, which is "the number of 100-nanosecond intervals since January 1, 1601."
-		FILETIME ft;
-		GetSystemTimeAsFileTime(&ft);
 		// Use the low-order DWORD since the high-order one rarely changes.  If my calculations are correct,
 		// the low-order 32-bits traverses its full 32-bit range every 7.2 minutes, which seems to make
 		// using it as a seed superior to GetTickCount for most purposes.
-		init_genrand(ft.dwLowDateTime);
+		RESEED_RANDOM_GENERATOR;
+
 		return mLineCount; // The count of runnable lines that were loaded, which might be zero.
 	}
 	else

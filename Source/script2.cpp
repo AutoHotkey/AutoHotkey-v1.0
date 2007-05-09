@@ -8968,13 +8968,20 @@ ResultType Line::FileInstall(char *aSource, char *aDest, char *aFlag)
 	}
 	// aSource should be the same as the "file id" used to originally compress the file
 	// when it was compiled into an EXE.  So this should seek for the right file:
-	if ( oRead.FileExtract(aSource, aDest) != HS_EXEARC_E_OK)
+	int result = oRead.FileExtract(aSource, aDest);
+	oRead.Close();
+
+	// v1.0.46.15: The following is a fix for the fact that a compiled script (but not an uncompiled one)
+	// that executes FileInstall somehow causes the Random command to generate the same series of random
+	// numbers every time the script launches. Perhaps the answer lies somewhere in oRead's code --
+	// something that somehow resets the static data used by init_genrand().
+	RESEED_RANDOM_GENERATOR;
+
+	if (result != HS_EXEARC_E_OK)
 	{
-		oRead.Close();
 		MsgBox(aSource, 0, "Could not extract file:");
 		return OK; // Let ErrorLevel tell the story.
 	}
-	oRead.Close();
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 #else
 	// v1.0.35.11: Must search in A_ScriptDir by default because that's where ahk2exe will search by default.
@@ -10288,10 +10295,30 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 			}
 			break;
 
-		case DLL_ARG_INT:
-		case DLL_ARG_SHORT:
-		case DLL_ARG_CHAR:
-		case DLL_ARG_INT64:
+		case DLL_ARG_DOUBLE:
+		case DLL_ARG_FLOAT:
+			// This currently doesn't validate that this_dyna_param.is_unsigned==false, since it seems
+			// too rare and mostly harmless to worry about something like "Ufloat" having been specified.
+			if (arg_as_string)
+				this_dyna_param.value_double = (double)ATOF(arg_as_string);
+			else if (this_param.symbol == SYM_INTEGER)
+				this_dyna_param.value_double = (double)this_param.value_int64;
+			else
+				this_dyna_param.value_double = this_param.value_double;
+
+			if (this_dyna_param.type == DLL_ARG_FLOAT)
+				this_dyna_param.value_float = (float)this_dyna_param.value_double;
+			break;
+
+		case DLL_ARG_INVALID:
+			g_ErrorLevel->Assign("-2"); // Stage 2 error: Invalid return type or arg type.
+			return;
+
+		default: // Namely:
+		//case DLL_ARG_INT:
+		//case DLL_ARG_SHORT:
+		//case DLL_ARG_CHAR:
+		//case DLL_ARG_INT64:
 			if (arg_as_string)
 			{
 				// Support for unsigned values that are 32 bits wide or less is done via ATOI64() since
@@ -10322,28 +10349,8 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 			// because they should be right justified within it for insertion onto the call stack.
 			if (this_dyna_param.type != DLL_ARG_INT64) // Shift the 32-bit value into the high-order DWORD of the 64-bit value for later use by DynaCall().
 				this_dyna_param.value_int = (int)this_dyna_param.value_int64; // Force a failure if compiler generates code for this that corrupts the union (since the same method is used for the more obscure float vs. double below).
-			break;
-
-		case DLL_ARG_FLOAT:
-		case DLL_ARG_DOUBLE:
-			// This currently doesn't validate that this_dyna_param.is_unsigned==false, since it seems
-			// too rare and mostly harmless to worry about something like "Ufloat" having been specified.
-			if (arg_as_string)
-				this_dyna_param.value_double = (double)ATOF(arg_as_string);
-			else if (this_param.symbol == SYM_INTEGER)
-				this_dyna_param.value_double = (double)this_param.value_int64;
-			else
-				this_dyna_param.value_double = this_param.value_double;
-
-			if (this_dyna_param.type == DLL_ARG_FLOAT)
-				this_dyna_param.value_float = (float)this_dyna_param.value_double;
-			break;
-
-		default: // DLL_ARG_INVALID or a bug due to an unhandled type.
-			g_ErrorLevel->Assign("-2"); // Stage 2 error: Invalid return type or arg type.
-			return;
-		}
-	}
+		} // switch (this_dyna_param.type)
+	} // for() each arg.
     
 	if (!function) // The function's address hasn't yet been determined.
 	{
@@ -10457,21 +10464,20 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 
 			switch(return_attrib.type)
 			{
-			case DLL_ARG_STR:  // Even strings can be passed by address, which is equivalent to "char **".
-			case DLL_ARG_INT:
-			case DLL_ARG_SHORT:
-			case DLL_ARG_CHAR:
-			case DLL_ARG_FLOAT:
+			case DLL_ARG_INT64:
+			case DLL_ARG_DOUBLE:
+				// Same as next section but for eight bytes:
+				return_value.Int64 = *(__int64 *)return_value.Pointer;
+				break;
+			default: // Namely:
+			//case DLL_ARG_STR:  // Even strings can be passed by address, which is equivalent to "char **".
+			//case DLL_ARG_INT:
+			//case DLL_ARG_SHORT:
+			//case DLL_ARG_CHAR:
+			//case DLL_ARG_FLOAT:
 				// All the above are stored in four bytes, so a straight dereference will copy the value
 				// over unchanged, even if it's a float.
 				return_value.Int = *(int *)return_value.Pointer;
-				break;
-
-			case DLL_ARG_INT64:
-			case DLL_ARG_DOUBLE:
-				// Same as above but for eight bytes:
-				return_value.Int64 = *(__int64 *)return_value.Pointer;
-				break;
 			}
 		}
 

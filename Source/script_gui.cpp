@@ -4880,9 +4880,9 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 				// This is because it allows layout editors and other script generators to omit the variable
 				// and yet still be able to generate a runnable script.
 				Var *candidate_var;
-				// ALWAYS_PREFER_LOCAL is used below so that any existing local variable (e.g. a ByRef alias)
-				// will take precedence over a global of the same name when assume-global is in effect.  If
-				// neither type of variable exists, a global variable will be created if assume-global is in effect.
+				// ALWAYS_PREFER_LOCAL is used below so that any existing local variable (e.g. a ByRef alias or
+				// static) will take precedence over a global of the same name when assume-global is in effect.
+				// If neither type of variable exists, a global will be created if assume-global is in effect.
 				if (   !(candidate_var = g_script.FindOrAddVar(next_option, 0, ALWAYS_PREFER_LOCAL))   ) // Find local or global, see below.
 					// For now, this is always a critical error that stops the current quasi-thread rather
 					// than setting ErrorLevel (if ErrorLevel is called for).  This is because adding a
@@ -4902,7 +4902,7 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 				// to review a function's lines the first time its first "Gui Add" is encountered at runtime.
 				// Any local variable that match the name of the vVar global could be made into aliases so
 				// that they point to the global instead.  But that is pretty ugly and doesn't seem worth it.
-				candidate_var = candidate_var->ResolveAlias(); // Update it to its target if it's an alias.
+				candidate_var = candidate_var->ResolveAlias(); // Update it to its target if it's an alias.  This might be relied upon by Gui::FindControl() and other things, and also the section below.
 				if (candidate_var->IsNonStaticLocal()) // Note that an alias can point to a local vs. global var.
 					return g_script.ScriptError("A control's variable must be global or static." ERR_ABORT, next_option - 1);
 				// Another reason that the above always resolves aliases is because it allows the next
@@ -6569,11 +6569,22 @@ GuiIndexType GuiType::FindControl(char *aControlID)
 	// pointer first, rather than comparing the variable names for a match.  It's further
 	// improved by skipping the first loop entirely when aControlID doesn't exist as a global
 	// variable (GUI controls always have global variables, not locals).
-	Var *var = g_script.FindVar(aControlID, 0, NULL, ALWAYS_USE_GLOBAL); // Search globals only (in case we're inside a function body now).
-	if (var)
+	Var *var;
+	if (var = g_script.FindVar(aControlID, 0, NULL, ALWAYS_USE_GLOBAL)) // First search globals only because for backward compatibility, a GUI control whose Var* is identical to that of a global should be given precedence over a static that matches some other control.  Furthermore, since most GUI variables are global, doing this check before the static check improves avg-case performance.
 	{
-		var = var->ResolveAlias(); // Update it to its target if it's an alias.
-		if (!var->IsLocal()) // Must be global to be valid.  Note that an alias can point to a local vs. global var.
+		// No need to do "var = var->ResolveAlias()" because the line above never finds locals, only globals.
+		// Similarly, there's no need to do confirm that var->IsLocal()==false.
+		for (u = 0; u < mControlCount; ++u)
+			if (mControl[u].output_var == var)
+				return u;  // Match found.
+	}
+	if (g.CurrentFunc // v1.0.46.15: Since above failed to match: if we're in a function, search for a static or ByRef-that-points-to-a-global-or-static because both should be supported.
+		&& (var = g_script.FindVar(aControlID, 0, NULL, ALWAYS_USE_LOCAL)))
+	{
+		// No need to do "var = var->ResolveAlias()" because the line above never finds locals, only globals.
+		// Similarly, there's no need to do confirm that var->IsLocal()==false.
+		var = var->ResolveAlias(); // Update it to its target if it's an alias because that's how control-var's are stored (i.e. pre-resolved, never aliases).
+		if (!var->IsNonStaticLocal()) // To be a valid control-var, it must be global, static, or a ByRef that points to a global or static.
 			for (u = 0; u < mControlCount; ++u)
 				if (mControl[u].output_var == var)
 					return u;  // Match found.

@@ -1382,19 +1382,19 @@ end_of_infix_to_postfix:
 				// which should be possible only if the parameter is optional (i.e. has a default value).
 				for (; j >= actual_param_count; --j) // For each formal parameter (reverse order to mirror the nature of the stack).
 				{
-					// The following worsens performance in this case, perhaps because the compiler can do
-					// a better job than this explicit/manual optimization (though the manual optimization
-					// reduces code size by 16 bytes):
-					//FuncParam &this_formal_param = func.mParam[j]; // For performance and convenience.
-					if (func.mParam[j].is_byref) // v1.0.46.13: Allow ByRef parameters to by optional by converting an omitted-actual into a non-alias formal/local.
-						func.mParam[j].var->ConvertToNonAliasIfNecessary(); // Convert from alias-to-normal, if necessary.
-					switch(func.mParam[j].default_type)
+					// The following worsens performance by 7% under UPX 2.0 but is the faster method on UPX 3.0.
+					// This could merely be due to unpredictable cache hits/misses in a my particular CPU.
+					// In addition to being fastest, it also reduces code size by 16 bytes:
+					FuncParam &this_formal_param = func.mParam[j]; // For performance and convenience.
+					if (this_formal_param.is_byref) // v1.0.46.13: Allow ByRef parameters to by optional by converting an omitted-actual into a non-alias formal/local.
+						this_formal_param.var->ConvertToNonAliasIfNecessary(); // Convert from alias-to-normal, if necessary.
+					switch(this_formal_param.default_type)
 					{
-					case PARAM_DEFAULT_STR:   func.mParam[j].var->Assign(func.mParam[j].default_str);    break;
-					case PARAM_DEFAULT_INT:   func.mParam[j].var->Assign(func.mParam[j].default_int64);  break;
-					case PARAM_DEFAULT_FLOAT: func.mParam[j].var->Assign(func.mParam[j].default_double); break;
+					case PARAM_DEFAULT_STR:   this_formal_param.var->Assign(this_formal_param.default_str);    break;
+					case PARAM_DEFAULT_INT:   this_formal_param.var->Assign(this_formal_param.default_int64);  break;
+					case PARAM_DEFAULT_FLOAT: this_formal_param.var->Assign(this_formal_param.default_double); break;
 					default: // PARAM_DEFAULT_NONE or some other value.  This is probably a bug; assign blank for now.
-						func.mParam[j].var->Assign(); // By not specifying "" as the first param, the var's memory is not freed, which seems best to help performance when the function is called repeatedly in a loop.
+						this_formal_param.var->Assign(); // By not specifying "" as the first param, the var's memory is not freed, which seems best to help performance when the function is called repeatedly in a loop.
 						break;
 					}
 				}
