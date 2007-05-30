@@ -1226,7 +1226,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 					pcontrol->attrib |= GUI_CONTROL_ATTRIB_LABEL_IS_RUNNING; // Must be careful to set this flag only when the event is control-generated, not for a drag-and-drop onto the control, or context menu on the control, etc.
 
 				// LAUNCH GUI THREAD:
-				gui_label->mJumpToLine->ExecUntil(UNTIL_RETURN);
+				gui_label->Execute();
 
 				// Bug-fix for v1.0.22: If the above ExecUntil() performed a "Gui Destroy", the
 				// pointers below are now invalid so should not be dereferenced.  In such a case,
@@ -1280,7 +1280,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 					g.GuiEvent = GUI_EVENT_NORMAL;
 					g.GuiWindowIndex = g.GuiDefaultWindowIndex = pgui->mWindowIndex; // But leave GuiControl at its default, which flags this event as from a menu item.
 				}
-				menu_item->mLabel->mJumpToLine->ExecUntil(UNTIL_RETURN);
+				menu_item->mLabel->Execute();
 				break;
 
 			case AHK_HOTSTRING:
@@ -1294,7 +1294,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				// ACT_IS_ALWAYS_ALLOWED() was already checked above.
 				// The message poster has ensured that g_script.mOnClipboardChangeLabel is non-NULL and valid.
 				g_script.mOnClipboardChangeIsRunning = true;
-				g_script.mOnClipboardChangeLabel->mJumpToLine->ExecUntil(UNTIL_RETURN); // EXECUTE.
+				g_script.mOnClipboardChangeLabel->Execute();
 				g_script.mOnClipboardChangeIsRunning = false;
 				break;
 
@@ -1587,7 +1587,7 @@ bool CheckScriptTimers()
 	if (!INTERRUPTIBLE || g_nPausedThreads > 0 || g_IdleIsPaused || !g.AllowTimers || g_nThreads >= g_MaxThreadsTotal)
 		return false; // Above: To be safe (prevent stack faults) don't allow max threads to be exceeded.
 
-	ScriptTimer *timer;
+	ScriptTimer *ptimer;
 	UINT launched_threads;
 	DWORD tick_start;
 	global_struct global_saved;
@@ -1595,15 +1595,16 @@ bool CheckScriptTimers()
 	// Note: It seems inconsequential if a subroutine that the below loop executes causes a
 	// new timer to be added to the linked list while the loop is still enumerating the timers.
 
-	for (launched_threads = 0, timer = g_script.mFirstTimer; timer != NULL; timer = timer->mNextTimer)
+	for (launched_threads = 0, ptimer = g_script.mFirstTimer; ptimer != NULL; ptimer = ptimer->mNextTimer)
 	{
 		// Call GetTickCount() every time in case a previous iteration of the loop took a long
 		// time to execute.  Also, as of v1.0.36.03, the following subtracts two DWORDs to support
 		// intervals of 49.7 vs. 24.8 days.  This should work as long as the distance between the
 		// values being compared isn't greater than 49.7 days. This is because 1 minus 2 in unsigned
 		// math yields 0xFFFFFFFF milliseconds (49.7 days).
-		if (timer->mEnabled && timer->mExistingThreads < 1 && timer->mPriority >= g.Priority // thread priorities
-			&& (tick_start = GetTickCount()) - timer->mTimeLastRun >= (DWORD)timer->mPeriod)
+		ScriptTimer &timer = *ptimer; // For performance and convenience.
+		if (timer.mEnabled && timer.mExistingThreads < 1 && timer.mPriority >= g.Priority // thread priorities
+			&& (tick_start = GetTickCount()) - timer.mTimeLastRun >= (DWORD)timer.mPeriod)
 		{
 			if (!launched_threads)
 			{
@@ -1641,7 +1642,9 @@ bool CheckScriptTimers()
 			// one began.  This should make timers behave more consistently (i.e. how long a timed
 			// subroutine takes to run SHOULD NOT affect its *apparent* frequency, which is number
 			// of times per second or per minute that we actually attempt to run it):
-			timer->mTimeLastRun = tick_start;
+			timer.mTimeLastRun = tick_start;
+			if (timer.mRunOnlyOnce)
+				timer.Disable();  // This is done prior to launching the thread for reasons similar to above.
 			++launched_threads;
 
 			if (g_nFileDialogs) // See MsgSleep() for comments on this.
@@ -1656,7 +1659,7 @@ bool CheckScriptTimers()
 			// the user set up in the auto-execute part of the script (e.g. KeyDelay, WinDelay, etc.).
 			// However, we do not set ErrorLevel to NONE here because it's more flexible that way
 			// (i.e. the user may want one hotkey subroutine to use the value of ErrorLevel set by another):
-			InitNewThread(timer->mPriority, false, false, timer->mLabel->mJumpToLine->mActionType); // False as last param because ++g_nThreads should be done only once rather than each Init().
+			InitNewThread(timer.mPriority, false, false, timer.mLabel->mJumpToLine->mActionType); // False as last param because ++g_nThreads should be done only once rather than each Init().
 			// The above also resets g_script.mLinesExecutedThisCycle to zero, which should slightly
 			// increase the expectation that any short timed subroutine will run all the way through
 			// to completion rather than being interrupted by the press of a hotkey, and thus potentially
@@ -1667,9 +1670,9 @@ bool CheckScriptTimers()
 			// occurred, so it should be left as the responsibilty of the section in MsgSleep that
 			// launches new threads.
 
-			++timer->mExistingThreads;
-			timer->mLabel->mJumpToLine->ExecUntil(UNTIL_RETURN);
-			--timer->mExistingThreads;
+			++timer.mExistingThreads;
+			timer.mLabel->Execute();
+			--timer.mExistingThreads;
 
 			KILL_UNINTERRUPTIBLE_TIMER
 		} // if timer is due to launch.
@@ -1750,6 +1753,7 @@ bool MsgMonitor(HWND aWnd, UINT aMsg, WPARAM awParam, LPARAM alParam, MSG *apMsg
 	// a normal effect that relies on ordering), the messages would then be processed out of their
 	// original order, which would be very undesirable in many cases.
 	//
+	// Parts of the following are obsolete:
 	// In light of the above, INTERRUPTIBLE_IF_NECESSARY is used instead of INTERRUPTIBLE_IN_EMERGENCY
 	// to reduce on the unreliability of message filters that are numerically less than WM_HOTKEY.
 	// For example, if the user presses a hotkey and an instant later a qualified WM_LBUTTONDOWN arrives,
@@ -1782,7 +1786,7 @@ bool MsgMonitor(HWND aWnd, UINT aMsg, WPARAM awParam, LPARAM alParam, MSG *apMsg
 		if (g_nThreads > MAX_THREADS_LIMIT
 			|| func.mJumpToLine->mActionType != ACT_EXITAPP && func.mJumpToLine->mActionType != ACT_RELOAD)
 			return false;
-	if (monitor.label_is_running || g.Priority > 0) // Monitor is already running its function or existing thread's priority is too high to be interrupted.
+	if (monitor.udf_is_running || g.Priority > 0) // Monitor is already running its function or existing thread's priority is too high to be interrupted.
 		return false;
 
 	// Need to check if backup is needed in case script explicitly called the function rather than using
@@ -1806,7 +1810,7 @@ bool MsgMonitor(HWND aWnd, UINT aMsg, WPARAM awParam, LPARAM alParam, MSG *apMsg
 	if (g_nFileDialogs)
 		SetCurrentDirectory(g_WorkingDir);
 
-	monitor.label_is_running = true;
+	monitor.udf_is_running = true;
 	InitNewThread(0, false, true, func.mJumpToLine->mActionType);
 	g_script.UpdateTrayIcon();
 
@@ -1875,32 +1879,32 @@ bool MsgMonitor(HWND aWnd, UINT aMsg, WPARAM awParam, LPARAM alParam, MSG *apMsg
 	// reset deleted array elements to have a NULL func.  Even so, the following scenario could happen:
 	// 1) The message element is deleted.
 	// 2) It is recreated to be the same as before, but now it has a different array index.
-	// 3) It's label_is_running member would have been set to false upon creation, and the thread for the same
+	// 3) It's udf_is_running member would have been set to false upon creation, and the thread for the same
 	//    message might have launched the same function we did above, or some other.
 	// 4) Everything seems okay in this case, especially given its rarity.
 	//
-	// But what if step 2 above created the same msg+func in the same position as before?  It's label_is_running
+	// But what if step 2 above created the same msg+func in the same position as before?  It's udf_is_running
 	// member would have been wrongly set to false, which would have allowed this msg-monitor thread to launch
 	// while it was techically still running above.  This scenario seems too rare and the consequences too small
 	// to justify the extra code size, so it is documented here as a known limitation.
 	//
-	// Thus, if "monitor" is defunct due to deletion, setting its label_is_running to false is harmless.
+	// Thus, if "monitor" is defunct due to deletion, setting its udf_is_running to false is harmless.
 	// However, "monitor" might have been reused by BIF_OnMessage() to create a new msg-monitor, so the
 	// thing that must be checked is the message number to avoid wrongly setting some other msg-monitor's
-	// label_is_running to false.  Update: Check g_MsgMonitorCount in case it has shrunk (which could leave
+	// udf_is_running to false.  Update: Check g_MsgMonitorCount in case it has shrunk (which could leave
 	// "monitor" pointing to an element in the array that is now unused/obsolete).
 	if (g_MsgMonitorCount >= msg_count_orig && monitor.msg == aMsg)
-		monitor.label_is_running = false;
+		monitor.udf_is_running = false;
 	else // "monitor" is now some other msg-monitor (or an obsolete item in array), so do don't change it (see above comments).
 	{
 		// Fix for v1.0.44.10: If OnMessage is called from *inside* some other monitor function in a way that
-		// deletes a message monitorm, monitor.label_is_running would get stuck at true (but only if the
+		// deletes a message monitor, monitor.udf_is_running would get stuck at true (but only if the
 		// message(s) that were deleted lay to the left of it in the array).  So check if the monitor is
 		// somewhere else in the array and if found (i.e. it didn't delete itself), update it.
 		for (msg_index = 0; msg_index < g_MsgMonitorCount; ++msg_index)
 			if (g_MsgMonitor[msg_index].msg == aMsg)
 			{
-				g_MsgMonitor[msg_index].label_is_running = false;
+				g_MsgMonitor[msg_index].udf_is_running = false;
 				break;
 			}
 	}
@@ -1930,8 +1934,7 @@ void InitNewThread(int aPriority, bool aSkipUninterruptible, bool aIncrementThre
 // due to that component, only the other one (which is now known to be positive otherwise the
 // first rule of precedence would have applied).
 {
-	if (aIncrementThreadCount)
-		++g_nThreads; // It is the caller's responsibility to avoid calling us if the thread count is too high.
+	g_nThreads += aIncrementThreadCount; // It is the caller's responsibility to avoid calling us if the thread count is too high.
 
 	// v1.0.38.04: mLinesExecutedThisCycle is now reset in this function for maintainability. For simplicity,
 	// the reset is unconditional because it is desirable 99% of the time.

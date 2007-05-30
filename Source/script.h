@@ -44,7 +44,7 @@ enum ExecUntilMode {NORMAL_MODE, UNTIL_RETURN, UNTIL_BLOCK_END, ONLY_ONE_LINE};
 #define ATTR_LOOP_UNKNOWN (void *)1 // Same value as the above.        // KEEP IN SYNC WITH BELOW.
 #define ATTR_LOOP_IS_UNKNOWN_OR_NONE(attr) (attr <= ATTR_LOOP_UNKNOWN) // KEEP IN SYNC WITH ABOVE.
 #define ATTR_LOOP_NORMAL (void *)2
-#define ATTR_LOOP_FILE (void *)3
+#define ATTR_LOOP_FILEPATTERN (void *)3
 #define ATTR_LOOP_REG (void *)4
 #define ATTR_LOOP_READ_FILE (void *)5
 #define ATTR_LOOP_PARSE (void *)6
@@ -194,7 +194,7 @@ enum CommandIDs {CONTROL_ID_FIRST = IDCANCEL + 1
 #define ERR_DIVIDEBYZERO "Divide by zero"
 #define ERR_PERCENT "Must be between -100 and 100."
 #define ERR_MOUSE_SPEED "Mouse speed must be between 0 and " MAX_MOUSE_SPEED_STR "."
-#define ERR_VAR_IS_RESERVED "Not allowed as an output variable."
+#define ERR_VAR_IS_READONLY "Not allowed as an output variable."
 
 //----------------------------------------------------------------------------------
 
@@ -464,6 +464,7 @@ enum GuiControlCmds {GUICONTROL_CMD_INVALID, GUICONTROL_CMD_OPTIONS, GUICONTROL_
 
 enum GuiControlGetCmds {GUICONTROLGET_CMD_INVALID, GUICONTROLGET_CMD_CONTENTS, GUICONTROLGET_CMD_POS
 	, GUICONTROLGET_CMD_FOCUS, GUICONTROLGET_CMD_FOCUSV, GUICONTROLGET_CMD_ENABLED, GUICONTROLGET_CMD_VISIBLE
+	, GUICONTROLGET_CMD_HWND
 };
 
 typedef UCHAR GuiControls;
@@ -507,6 +508,7 @@ enum WinSetAttributes {WINSET_INVALID, WINSET_TRANSPARENT, WINSET_TRANSCOLOR, WI
 	, WINSET_REGION};
 
 
+class Label; // Forward declaration so that each can use the other.
 class Line
 {
 private:
@@ -527,9 +529,10 @@ private:
 	static Var *sArgVar[MAX_ARGS];
 
 	ResultType EvaluateCondition();
-	ResultType PerformLoop(char **apReturnValue, bool &aContinueMainLoop, Line *&aJumpToLine
-		, FileLoopModeType aFileLoopMode, bool aRecurseSubfolders, char *aFilePattern
+	ResultType Line::PerformLoop(char **apReturnValue, bool &aContinueMainLoop, Line *&aJumpToLine
 		, __int64 aIterationLimit, bool aIsInfinite);
+	ResultType Line::PerformLoopFilePattern(char **apReturnValue, bool &aContinueMainLoop, Line *&aJumpToLine
+		, FileLoopModeType aFileLoopMode, bool aRecurseSubfolders, char *aFilePattern);
 	ResultType PerformLoopReg(char **apReturnValue, bool &aContinueMainLoop, Line *&aJumpToLine
 		, FileLoopModeType aFileLoopMode, bool aRecurseSubfolders, HKEY aRootKeyType, HKEY aRootKey, char *aRegSubkey);
 	ResultType PerformLoopParse(char **apReturnValue, bool &aContinueMainLoop, Line *&aJumpToLine);
@@ -851,8 +854,8 @@ public:
 	static bool FileIsFilteredOut(WIN32_FIND_DATA &aCurrentFile, FileLoopModeType aFileLoopMode
 		, char *aFilePath, size_t aFilePathLength);
 
-	Line *GetJumpTarget(bool aIsDereferenced);
-	ResultType IsJumpValid(Line *aDestination);
+	Label *GetJumpTarget(bool aIsDereferenced);
+	Label *IsJumpValid(Label &aTargetLabel);
 
 	HWND DetermineTargetWindow(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 
@@ -1367,6 +1370,7 @@ public:
 		if (!stricmp(aBuf, "FocusV")) return GUICONTROLGET_CMD_FOCUSV; // Returns variable vs. ClassNN.
 		if (!stricmp(aBuf, "Enabled")) return GUICONTROLGET_CMD_ENABLED;
 		if (!stricmp(aBuf, "Visible")) return GUICONTROLGET_CMD_VISIBLE;
+		if (!stricmp(aBuf, "Hwnd")) return GUICONTROLGET_CMD_HWND;
 		return GUICONTROLGET_CMD_INVALID;
 	}
 
@@ -1764,6 +1768,16 @@ public:
 			|| stricmp(mJumpToLine->mArg[0].text, "On"));
 	}
 
+	ResultType Execute()
+	// This function was added in v1.0.46.16 to support A_ThisLabel.
+	{
+		Label *prev_label = g.CurrentLabel; // This will be non-NULL when a subroutine is called from inside another subroutine.
+		g.CurrentLabel = this;
+		ResultType result = mJumpToLine->ExecUntil(UNTIL_RETURN); // The script loader has ensured that Label::mJumpToLine can't be NULL.
+		g.CurrentLabel = prev_label;
+		return result;
+	}
+
 	Label(char *aLabelName)
 		: mName(aLabelName) // Caller gave us a pointer to dynamic memory for this (or an empty string in the case of mPlaceholderLabel).
 		, mJumpToLine(NULL)
@@ -1795,7 +1809,7 @@ public:
 	union {BuiltInFunctionType mBIF; Line *mJumpToLine;};
 	FuncParam *mParam;  // Will hold an array of FuncParams.
 	int mParamCount; // The number of items in the above array.  This is also the function's maximum number of params.
-	int mMinParams;  // Currently used only by built-in functions. Future: Support optional params for other functions.
+	int mMinParams;  // The number of mandatory parameters (populated for both UDFs and built-in's).
 	Var **mVar, **mLazyVar; // Array of pointers-to-variable, allocated upon first use and later expanded as needed.
 	int mVarCount, mVarCountMax, mLazyVarCount; // Count of items in the above array as well as the maximum capacity.
 	int mInstances; // How many instances currently exist on the call stack (due to recursion or thread interruption).  Future use: Might be used to limit how deep recursion can go to help prevent stack overflow.
@@ -1811,7 +1825,7 @@ public:
 	// override in the script.  So mIsBuiltIn should always be used to determine whether the function
 	// is truly built-in, not its name.
 
-	Func(char *aFuncName, bool aIsBuiltIn)
+	Func(char *aFuncName, bool aIsBuiltIn) // Constructor.
 		: mName(aFuncName) // Caller gave us a pointer to dynamic memory for this.
 		, mBIF(NULL)
 		, mParam(NULL), mParamCount(0), mMinParams(0)
@@ -1833,16 +1847,18 @@ class ScriptTimer
 public:
 	Label *mLabel;
 	DWORD mPeriod; // v1.0.36.33: Changed from int to DWORD to double its capacity.
+	DWORD mTimeLastRun;  // TickCount
 	int mPriority;  // Thread priority relative to other threads, default 0.
 	UCHAR mExistingThreads;  // Whether this timer is already running its subroutine.
-	DWORD mTimeLastRun;  // TickCount
 	bool mEnabled;
+	bool mRunOnlyOnce;
 	ScriptTimer *mNextTimer;  // Next items in linked list
+	void ScriptTimer::Disable();
 	ScriptTimer(Label *aLabel)
 		#define DEFAULT_TIMER_PERIOD 250
 		: mLabel(aLabel), mPeriod(DEFAULT_TIMER_PERIOD), mPriority(0) // Default is always 0.
 		, mExistingThreads(0), mTimeLastRun(0)
-		, mEnabled(false), mNextTimer(NULL)  // Note that mEnabled must default to false for the counts to be right.
+		, mEnabled(false), mRunOnlyOnce(false), mNextTimer(NULL)  // Note that mEnabled must default to false for the counts to be right.
 	{}
 	void *operator new(size_t aBytes) {return SimpleHeap::Malloc(aBytes);}
 	void *operator new[](size_t aBytes) {return SimpleHeap::Malloc(aBytes);}
@@ -1857,7 +1873,7 @@ struct MsgMonitorStruct
 	UINT msg;
 	Func *func;
 	// Keep any members smaller than 4 bytes adjacent to save memory:
-	bool label_is_running;  // Distinct from func.mInstances because the script might have called the function explicitly.
+	bool udf_is_running;  // Distinct from func.mInstances because the script might have called the function explicitly.
 };
 
 
@@ -2174,6 +2190,7 @@ public:
 	ResultType Submit(bool aHideIt);
 	ResultType ControlGetContents(Var &aOutputVar, GuiControlType &aControl, char *aMode = "");
 
+	static VarSizeType ControlGetName(GuiIndexType aGuiWindowIndex, GuiIndexType aControlIndex, char *aBuf);
 	static GuiType *FindGui(HWND aHwnd) // Find which GUI object owns the specified window.
 	{
 		#define EXTERN_GUI extern GuiType *g_gui[MAX_GUI_WINDOWS]
@@ -2196,6 +2213,7 @@ public:
 		}
 		return NULL;
 	}
+
 
 	GuiIndexType FindControl(char *aControlID);
 	GuiControlType *FindControl(HWND aHwnd, bool aRetrieveIndexInstead = false)
@@ -2391,7 +2409,7 @@ public:
 		, int aAlwaysUse = ALWAYS_USE_DEFAULT, bool *apIsException = NULL
 		, bool *apIsLocal = NULL);
 	Var *AddVar(char *aVarName, size_t aVarNameLength, int aInsertPos, int aIsLocal);
-	static VarTypes GetVarType(char *aVarName);
+	static void *GetVarType(char *aVarName);
 
 	WinGroup *FindGroup(char *aGroupName, bool aCreateIfNotFound = false);
 	ResultType AddGroup(char *aGroupName);
@@ -2427,93 +2445,6 @@ public:
 
 	#define SOUNDPLAY_ALIAS "AHK_PlayMe"  // Used by destructor and SoundPlay().
 
-	VarSizeType GetBatchLines(char *aBuf = NULL);
-	VarSizeType GetTitleMatchMode(char *aBuf = NULL);
-	VarSizeType GetTitleMatchModeSpeed(char *aBuf = NULL);
-	VarSizeType GetDetectHiddenWindows(char *aBuf = NULL);
-	VarSizeType GetDetectHiddenText(char *aBuf = NULL);
-	VarSizeType GetAutoTrim(char *aBuf = NULL);
-	VarSizeType GetStringCaseSense(char *aBuf = NULL);
-	VarSizeType GetFormatInteger(char *aBuf = NULL);
-	VarSizeType GetFormatFloat(char *aBuf = NULL);
-	VarSizeType GetKeyDelay(char *aBuf = NULL);
-	VarSizeType GetWinDelay(char *aBuf = NULL);
-	VarSizeType GetControlDelay(char *aBuf = NULL);
-	VarSizeType GetMouseDelay(char *aBuf = NULL);
-	VarSizeType GetDefaultMouseSpeed(char *aBuf = NULL);
-	VarSizeType ScriptGetLastError(char *aBuf = NULL);
-	VarSizeType GetIconHidden(char *aBuf = NULL);
-	VarSizeType GetIconTip(char *aBuf = NULL);
-	VarSizeType GetIconFile(char *aBuf = NULL);
-	VarSizeType GetIconNumber(char *aBuf = NULL);
-	VarSizeType GetExitReason(char *aBuf = NULL);
-	VarSizeType GetSpace(VarTypeType aType, char *aBuf = NULL);
-	VarSizeType GetAhkVersion(char *aBuf = NULL);
-	VarSizeType GetAhkPath(char *aBuf = NULL);
-	VarSizeType GetMMMM(char *aBuf = NULL);
-	VarSizeType GetMMM(char *aBuf = NULL);
-	VarSizeType GetDDDD(char *aBuf = NULL);
-	VarSizeType GetDDD(char *aBuf = NULL);
-	VarSizeType MyGetTickCount(char *aBuf = NULL);
-	VarSizeType GetNow(char *aBuf = NULL);
-	VarSizeType GetNowUTC(char *aBuf = NULL);
-	VarSizeType GetOSType(char *aBuf = NULL);
-	VarSizeType GetOSVersion(char *aBuf = NULL);
-	VarSizeType GetLanguage(char *aBuf = NULL);
-	VarSizeType GetUserOrComputer(bool aGetUser, char *aBuf = NULL);
-	VarSizeType GetProgramFiles(char *aBuf = NULL);
-	VarSizeType GetAppData(bool aGetCommon, char *aBuf = NULL);
-	VarSizeType GetDesktop(bool aGetCommon, char *aBuf = NULL);
-	VarSizeType GetStartMenu(bool aGetCommon, char *aBuf = NULL);
-	VarSizeType GetPrograms(bool aGetCommon, char *aBuf = NULL);
-	VarSizeType GetStartup(bool aGetCommon, char *aBuf = NULL);
-	VarSizeType GetMyDocuments(char *aBuf = NULL);
-	VarSizeType GetIsAdmin(char *aBuf = NULL);
-	VarSizeType ScriptGetCursor(char *aBuf = NULL);
-	VarSizeType ScriptGetCaret(VarTypeType aVarType, char *aBuf = NULL);
-	VarSizeType GetScreenWidth(char *aBuf = NULL);
-	VarSizeType GetScreenHeight(char *aBuf = NULL);
-	VarSizeType GetIP(int aAdapterIndex, char *aBuf = NULL);
-	VarSizeType GetFilename(char *aBuf = NULL);
-	VarSizeType GetFileDir(char *aBuf = NULL);
-	VarSizeType GetFilespec(char *aBuf = NULL);
-	VarSizeType GetLineNumber(char *aBuf = NULL);
-	VarSizeType GetLineFile(char *aBuf = NULL);
-	VarSizeType GetLoopFileName(char *aBuf = NULL);
-	VarSizeType GetLoopFileShortName(char *aBuf = NULL);
-	VarSizeType GetLoopFileExt(char *aBuf = NULL);
-	VarSizeType GetLoopFileDir(char *aBuf = NULL);
-	VarSizeType GetLoopFileFullPath(char *aBuf = NULL);
-	VarSizeType GetLoopFileLongPath(char *aBuf = NULL);
-	VarSizeType GetLoopFileShortPath(char *aBuf = NULL);
-	VarSizeType GetLoopFileTimeModified(char *aBuf = NULL);
-	VarSizeType GetLoopFileTimeCreated(char *aBuf = NULL);
-	VarSizeType GetLoopFileTimeAccessed(char *aBuf = NULL);
-	VarSizeType GetLoopFileAttrib(char *aBuf = NULL);
-	VarSizeType GetLoopFileSize(char *aBuf, int aDivider);
-	VarSizeType GetLoopRegType(char *aBuf = NULL);
-	VarSizeType GetLoopRegKey(char *aBuf = NULL);
-	VarSizeType GetLoopRegSubKey(char *aBuf = NULL);
-	VarSizeType GetLoopRegName(char *aBuf = NULL);
-	VarSizeType GetLoopRegTimeModified(char *aBuf = NULL);
-	VarSizeType GetLoopReadLine(char *aBuf = NULL);
-	VarSizeType GetLoopField(char *aBuf = NULL);
-	VarSizeType GetLoopIndex(char *aBuf = NULL);
-	VarSizeType GetThisMenuItem(char *aBuf = NULL);
-	VarSizeType GetThisMenuItemPos(char *aBuf = NULL);
-	VarSizeType GetThisMenu(char *aBuf = NULL);
-	VarSizeType GetThisHotkey(char *aBuf = NULL);
-	VarSizeType GetPriorHotkey(char *aBuf = NULL);
-	VarSizeType GetTimeSinceThisHotkey(char *aBuf = NULL);
-	VarSizeType GetTimeSincePriorHotkey(char *aBuf = NULL);
-	VarSizeType GetEndChar(char *aBuf = NULL);
-	VarSizeType GetGui(VarTypeType aVarType, char *aBuf = NULL);
-	VarSizeType GetGuiControl(GuiIndexType aGuiWindowIndex, GuiIndexType aControlIndex, char *aBuf = NULL);
-	VarSizeType GetGuiEvent(char *aBuf = NULL);
-	VarSizeType GetEventInfo(char *aBuf = NULL);
-	VarSizeType GetTimeIdle(char *aBuf = NULL);
-	VarSizeType GetTimeIdlePhysical(char *aBuf = NULL);
-
 	Script();
 	~Script();
 	// Note that the anchors to any linked lists will be lost when this
@@ -2525,7 +2456,106 @@ public:
 
 
 
+////////////////////////
+// BUILT-IN VARIABLES //
+////////////////////////
+VarSizeType BIV_True_False(char *aBuf, char *aVarName);
+VarSizeType BIV_MMM_DDD(char *aBuf, char *aVarName);
+VarSizeType BIV_DateTime(char *aBuf, char *aVarName);
+VarSizeType BIV_BatchLines(char *aBuf, char *aVarName);
+VarSizeType BIV_TitleMatchMode(char *aBuf, char *aVarName);
+VarSizeType BIV_TitleMatchModeSpeed(char *aBuf, char *aVarName);
+VarSizeType BIV_DetectHiddenWindows(char *aBuf, char *aVarName);
+VarSizeType BIV_DetectHiddenText(char *aBuf, char *aVarName);
+VarSizeType BIV_AutoTrim(char *aBuf, char *aVarName);
+VarSizeType BIV_StringCaseSense(char *aBuf, char *aVarName);
+VarSizeType BIV_FormatInteger(char *aBuf, char *aVarName);
+VarSizeType BIV_FormatFloat(char *aBuf, char *aVarName);
+VarSizeType BIV_KeyDelay(char *aBuf, char *aVarName);
+VarSizeType BIV_WinDelay(char *aBuf, char *aVarName);
+VarSizeType BIV_ControlDelay(char *aBuf, char *aVarName);
+VarSizeType BIV_MouseDelay(char *aBuf, char *aVarName);
+VarSizeType BIV_DefaultMouseSpeed(char *aBuf, char *aVarName);
+VarSizeType BIV_IsSuspended(char *aBuf, char *aVarName);
+#ifdef AUTOHOTKEYSC  // A_IsCompiled is left blank/undefined in uncompiled scripts.
+VarSizeType BIV_IsCompiled(char *aBuf, char *aVarName);
+#endif
+VarSizeType BIV_LastError(char *aBuf, char *aVarName);
+VarSizeType BIV_IconHidden(char *aBuf, char *aVarName);
+VarSizeType BIV_IconTip(char *aBuf, char *aVarName);
+VarSizeType BIV_IconFile(char *aBuf, char *aVarName);
+VarSizeType BIV_IconNumber(char *aBuf, char *aVarName);
+VarSizeType BIV_ExitReason(char *aBuf, char *aVarName);
+VarSizeType BIV_Space_Tab(char *aBuf, char *aVarName);
+VarSizeType BIV_AhkVersion(char *aBuf, char *aVarName);
+VarSizeType BIV_AhkPath(char *aBuf, char *aVarName);
+VarSizeType BIV_TickCount(char *aBuf, char *aVarName);
+VarSizeType BIV_Now(char *aBuf, char *aVarName);
+VarSizeType BIV_OSType(char *aBuf, char *aVarName);
+VarSizeType BIV_OSVersion(char *aBuf, char *aVarName);
+VarSizeType BIV_Language(char *aBuf, char *aVarName);
+VarSizeType BIV_User_Computer(char *aBuf, char *aVarName);
+VarSizeType BIV_WorkingDir(char *aBuf, char *aVarName);
+VarSizeType BIV_WinDir(char *aBuf, char *aVarName);
+VarSizeType BIV_Temp(char *aBuf, char *aVarName);
+VarSizeType BIV_ComSpec(char *aBuf, char *aVarName);
+VarSizeType BIV_ProgramFiles(char *aBuf, char *aVarName);
+VarSizeType BIV_AppData(char *aBuf, char *aVarName);
+VarSizeType BIV_Desktop(char *aBuf, char *aVarName);
+VarSizeType BIV_StartMenu(char *aBuf, char *aVarName);
+VarSizeType BIV_Programs(char *aBuf, char *aVarName);
+VarSizeType BIV_Startup(char *aBuf, char *aVarName);
+VarSizeType BIV_MyDocuments(char *aBuf, char *aVarName);
+VarSizeType BIV_Caret(char *aBuf, char *aVarName);
+VarSizeType BIV_Cursor(char *aBuf, char *aVarName);
+VarSizeType BIV_ScreenWidth_Height(char *aBuf, char *aVarName);
+VarSizeType BIV_ScriptName(char *aBuf, char *aVarName);
+VarSizeType BIV_ScriptDir(char *aBuf, char *aVarName);
+VarSizeType BIV_ScriptFullPath(char *aBuf, char *aVarName);
+VarSizeType BIV_LineNumber(char *aBuf, char *aVarName);
+VarSizeType BIV_LineFile(char *aBuf, char *aVarName);
+VarSizeType BIV_LoopFileName(char *aBuf, char *aVarName);
+VarSizeType BIV_LoopFileShortName(char *aBuf, char *aVarName);
+VarSizeType BIV_LoopFileExt(char *aBuf, char *aVarName);
+VarSizeType BIV_LoopFileDir(char *aBuf, char *aVarName);
+VarSizeType BIV_LoopFileFullPath(char *aBuf, char *aVarName);
+VarSizeType BIV_LoopFileLongPath(char *aBuf, char *aVarName);
+VarSizeType BIV_LoopFileShortPath(char *aBuf, char *aVarName);
+VarSizeType BIV_LoopFileTime(char *aBuf, char *aVarName);
+VarSizeType BIV_LoopFileAttrib(char *aBuf, char *aVarName);
+VarSizeType BIV_LoopFileSize(char *aBuf, char *aVarName);
+VarSizeType BIV_LoopRegType(char *aBuf, char *aVarName);
+VarSizeType BIV_LoopRegKey(char *aBuf, char *aVarName);
+VarSizeType BIV_LoopRegSubKey(char *aBuf, char *aVarName);
+VarSizeType BIV_LoopRegName(char *aBuf, char *aVarName);
+VarSizeType BIV_LoopRegTimeModified(char *aBuf, char *aVarName);
+VarSizeType BIV_LoopReadLine(char *aBuf, char *aVarName);
+VarSizeType BIV_LoopField(char *aBuf, char *aVarName);
+VarSizeType BIV_LoopIndex(char *aBuf, char *aVarName);
+VarSizeType BIV_ThisFunc(char *aBuf, char *aVarName);
+VarSizeType BIV_ThisLabel(char *aBuf, char *aVarName);
+VarSizeType BIV_ThisMenuItem(char *aBuf, char *aVarName);
+VarSizeType BIV_ThisMenuItemPos(char *aBuf, char *aVarName);
+VarSizeType BIV_ThisMenu(char *aBuf, char *aVarName);
+VarSizeType BIV_ThisHotkey(char *aBuf, char *aVarName);
+VarSizeType BIV_PriorHotkey(char *aBuf, char *aVarName);
+VarSizeType BIV_TimeSinceThisHotkey(char *aBuf, char *aVarName);
+VarSizeType BIV_TimeSincePriorHotkey(char *aBuf, char *aVarName);
+VarSizeType BIV_EndChar(char *aBuf, char *aVarName);
+VarSizeType BIV_Gui(char *aBuf, char *aVarName);
+VarSizeType BIV_GuiControl(char *aBuf, char *aVarName);
+VarSizeType BIV_GuiEvent(char *aBuf, char *aVarName);
+VarSizeType BIV_EventInfo(char *aBuf, char *aVarName);
+VarSizeType BIV_TimeIdle(char *aBuf, char *aVarName);
+VarSizeType BIV_TimeIdlePhysical(char *aBuf, char *aVarName);
+VarSizeType BIV_IPAddress(char *aBuf, char *aVarName);
+VarSizeType BIV_IsAdmin(char *aBuf, char *aVarName);
 
+
+
+////////////////////////
+// BUILT-IN FUNCTIONS //
+////////////////////////
 // Caller has ensured that SYM_VAR's Type() is VAR_NORMAL and that it's either not an environment
 // variable or the caller wants environment varibles treated as having zero length.
 #define EXPR_TOKEN_LENGTH(token_raw, token_as_string) \
@@ -2540,6 +2570,7 @@ void BIF_InStr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 void BIF_RegEx(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_Asc(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_Chr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+//void BIF_ExtractInteger(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_IsLabel(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_GetKeyState(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_VarSetCapacity(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);

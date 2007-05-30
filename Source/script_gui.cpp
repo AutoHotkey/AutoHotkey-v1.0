@@ -229,8 +229,16 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 					gui.mInRadioGroup = false;
 				}
 			}
-			if (*aParam2) // Index of a particular tab inside a control.
+			if (*aParam2) // Index or name of a particular tab inside a control.
 			{
+				if (!*aParam3 && gui.mCurrentTabControlIndex == MAX_TAB_CONTROLS)
+					// Provide a default: the most recently added tab control.  If there are no
+					// tab controls, assume the index is the first tab control (i.e. a tab control
+					// to be created in the future).  Fix for v1.0.46.16: This section must be done
+					// prior to gui.FindTabControl() below because otherwise, a script that does
+					// "Gui Tab" will find that a later use of "Gui Tab, TabName" won't work unless
+					// the third parameter (which tab control) is explicitly specified.
+					gui.mCurrentTabControlIndex = gui.mTabControlCount ? gui.mTabControlCount - 1 : 0;
 				bool exact_match = !stricmp(aParam4, "Exact"); // v1.0.37.03.
 				// Unlike "GuiControl, Choose", in this case, don't allow negatives since that would just
 				// generate an error msg further below:
@@ -250,11 +258,6 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 						return ScriptError("Tab name doesn't exist yet." ERR_ABORT, aParam2);
 				}
 				gui.mCurrentTabIndex = index;
-				if (!*aParam3 && gui.mCurrentTabControlIndex == MAX_TAB_CONTROLS)
-					// Provide a default: the most recently added tab control.  If there are no
-					// tab controls, assume the index is the first tab control (i.e. a tab control
-					// to be created in the future):
-					gui.mCurrentTabControlIndex = gui.mTabControlCount ? gui.mTabControlCount - 1 : 0;
 			}
 			if (gui.mCurrentTabIndex != prev_tab_index || gui.mCurrentTabControlIndex != prev_tab_control_index)
 				gui.mInRadioGroup = false; // A fix for v1.0.38.02, see comments at similar line above.
@@ -1109,7 +1112,7 @@ ResultType Line::GuiControlGet(char *aCommand, char *aControlID, char *aParam3)
 		char focused_control[WINDOW_CLASS_SIZE];
 		if (guicontrolget_cmd == GUICONTROLGET_CMD_FOCUSV) // v1.0.43.06.
 			// GUI_HWND_TO_INDEX vs FindControl() is enough because FindControl() was alraedy called above:
-			g_script.GetGuiControl(window_index, GUI_HWND_TO_INDEX(pcontrol->hwnd), focused_control);
+			GuiType::ControlGetName(window_index, GUI_HWND_TO_INDEX(pcontrol->hwnd), focused_control);
 		else // GUICONTROLGET_CMD_FOCUS (ClassNN mode)
 		{
 			// This section is the same as that in ControlGetFocus():
@@ -1155,20 +1158,24 @@ ResultType Line::GuiControlGet(char *aCommand, char *aControlID, char *aParam3)
 		char var_name[MAX_VAR_NAME_LENGTH + 20];
 		Var *var;
 		int always_use = output_var.IsLocal() ? ALWAYS_USE_LOCAL : ALWAYS_USE_GLOBAL;
-		snprintf(var_name, sizeof(var_name), "%sX", output_var.mName);
-		if (   !(var = g_script.FindOrAddVar(var_name, 0, always_use))   ) // Called with output_var to enhance performance.
+		if (   !(var = g_script.FindOrAddVar(var_name
+			, snprintf(var_name, sizeof(var_name), "%sX", output_var.mName)
+			, always_use))   ) // Called with output_var to enhance performance.
 			return FAIL;  // It will have already displayed the error.
 		var->Assign(pt.x);
-		snprintf(var_name, sizeof(var_name), "%sY", output_var.mName);
-		if (   !(var = g_script.FindOrAddVar(var_name, 0, always_use))   ) // Called with output_var to enhance performance.
+		if (   !(var = g_script.FindOrAddVar(var_name
+			, snprintf(var_name, sizeof(var_name), "%sY", output_var.mName)
+			, always_use))   ) // Called with output_var to enhance performance.
 			return FAIL;  // It will have already displayed the error.
 		var->Assign(pt.y);
-		snprintf(var_name, sizeof(var_name), "%sW", output_var.mName);
-		if (   !(var = g_script.FindOrAddVar(var_name, 0, always_use))   ) // Called with output_var to enhance performance.
+		if (   !(var = g_script.FindOrAddVar(var_name
+			, snprintf(var_name, sizeof(var_name), "%sW", output_var.mName)
+			, always_use))   ) // Called with output_var to enhance performance.
 			return FAIL;  // It will have already displayed the error.
 		var->Assign(rect.right - rect.left);
-		snprintf(var_name, sizeof(var_name), "%sH", output_var.mName);
-		if (   !(var = g_script.FindOrAddVar(var_name, 0, always_use))   ) // Called with output_var to enhance performance.
+		if (   !(var = g_script.FindOrAddVar(var_name
+			, snprintf(var_name, sizeof(var_name), "%sH", output_var.mName)
+			, always_use))   ) // Called with output_var to enhance performance.
 			return FAIL;  // It will have already displayed the error.
 		return var->Assign(rect.bottom - rect.top);
 	}
@@ -1185,6 +1192,9 @@ ResultType Line::GuiControlGet(char *aCommand, char *aControlID, char *aParam3)
 		// 1) The style method is cumbersome to script with since it requires bitwise operates afterward.
 		// 2) IsVisible() uses a different standard of detection than simply checking WS_VISIBLE.
 		return output_var.Assign(IsWindowVisible(control.hwnd) ? "1" : "0");
+
+	case GUICONTROLGET_CMD_HWND: // v1.0.46.16: Although it overlaps with HwndOutputVar, Majkinetor wanted this to help with encapsulation/modularization.
+		return output_var.AssignHWND(control.hwnd); // See also: CONTROLGET_CMD_HWND
 	} // switch()
 
 	return FAIL;  // Should never be reached, but avoids compiler warning and improves bug detection.
@@ -6217,6 +6227,42 @@ ResultType GuiType::Submit(bool aHideIt)
 	if (aHideIt)
 		ShowWindow(mHwnd, SW_HIDE);
 	return OK;
+}
+
+
+
+VarSizeType GuiType::ControlGetName(GuiIndexType aGuiWindowIndex, GuiIndexType aControlIndex, char *aBuf)
+// Caller has ensured that aGuiWindowIndex is less than MAX_GUI_WINDOWS.
+// We're returning the length of the var's contents, not the size.
+{
+	GuiType *pgui;
+	// Relies on short-circuit boolean order:
+	if (aControlIndex >= MAX_CONTROLS_PER_GUI // Must check this first due to short-circuit boolean.  A non-GUI thread or one triggered by GuiClose/Escape or Gui menu bar.
+		|| !(pgui = g_gui[aGuiWindowIndex]) // Gui Window no longer exists.
+		|| aControlIndex >= pgui->mControlCount) // Gui control no longer exists, perhaps because window was destroyed and recreated with fewer controls.
+	{
+		if (aBuf)
+			*aBuf = '\0';
+		return 0;
+	}
+	GuiControlType &control = pgui->mControl[aControlIndex]; // For performance and convenience.
+    if (aBuf)
+	{
+		// Caller has already ensured aBuf is large enough.
+		if (control.output_var)
+			return (VarSizeType)strlen(strcpy(aBuf, control.output_var->mName));
+		else // Fall back to getting the leading characters of its caption (most often used for buttons).
+			#define A_GUICONTROL_TEXT_LENGTH (MAX_ALLOC_SIMPLE - 1)
+			return GetWindowText(control.hwnd, aBuf, A_GUICONTROL_TEXT_LENGTH + 1); // +1 is verified correct.
+			// Above: some callers don't call for a length estimate first, so they might rely on size never getting
+			// larger than the above.
+	}
+	// Otherwise, just return the length:
+	if (control.output_var)
+		return (VarSizeType)strlen(control.output_var->mName);
+	// Otherwise: Fall back to getting the leading characters of its caption (most often used for buttons)
+	VarSizeType length = GetWindowTextLength(control.hwnd);
+	return (length > A_GUICONTROL_TEXT_LENGTH) ? A_GUICONTROL_TEXT_LENGTH : length;
 }
 
 

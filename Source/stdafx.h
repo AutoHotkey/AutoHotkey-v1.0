@@ -21,7 +21,8 @@ GNU General Public License for more details.
 
 #pragma once
 
-#define WIN32_LEAN_AND_MEAN		// Exclude rarely-used stuff from Windows headers
+#define _CRT_SECURE_NO_DEPRECATE // Avoid compiler warnings in VC++ 8.1/2005 that urge the use of lower-performing C library functions that protect against buffer overruns.
+#define WIN32_LEAN_AND_MEAN		 // Exclude rarely-used stuff from Windows headers
 
 // Windows Header Files:
 // Necessary to do this prior to including windows.h so that NT functions are unlocked:

@@ -69,7 +69,7 @@ bool g_ForceLaunch = false;
 bool g_WinActivateForce = false;
 SingleInstanceType g_AllowOnlyOneInstance = ALLOW_MULTI_INSTANCE;
 bool g_persistent = false;  // Whether the script should stay running even after the auto-exec section finishes.
-bool g_NoEnv = false;
+bool g_NoEnv = false; // BOOL vs. bool didn't help performance in spite of the frequent accesses to it.
 bool g_NoTrayIcon = false;
 #ifdef AUTOHOTKEYSC
 	bool g_AllowMainWindow = false;

@@ -97,7 +97,7 @@ ResultType Script::DoRunAs(char *aCommandLine, char *aWorkingDir, bool aDisplayE
 
 
 
-VarSizeType Script::GetIP(int aAdapterIndex, char *aBuf)
+VarSizeType BIV_IPAddress(char *aBuf, char *aVarName)
 {
 	// aaa.bbb.ccc.ddd = 15, but allow room for larger IP's in the future.
 	#define IP_ADDRESS_SIZE 32 // The maximum size of any of the strings we return, including terminator.
@@ -120,12 +120,13 @@ VarSizeType Script::GetIP(int aAdapterIndex, char *aBuf)
 	while (lpHost->h_addr_list[adapter_count])
 		++adapter_count;
 
-	if (aAdapterIndex >= adapter_count)
+	int adapter_index = aVarName[11] - '1'; // A_IPAddress[1-4]
+	if (adapter_index >= adapter_count)
 		strcpy(aBuf, "0.0.0.0");
 	else
 	{
 		IN_ADDR inaddr;
-		memcpy(&inaddr, lpHost->h_addr_list[aAdapterIndex], 4);
+		memcpy(&inaddr, lpHost->h_addr_list[adapter_index], 4);
 		strlcpy(aBuf, (char *)inet_ntoa(inaddr), IP_ADDRESS_SIZE);
 	}
 
@@ -135,7 +136,7 @@ VarSizeType Script::GetIP(int aAdapterIndex, char *aBuf)
 
 
 
-VarSizeType Script::GetIsAdmin(char *aBuf)
+VarSizeType BIV_IsAdmin(char *aBuf, char *aVarName)
 {
 	if (!aBuf)
 		return 1;  // The length of the string "1" or "0".
@@ -1631,8 +1632,7 @@ int Line::Util_CopyFile(const char *szInputSource, const char *szInputDest, bool
 	// Split source into file and extension (we need this info in the loop below to recontstruct the path)
 	_splitpath(szSource, szDrive, szDir, szFile, szExt);
 	// Note we now rely on the SOURCE being the contents of szDrive, szDir, szFile, etc.
-	snprintf(szTempPath, sizeof(szTempPath), "%s%s", szDrive, szDir);
-	size_t szTempPath_length = strlen(szTempPath);
+	size_t szTempPath_length = snprintf(szTempPath, sizeof(szTempPath), "%s%s", szDrive, szDir);
 	char *append_pos = szTempPath + szTempPath_length;
 	size_t space_remaining = sizeof(szTempPath) - szTempPath_length - 1;
 
@@ -1782,7 +1782,7 @@ void Line::Util_ExpandFilenameWildcardPart(const char *szSource, const char *szD
 
 	// Replace first * in the dest with the src, remove any other *
 	i = 0; j = 0; k = 0;
-	lpTemp = strchr(szDest, '*');
+	lpTemp = (char *)strchr(szDest, '*');
 	if (lpTemp != NULL)
 	{
 		// Contains at least one *, copy up to this point

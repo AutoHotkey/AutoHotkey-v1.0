@@ -27,18 +27,19 @@ GNU General Public License for more details.
 //    (probably correctible, but it's fine this way).
 
 
+class Label;
 class WindowSpec
 {
 public:
 	char *mTitle, *mText, *mExcludeTitle, *mExcludeText;
-	void *mJumpToLine; // It's void to avoid making this module dependent on scrip.h.
+	Label *mJumpToLabel;
 	WindowSpec *mNextWindow;  // Next item in linked list.
-	WindowSpec(char *aTitle = "", char *aText = "", void *aJumpToLine = NULL
+	WindowSpec(char *aTitle = "", char *aText = "", Label *aJumpToLabel = NULL
 		, char *aExcludeTitle = "", char *aExcludeText = "")
 		// Caller should have allocated some dynamic memory for the given args if they're not
 		// the empty string.  We just set our member variables to be equal to the given pointers.
 		: mTitle(aTitle), mText(aText), mExcludeTitle(aExcludeTitle), mExcludeText(aExcludeText)
-		, mJumpToLine(aJumpToLine), mNextWindow(NULL) // mNextWindow(NULL) is also required for thread-safety.
+		, mJumpToLabel(aJumpToLabel), mNextWindow(NULL) // mNextWindow(NULL) is also required for thread-safety.
 	{}
 	void *operator new(size_t aBytes) {return SimpleHeap::Malloc(aBytes);}
 	void *operator new[](size_t aBytes) {return SimpleHeap::Malloc(aBytes);}
@@ -80,10 +81,10 @@ public:
 	WinGroup *mNextGroup;  // Next item in linked list.
 	UINT mWindowCount;
 
-	ResultType AddWindow(char *aTitle, char *aText, void *aJumpToLine, char *aExcludeTitle, char *aExcludeText);
+	ResultType AddWindow(char *aTitle, char *aText, Label *aJumpToLabel, char *aExcludeTitle, char *aExcludeText);
 	ResultType ActUponAll(ActionTypeType aActionType, int aTimeToWaitForClose);
 	ResultType CloseAndGoToNext(bool aStartWithMostRecent);
-	ResultType Activate(bool aStartWithMostRecent, WindowSpec *aWinSpec = NULL, void **aJumpToLine = NULL);
+	ResultType Activate(bool aStartWithMostRecent, WindowSpec *aWinSpec = NULL, Label **aJumpToLabel = NULL);
 	ResultType Deactivate(bool aStartWithMostRecent);
 	bool IsEmpty() {return mFirstWindow == NULL;}
 	WindowSpec *IsMember(HWND aWnd, global_struct &aSettings);

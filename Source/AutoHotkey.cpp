@@ -86,8 +86,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		param = __argv[i]; // For performance and convenience.
 		if (switch_processing_is_complete) // All args are now considered to be input parameters for the script.
 		{
-			snprintf(var_name, sizeof(var_name), "%d", script_param_num);
-			if (   !(var = g_script.FindOrAddVar(var_name))   )
+			if (   !(var = g_script.FindOrAddVar(var_name, sprintf(var_name, "%d", script_param_num)))   )
 				return CRITICAL_ERROR;  // Realistically should never happen.
 			var->Assign(param);
 			++script_param_num;

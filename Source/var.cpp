@@ -41,7 +41,7 @@ ResultType Var::AssignHWND(HWND aWnd)
 
 
 
-ResultType Var::Assign(DWORD aValueToAssign)
+ResultType Var::Assign(DWORD aValueToAssign) // For some reason, this function is actually faster when not inline.
 // Returns OK or FAIL.
 {
 	char value_string[256];
@@ -50,7 +50,7 @@ ResultType Var::Assign(DWORD aValueToAssign)
 
 
 
-ResultType Var::Assign(int aValueToAssign) // For some reason, these functions are actually faster when not inline.
+ResultType Var::Assign(int aValueToAssign) // For some reason, this function is actually faster when not inline.
 {
 	char value_string[256];
 	// ITOA() seems to perform quite a bit better than sprintf() in this case:
@@ -61,7 +61,7 @@ ResultType Var::Assign(int aValueToAssign) // For some reason, these functions a
 
 
 
-ResultType Var::Assign(__int64 aValueToAssign)
+ResultType Var::Assign(__int64 aValueToAssign) // For some reason, this function is actually faster when not inline.
 // Returns OK or FAIL.
 {
 	char value_string[256];
@@ -89,8 +89,8 @@ ResultType Var::Assign(double aValueToAssign)
 // Returns OK or FAIL.
 {
 	char value_string[MAX_FORMATTED_NUMBER_LENGTH + 1];
-	snprintf(value_string, sizeof(value_string), g.FormatFloat, aValueToAssign); // "%0.6f"; %f can handle doubles in MSVC++.
-	return Assign(value_string);
+	return Assign(value_string
+		, snprintf(value_string, sizeof(value_string), g.FormatFloat, aValueToAssign)); // "%0.6f"; %f can handle doubles in MSVC++.);
 }
 
 
@@ -593,33 +593,18 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aExactSize, bool aO
 
 
 VarSizeType Var::Get(char *aBuf)
-// Returns the length of this var's contents.  In addition, if aBuf isn't NULL, it will
-// copy the contents into aBuf.
+// Returns the length of this var's contents.  In addition, if aBuf isn't NULL, it will copy the contents into aBuf.
 {
-	if (mType == VAR_ALIAS)
-		// For maintainability, it seems best not to use the following method:
-		//    Var &var = *(mType == VAR_ALIAS ? mAliasFor : this);
-		// If that were done, bugs would be easy to introduce in a long function like this one
-		// if your forget at use the implicit "this" by accident.  So instead, just call self.
-		return mAliasFor->Get(aBuf);
-
 	// For v1.0.25, don't do this because in some cases the existing contents of aBuf will not
 	// be altered.  Instead, it will be set to blank as needed further below.
 	//if (aBuf) *aBuf = '\0';  // Init early to get it out of the way, in case of early return.
-
-	char *aBuf_orig = aBuf;
-
 	DWORD result;
-	static DWORD timestamp_tick = 0, now_tick; // static should be thread + recursion safe in this case.
-	static SYSTEMTIME st_static = {0}; // static initializer so shouldn't impact runtime performance.
-
-	// Just a fake buffer to pass to some API functions in lieu of a NULL, to avoid
-	// any chance of misbehavior:
-	char buf_temp[1];  // Keep the size at 1 so that API functions will always fail to copy to buf.
+	VarSizeType length;
+	char buf_temp[1]; // Just a fake buffer to pass to some API functions in lieu of a NULL, to avoid any chance of misbehavior. Keep the size at 1 so that API functions will always fail to copy to buf.
 
 	switch(mType)
 	{
-	case VAR_NORMAL:
+	case VAR_NORMAL: // Listed first for performance.
 		if (!g_NoEnv && !mLength) // If auto-env retrival is on and the var is empty, check to see if it's really an env. var.
 		{
 			// Regardless of whether aBuf is NULL or not, we don't know at this stage
@@ -646,10 +631,9 @@ VarSizeType Var::Get(char *aBuf)
 			{
 				// This env. var exists.
 				cached_empty_var = NULL; // i.e. one use only to avoid cache from hiding the fact that an environment variable has newly come into existence since the previous call.
-				if (!aBuf)
-					return result - 1;  // since GetEnvironmentVariable() returns total size needed in this case.
-				aBuf += GET_ENV_VAR_RELIABLE(mName, aBuf); // The caller has ensured, probably via previous call to this function with aBuf == NULL, that aBuf is large enough to hold the result.
-				break;
+				return aBuf
+					? GET_ENV_VAR_RELIABLE(mName, aBuf) // The caller has ensured, probably via previous call to this function with aBuf == NULL, that aBuf is large enough to hold the result.
+					: result - 1;  // since GetEnvironmentVariable() returns total size needed in this case.
 			}
 			else // No matching env. var. or the cache indicates that GetEnvironmentVariable() need not be called.
 			{
@@ -663,7 +647,8 @@ VarSizeType Var::Get(char *aBuf)
 				return 0;
 			}
 		}
-		// Otherwise, it's not an environment variable (or it is, but there is a script variable of non-zero length that's eclipsing it).
+		// Otherwise (since above didn't return), it's not an environment variable (or it is, but there's
+		// a script variable of non-zero length that's eclipsing it).
 		if (!aBuf)
 			return mLength;
 		else // Caller provider buffer, so if mLength is zero, just make aBuf empty now and return early (for performance).
@@ -672,7 +657,7 @@ VarSizeType Var::Get(char *aBuf)
 				*aBuf = '\0';
 				return 0;
 			}
-
+			//else continue on below.
 		// Copy the var contents into aBuf.  Although a little bit slower than CopyMemory() for large
 		// variables (say, over 100K), this loop seems much faster for small ones, which is the typical
 		// case.  Also of note is that this code section is the main bottleneck for scripts that manipulate
@@ -689,22 +674,31 @@ VarSizeType Var::Get(char *aBuf)
 		if (aBuf == mContents)
 			// When we're called from ExpandArg() that was called from PerformAssign(), PerformAssign()
 			// relies on this check to avoid the overhead of copying a variables contents onto itself.
-			aBuf += mLength;
+			return mLength;
 		else if (mLength < 100000)
+		{
 			for (char *cp = mContents; *cp; *aBuf++ = *cp++);
+			*aBuf = '\0';
+		}
 		else
 		{
-			// Faster for large vars, but large vars aren't typical:
-			CopyMemory(aBuf, mContents, mLength);
-			aBuf += mLength;
+			CopyMemory(aBuf, mContents, mLength); // Faster for large vars, but large vars aren't typical:
+			aBuf[mLength] = '\0'; // This is done as a step separate from above in case mLength is inaccurate (e.g. due to script's improper use of DllCall).
 		}
-		break;
+		return mLength;
+
+	case VAR_ALIAS:
+		// For maintainability, it seems best not to use the following method:
+		//    Var &var = *(mType == VAR_ALIAS ? mAliasFor : this);
+		// If that were done, bugs would be easy to introduce in a long function like this one
+		// if your forget at use the implicit "this" by accident.  So instead, just call self.
+		return mAliasFor->Get(aBuf);
 
 	// Built-in vars with volatile contents:
 	case VAR_CLIPBOARD:
 	{
-		VarSizeType size = (VarSizeType)g_clip.Get(aBuf); // It will also copy into aBuf if it's non-NULL.
-		if (size == CLIPBOARD_FAILURE)
+		length = (VarSizeType)g_clip.Get(aBuf); // It will also copy into aBuf if it's non-NULL.
+		if (length == CLIPBOARD_FAILURE)
 		{
 			// Above already displayed the error, so just return.
 			// If we were called only to determine the size, the
@@ -721,262 +715,23 @@ VarSizeType Var::Get(char *aBuf)
 			// be extremely rare.  And the user will be notified
 			// with a MsgBox anyway, during which the subroutine
 			// will be suspended:
-			if (aBuf)
-				*aBuf = '\0';  // Init early to get it out of the way, in case of early return.
-			return 0;
+			length = 0;
 		}
-		if (!aBuf)
-			return size;
-		aBuf += size;
-		break;
-	}
-
-	case VAR_TRUE:
-	case VAR_FALSE:
 		if (aBuf)
-			*aBuf++ = (mType == VAR_TRUE) ? '1': '0'; // It will be terminated later below.
-		else
-			return 1; // The length of the value.
-		break;
-
-	case VAR_GUIWIDTH:  // For performance, these are listed listed first in their group, and this group is
-	case VAR_GUIHEIGHT: // relatively high up in the switch (might not matter depending on how switch() is compiled).
-	case VAR_GUIX:
-	case VAR_GUIY:
-	case VAR_GUI:
-		if (!aBuf) return g_script.GetGui(mType); else aBuf += g_script.GetGui(mType, aBuf); break;
-
-	// For VAR_GUICONTROL, other logic ensures that g.GuiControlIndex is out-of-bounds whenever g.GuiWindowIndex is.
-	// That is why g.GuiWindowIndex is not checked to make sure it's less than MAX_GUI_WINDOWS.
-	case VAR_GUICONTROL: if (!aBuf) return g_script.GetGuiControl(g.GuiWindowIndex, g.GuiControlIndex); else aBuf += g_script.GetGuiControl(g.GuiWindowIndex, g.GuiControlIndex, aBuf); break;
-	case VAR_GUICONTROLEVENT: if (!aBuf) return g_script.GetGuiEvent(); else aBuf += g_script.GetGuiEvent(aBuf); break;
-
-	case VAR_EVENTINFO: // It's called "EventInfo" vs. "GuiEventInfo" because it applies to non-Gui events such as OnClipboardChange.
-		if (!aBuf) return g_script.GetEventInfo(); else aBuf += g_script.GetEventInfo(aBuf); break;
-
-	// In case compiler generates if/else ladder, these are listed relatively high up in the switch() for performance:
-	case VAR_INDEX: if (!aBuf) return g_script.GetLoopIndex(); else aBuf += g_script.GetLoopIndex(aBuf); break;
-	case VAR_LOOPREADLINE: if (!aBuf) return g_script.GetLoopReadLine(); else aBuf += g_script.GetLoopReadLine(aBuf); break;
-	case VAR_LOOPFIELD: if (!aBuf) return g_script.GetLoopField(); else aBuf += g_script.GetLoopField(aBuf); break;
-	case VAR_LOOPFILENAME: if (!aBuf) return g_script.GetLoopFileName(); else aBuf += g_script.GetLoopFileName(aBuf); break;
-	case VAR_LOOPFILESHORTNAME: if (!aBuf) return g_script.GetLoopFileShortName(); else aBuf += g_script.GetLoopFileShortName(aBuf); break;
-	case VAR_LOOPFILEEXT: if (!aBuf) return g_script.GetLoopFileExt(); else aBuf += g_script.GetLoopFileExt(aBuf); break;
-	case VAR_LOOPFILEDIR: if (!aBuf) return g_script.GetLoopFileDir(); else aBuf += g_script.GetLoopFileDir(aBuf); break;
-	case VAR_LOOPFILEFULLPATH: if (!aBuf) return g_script.GetLoopFileFullPath(); else aBuf += g_script.GetLoopFileFullPath(aBuf); break;
-	case VAR_LOOPFILELONGPATH: if (!aBuf) return g_script.GetLoopFileLongPath(); else aBuf += g_script.GetLoopFileLongPath(aBuf); break;
-	case VAR_LOOPFILESHORTPATH: if (!aBuf) return g_script.GetLoopFileShortPath(); else aBuf += g_script.GetLoopFileShortPath(aBuf); break;
-	case VAR_LOOPFILETIMEMODIFIED: if (!aBuf) return g_script.GetLoopFileTimeModified(); else aBuf += g_script.GetLoopFileTimeModified(aBuf); break;
-	case VAR_LOOPFILETIMECREATED: if (!aBuf) return g_script.GetLoopFileTimeCreated(); else aBuf += g_script.GetLoopFileTimeCreated(aBuf); break;
-	case VAR_LOOPFILETIMEACCESSED: if (!aBuf) return g_script.GetLoopFileTimeAccessed(); else aBuf += g_script.GetLoopFileTimeAccessed(aBuf); break;
-	case VAR_LOOPFILEATTRIB: if (!aBuf) return g_script.GetLoopFileAttrib(); else aBuf += g_script.GetLoopFileAttrib(aBuf); break;
-	case VAR_LOOPFILESIZE: if (!aBuf) return g_script.GetLoopFileSize(NULL, 0); else aBuf += g_script.GetLoopFileSize(aBuf, 0); break;
-	case VAR_LOOPFILESIZEKB: if (!aBuf) return g_script.GetLoopFileSize(NULL, 1024); else aBuf += g_script.GetLoopFileSize(aBuf, 1024); break;
-	case VAR_LOOPFILESIZEMB: if (!aBuf) return g_script.GetLoopFileSize(NULL, 1024*1024); else aBuf += g_script.GetLoopFileSize(aBuf, 1024*1024); break;
-
-	case VAR_LOOPREGTYPE: if (!aBuf) return g_script.GetLoopRegType(); else aBuf += g_script.GetLoopRegType(aBuf); break;
-	case VAR_LOOPREGKEY: if (!aBuf) return g_script.GetLoopRegKey(); else aBuf += g_script.GetLoopRegKey(aBuf); break;
-	case VAR_LOOPREGSUBKEY: if (!aBuf) return g_script.GetLoopRegSubKey(); else aBuf += g_script.GetLoopRegSubKey(aBuf); break;
-	case VAR_LOOPREGNAME: if (!aBuf) return g_script.GetLoopRegName(); else aBuf += g_script.GetLoopRegName(aBuf); break;
-	case VAR_LOOPREGTIMEMODIFIED: if (!aBuf) return g_script.GetLoopRegTimeModified(); else aBuf += g_script.GetLoopRegTimeModified(aBuf); break;
-
-	case VAR_BATCHLINES: if (!aBuf) return g_script.GetBatchLines(); aBuf += g_script.GetBatchLines(aBuf); break;
-	case VAR_TITLEMATCHMODE: if (!aBuf) return g_script.GetTitleMatchMode(); else aBuf += g_script.GetTitleMatchMode(aBuf); break;
-	case VAR_TITLEMATCHMODESPEED: if (!aBuf) return g_script.GetTitleMatchModeSpeed(); else aBuf += g_script.GetTitleMatchModeSpeed(aBuf); break;
-	case VAR_DETECTHIDDENWINDOWS: if (!aBuf) return g_script.GetDetectHiddenWindows(); else aBuf += g_script.GetDetectHiddenWindows(aBuf); break;
-	case VAR_DETECTHIDDENTEXT: if (!aBuf) return g_script.GetDetectHiddenText(); else aBuf += g_script.GetDetectHiddenText(aBuf); break;
-	case VAR_AUTOTRIM: if (!aBuf) return g_script.GetAutoTrim(); else aBuf += g_script.GetAutoTrim(aBuf); break;
-	case VAR_STRINGCASESENSE: if (!aBuf) return g_script.GetStringCaseSense(); else aBuf += g_script.GetStringCaseSense(aBuf); break;
-	case VAR_FORMATINTEGER: if (!aBuf) return g_script.GetFormatInteger(); else aBuf += g_script.GetFormatInteger(aBuf); break;
-	case VAR_FORMATFLOAT: if (!aBuf) return g_script.GetFormatFloat(); else aBuf += g_script.GetFormatFloat(aBuf); break;
-	case VAR_KEYDELAY: if (!aBuf) return g_script.GetKeyDelay(); else aBuf += g_script.GetKeyDelay(aBuf); break;
-	case VAR_WINDELAY: if (!aBuf) return g_script.GetWinDelay(); else aBuf += g_script.GetWinDelay(aBuf); break;
-	case VAR_CONTROLDELAY: if (!aBuf) return g_script.GetControlDelay(); else aBuf += g_script.GetControlDelay(aBuf); break;
-	case VAR_MOUSEDELAY: if (!aBuf) return g_script.GetMouseDelay(); else aBuf += g_script.GetMouseDelay(aBuf); break;
-	case VAR_DEFAULTMOUSESPEED: if (!aBuf) return g_script.GetDefaultMouseSpeed(); else aBuf += g_script.GetDefaultMouseSpeed(aBuf); break;
-	case VAR_ISSUSPENDED:
-		if (!aBuf)
-			return 1;
-		*aBuf++ = g_IsSuspended ? '1' : '0'; // Let the bottom of the function terminate the string.
-		break;
-
-	case VAR_ICONHIDDEN: if (!aBuf) return g_script.GetIconHidden(); else aBuf += g_script.GetIconHidden(aBuf); break;
-	case VAR_ICONTIP: if (!aBuf) return g_script.GetIconTip(); else aBuf += g_script.GetIconTip(aBuf); break;
-	case VAR_ICONFILE: if (!aBuf) return g_script.GetIconFile(); else aBuf += g_script.GetIconFile(aBuf); break;
-	case VAR_ICONNUMBER: if (!aBuf) return g_script.GetIconNumber(); else aBuf += g_script.GetIconNumber(aBuf); break;
-
-	case VAR_EXITREASON: if (!aBuf) return g_script.GetExitReason(); aBuf += g_script.GetExitReason(aBuf); break;
-
-	case VAR_OSTYPE: if (!aBuf) return g_script.GetOSType(); aBuf += g_script.GetOSType(aBuf); break;
-	case VAR_OSVERSION: if (!aBuf) return g_script.GetOSVersion(); aBuf += g_script.GetOSVersion(aBuf); break;
-	case VAR_LANGUAGE: if (!aBuf) return g_script.GetLanguage(); aBuf += g_script.GetLanguage(aBuf); break;
-	case VAR_COMPUTERNAME: if (!aBuf) return g_script.GetUserOrComputer(false); aBuf += g_script.GetUserOrComputer(false, aBuf); break;
-	case VAR_USERNAME: if (!aBuf) return g_script.GetUserOrComputer(true); aBuf += g_script.GetUserOrComputer(true, aBuf); break;
-
-	case VAR_COMSPEC: // Sizes/lengths/-1/return-values/etc. have been verified correct.
-		if (!aBuf)
-			return GetEnvironmentVariable("comspec", buf_temp, 0); // Avoids subtracting 1 to be conservative and to reduce code size (due to the need to otherwise check for zero and avoid subtracting 1 in that case).
-		// Otherwise:
-		aBuf += GET_ENV_VAR_RELIABLE("comspec", aBuf); // v1.0.46.08: GET_ENV_VAR_RELIABLE() is a new function to fix this on Windows 9x.
-		break;
-
-	case VAR_WINDIR: // Sizes/lengths/-1/return-values/etc. have been verified correct.
-		if (!aBuf) // Avoids subtracting 1 to be conservative and to reduce code size (due to the need to otherwise check for zero and avoid subtracting 1 in that case).
-			return GetWindowsDirectory(buf_temp, 0);
-		// Otherwise:
-		aBuf += GetWindowsDirectory(aBuf, MAX_PATH); // MAX_PATH is kept in case it's needed on Win9x for reasons similar to those in GetEnvironmentVarWin9x().
-		break;
-
-	case VAR_TEMP: // Sizes/lengths/-1/return-values/etc. have been verified correct.
-		if (!aBuf) // Avoids subtracting 1 to be conservative and to reduce code size (due to the need to otherwise check for zero and avoid subtracting 1 in that case).
-			return GetTempPath(0, buf_temp);
-		// Otherwise:
-		if (result = GetTempPath(MAX_PATH, aBuf)) // aBuf[-1] below relies on this check having been done.
-		{
-			aBuf += result;
-			if (aBuf[-1] == '\\') // For some reason, it typically yields a trailing backslash, so omit it to improve friendliness/consistency.
-				--aBuf; // aBuf is terminated later below.
-		}
-		break;
-
-	case VAR_WORKINGDIR:
-		// Use GetCurrentDirectory() vs. g_WorkingDir because any in-progrses FileSelectFile()
-		// dialog is able to keep functioning even when it's quasi-thread is suspended.  The
-		// dialog can thus change the current directory as seen by the active quasi-thread even
-		// though g_WorkingDir hasn't been updated.  It might also be possible for the working
-		// directory to change in unusual circumstances such as a network drive being lost):
-		if (!aBuf) // Avoids subtracting 1 to be conservative and to reduce code size (due to the need to otherwise check for zero and avoid subtracting 1 in that case).
-			return GetCurrentDirectory(0, NULL); // MSDN says that this is a valid way to call it on all OSes, and testing shows that it works on WinXP and 98se.
-		// Otherwise:
-		// Fix for v1.0.43.11: Changed size below from 9999 to MAX_PATH, otherwise it fails sometimes on Win9x.
-		// Testing shows that the failure is not caused by GetCurrentDirectory() writing to the unused part of the
-		// buffer, such as zeroing it (which is good because that would require this part to be redesigned to pass
-		// the actual buffer size or use a temp buffer).  So there's something else going on to explain why the
-		// problem only occurs in longer scripts on Win98se, not in trivial ones such as Var=%A_WorkingDir%.
-		// Nor did the problem affect expression assignments such as Var:=A_WorkingDir.
-		aBuf += GetCurrentDirectory(MAX_PATH, aBuf);
-		break;
-
-	case VAR_PROGRAMFILES: if (!aBuf) return g_script.GetProgramFiles(); aBuf += g_script.GetProgramFiles(aBuf); break;
-	case VAR_APPDATA: if (!aBuf) return g_script.GetAppData(false); aBuf += g_script.GetAppData(false, aBuf); break;
-	case VAR_APPDATACOMMON: if (!aBuf) return g_script.GetAppData(true); aBuf += g_script.GetAppData(true, aBuf); break;
-	case VAR_DESKTOP: if (!aBuf) return g_script.GetDesktop(false); aBuf += g_script.GetDesktop(false, aBuf); break;
-	case VAR_DESKTOPCOMMON: if (!aBuf) return g_script.GetDesktop(true); aBuf += g_script.GetDesktop(true, aBuf); break;
-	case VAR_STARTMENU: if (!aBuf) return g_script.GetStartMenu(false); aBuf += g_script.GetStartMenu(false, aBuf); break;
-	case VAR_STARTMENUCOMMON: if (!aBuf) return g_script.GetStartMenu(true); aBuf += g_script.GetStartMenu(true, aBuf); break;
-	case VAR_PROGRAMS: if (!aBuf) return g_script.GetPrograms(false); aBuf += g_script.GetPrograms(false, aBuf); break;
-	case VAR_PROGRAMSCOMMON: if (!aBuf) return g_script.GetPrograms(true); aBuf += g_script.GetPrograms(true, aBuf); break;
-	case VAR_STARTUP: if (!aBuf) return g_script.GetStartup(false); aBuf += g_script.GetStartup(false, aBuf); break;
-	case VAR_STARTUPCOMMON: if (!aBuf) return g_script.GetStartup(true); aBuf += g_script.GetStartup(true, aBuf); break;
-	case VAR_MYDOCUMENTS: if (!aBuf) return g_script.GetMyDocuments(); aBuf += g_script.GetMyDocuments(aBuf); break;
-
-	case VAR_ISADMIN: if (!aBuf) return g_script.GetIsAdmin(); aBuf += g_script.GetIsAdmin(aBuf); break;
-	case VAR_CURSOR: if (!aBuf) return g_script.ScriptGetCursor(); aBuf += g_script.ScriptGetCursor(aBuf); break;
-	case VAR_CARETX: if (!aBuf) return g_script.ScriptGetCaret(VAR_CARETX); aBuf += g_script.ScriptGetCaret(VAR_CARETX, aBuf); break;
-	case VAR_CARETY: if (!aBuf) return g_script.ScriptGetCaret(VAR_CARETY); aBuf += g_script.ScriptGetCaret(VAR_CARETY, aBuf); break;
-	case VAR_SCREENWIDTH: if (!aBuf) return g_script.GetScreenWidth(); aBuf += g_script.GetScreenWidth(aBuf); break;
-	case VAR_SCREENHEIGHT: if (!aBuf) return g_script.GetScreenHeight(); aBuf += g_script.GetScreenHeight(aBuf); break;
-
-	case VAR_IPADDRESS1:
-	case VAR_IPADDRESS2:
-	case VAR_IPADDRESS3:
-	case VAR_IPADDRESS4:
-		if (!aBuf) return g_script.GetIP(mType - VAR_IPADDRESS1); aBuf += g_script.GetIP(mType - VAR_IPADDRESS1, aBuf); break;
-
-	case VAR_SCRIPTNAME: if (!aBuf) return g_script.GetFilename(); else aBuf += g_script.GetFilename(aBuf); break;
-	case VAR_SCRIPTDIR: if (!aBuf) return g_script.GetFileDir(); else aBuf += g_script.GetFileDir(aBuf); break;
-	case VAR_SCRIPTFULLPATH: if (!aBuf) return g_script.GetFilespec(); else aBuf += g_script.GetFilespec(aBuf); break;
-
-	case VAR_LINENUMBER: if (!aBuf) return g_script.GetLineNumber(); else aBuf += g_script.GetLineNumber(aBuf); break;
-	case VAR_LINEFILE: if (!aBuf) return g_script.GetLineFile(); else aBuf += g_script.GetLineFile(aBuf); break;
-
-#ifdef AUTOHOTKEYSC
-	case VAR_ISCOMPILED:
-		if (!aBuf)
-			return 1;
-		*aBuf++ = '1'; // Let the bottom of the function terminate the string.
-		break;
-#endif
-
-	case VAR_THISMENUITEM: if (!aBuf) return g_script.GetThisMenuItem(); else aBuf += g_script.GetThisMenuItem(aBuf); break;
-	case VAR_THISMENUITEMPOS: if (!aBuf) return g_script.GetThisMenuItemPos(); else aBuf += g_script.GetThisMenuItemPos(aBuf); break;
-	case VAR_THISMENU: if (!aBuf) return g_script.GetThisMenu(); else aBuf += g_script.GetThisMenu(aBuf); break;
-	case VAR_THISHOTKEY: if (!aBuf) return g_script.GetThisHotkey(); else aBuf += g_script.GetThisHotkey(aBuf); break;
-	case VAR_PRIORHOTKEY: if (!aBuf) return g_script.GetPriorHotkey(); else aBuf += g_script.GetPriorHotkey(aBuf); break;
-	case VAR_TIMESINCETHISHOTKEY: if (!aBuf) return g_script.GetTimeSinceThisHotkey(); else aBuf += g_script.GetTimeSinceThisHotkey(aBuf); break;
-	case VAR_TIMESINCEPRIORHOTKEY: if (!aBuf) return g_script.GetTimeSincePriorHotkey(); else aBuf += g_script.GetTimeSincePriorHotkey(aBuf); break;
-	case VAR_ENDCHAR: if (!aBuf) return g_script.GetEndChar(); else aBuf += g_script.GetEndChar(aBuf); break;
-	case VAR_LASTERROR: if (!aBuf) return g_script.ScriptGetLastError(); else aBuf += g_script.ScriptGetLastError(aBuf); break;
-
-	case VAR_TIMEIDLE: if (!aBuf) return g_script.GetTimeIdle(); else aBuf += g_script.GetTimeIdle(aBuf); break;
-	case VAR_TIMEIDLEPHYSICAL: if (!aBuf) return g_script.GetTimeIdlePhysical(); else aBuf += g_script.GetTimeIdlePhysical(aBuf); break;
-
-	// This one is done this way, rather than using an escape sequence such as `s, because the escape
-	// sequence method doesn't work (probably because `s resolves to a space and is that trimmed at
-	// some point in process prior to when it can be used):
-	case VAR_TAB:
-	case VAR_SPACE: if (!aBuf) return g_script.GetSpace(mType); else aBuf += g_script.GetSpace(mType, aBuf); break;
-	case VAR_AHKVERSION: if (!aBuf) return g_script.GetAhkVersion(); else aBuf += g_script.GetAhkVersion(aBuf); break;
-	case VAR_AHKPATH: if (!aBuf) return g_script.GetAhkPath(); else aBuf += g_script.GetAhkPath(aBuf); break;
-
-	case VAR_MMMM:   if (!aBuf) return g_script.GetMMMM(); else aBuf += g_script.GetMMMM(aBuf); break;
-	case VAR_MMM:  if (!aBuf) return g_script.GetMMM(); else aBuf += g_script.GetMMM(aBuf); break;
-	case VAR_DDDD:  if (!aBuf) return g_script.GetDDDD(); else aBuf += g_script.GetDDDD(aBuf); break;
-	case VAR_DDD: if (!aBuf) return g_script.GetDDD(); else aBuf += g_script.GetDDD(aBuf); break;
-
-	case VAR_TICKCOUNT: if (!aBuf) return g_script.MyGetTickCount(); else aBuf += g_script.MyGetTickCount(aBuf); break;
-	case VAR_NOW: if (!aBuf) return g_script.GetNow(); else aBuf += g_script.GetNow(aBuf); break;
-	case VAR_NOWUTC: if (!aBuf) return g_script.GetNowUTC(); else aBuf += g_script.GetNowUTC(aBuf); break;
-
-	case VAR_YYYY: if (!aBuf) return 4; // else fall through, which admittedly is somewhat inefficient here.
-	case VAR_MM:
-	case VAR_DD:
-	case VAR_HOUR:
-	case VAR_MIN:
-	case VAR_SEC:   if (!aBuf) return 2; // length 2 for this and the above.
-	case VAR_MSEC:  // Fall through to returning "3" in the next line.
-	case VAR_YDAY:  if (!aBuf) return 3; // Always return maximum allowed length as the estimate.
-	case VAR_WDAY:  if (!aBuf) return 1; // else fall through.
-	case VAR_YWEEK: if (!aBuf) return 6; // else fall through.
-		// The current time is refreshed only if it's been a certain number of milliseconds since
-		// the last fetch of one of these built-in time variables.  This keeps the variables in
-		// sync with one another when they are used consecutively such as this example:
-		// Var = %A_Hour%:%A_Min%:%A_Sec%
-		// Using GetTickCount() because it's very low overhead compared to the other time functions:
-		now_tick = GetTickCount();
-		if (now_tick - timestamp_tick > 50 || !st_static.wYear)
-		{
-			GetLocalTime(&st_static);
-			timestamp_tick = now_tick;
-		}
-		switch (mType)
-		{
-		case VAR_YYYY:  aBuf += sprintf(aBuf, "%d", st_static.wYear); break;
-		case VAR_MM:    aBuf += sprintf(aBuf, "%02d", st_static.wMonth); break;
-		case VAR_DD:    aBuf += sprintf(aBuf, "%02d", st_static.wDay); break;
-		case VAR_HOUR:  aBuf += sprintf(aBuf, "%02d", st_static.wHour); break;
-		case VAR_MIN:   aBuf += sprintf(aBuf, "%02d", st_static.wMinute); break;
-		case VAR_SEC:   aBuf += sprintf(aBuf, "%02d", st_static.wSecond); break;
-		case VAR_MSEC:  aBuf += sprintf(aBuf, "%03d", st_static.wMilliseconds); break;
-		case VAR_WDAY:  aBuf += sprintf(aBuf, "%d", st_static.wDayOfWeek + 1); break;
-		case VAR_YWEEK:
-			aBuf += GetISOWeekNumber(aBuf, st_static.wYear
-				, GetYDay(st_static.wMonth, st_static.wDay, IS_LEAP_YEAR(st_static.wYear))
-				, st_static.wDayOfWeek);
-			break;
-		case VAR_YDAY:
-			aBuf += sprintf(aBuf, "%d", GetYDay(st_static.wMonth, st_static.wDay, IS_LEAP_YEAR(st_static.wYear)));
-			break;
-		} // inner switch()
-		break; // outer switch()
-
-	case VAR_CLIPBOARDALL: // This variable directly handled at a higher level and is not supported at the Get() level.
-		if (!aBuf)
-			return 0;
-		//else continue onward to reset the buffer and return the length of zero.
+			aBuf[length] = '\0'; // Might not be necessary, but kept in case it ever is.
+		return length;
 	}
 
-	*aBuf = '\0'; // Terminate the buffer in case above didn't.  Not counted as part of the length, so don't increment aBuf.
-	return (VarSizeType)(aBuf - aBuf_orig);  // This is how many were written, not including the zero terminator.
+	case VAR_CLIPBOARDALL: // There's a slight chance this case is never executed; but even if true, it should be kept for maintainability.
+		// This variable is directly handled at a higher level.  As documented, any use of ClipboardAll outside of
+		// the supported modes yields an empty string.
+		if (aBuf)
+			*aBuf = '\0';
+		return 0;
+
+	default: // v1.0.46.16: VAR_BUILTIN: Call the function associated with this variable to retrieve its contents.  This change reduced uncompressed coded size by 6 KB.
+		return mBIV(aBuf, mName);
+	} // switch(mType)
 }
 
 

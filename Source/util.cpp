@@ -73,8 +73,7 @@ int GetISOWeekNumber(char *aBuf, int aYear, int aYDay, int aWDay)
 
 	// Use snprintf() for safety; that is, in case year contains a value longer than 4 digits.
 	// This also adds the leading zeros in front of year and week number, if needed.
-	snprintf(aBuf, 7, "%04d%02d", year, (days / 7) + 1);
-	return 6; // The length of the string produced.
+	return snprintf(aBuf, 7, "%04d%02d", year, (days / 7) + 1); // Return the length of the string produced.
 }
 
 

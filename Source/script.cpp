@@ -234,7 +234,7 @@ ResultType Script::Init(char *aScriptFilename, bool aIsRestart)
 		if (GetFileAttributes(aScriptFilename) == 0xFFFFFFFF) // File doesn't exist, so fall back to new method.
 		{
 			aScriptFilename = buf;
-			VarSizeType filespec_length = GetMyDocuments(aScriptFilename); // e.g. C:\Documents and Settings\Home\My Documents
+			VarSizeType filespec_length = BIV_MyDocuments(aScriptFilename, ""); // e.g. C:\Documents and Settings\Home\My Documents
 			if (filespec_length	> sizeof(buf)-16) // Need room for 16 characters ('\\' + "AutoHotkey.ahk" + terminator).
 				return FAIL; // Very rare, so for simplicity just abort.
 			strcpy(aScriptFilename + filespec_length, "\\AutoHotkey.ahk"); // Append the filename: .ahk vs. .ini seems slightly better in terms of clarity and usefulness (e.g. the ability to double click the default script to launch it).
@@ -766,7 +766,7 @@ ResultType Script::ExitApp(ExitReasons aExitReason, char *aBuf, int aExitCode)
 	g_script.UpdateTrayIcon();
 
 	sExitLabelIsRunning = true;
-	if (mOnExitLabel->mJumpToLine->ExecUntil(UNTIL_RETURN) == FAIL)
+	if (mOnExitLabel->Execute() == FAIL)
 		// If the subroutine encounters a failure condition such as a runtime error, exit immediately.
 		// Otherwise, there will be no way to exit the script if the subroutine fails on each attempt.
 		TerminateApp(aExitCode);
@@ -2171,8 +2171,7 @@ continue_main_loop: // This method is used in lieu of "continue" for performance
 			switch (++remap_stage)
 			{
 			case 1: // Stage 1: Add key-down hotkey label, e.g. *LButton::
-				sprintf(buf, "*%s::", remap_source); // Should be no risk of buffer overflow due to prior validation.
-				buf_length = strlen(buf);
+				buf_length = sprintf(buf, "*%s::", remap_source); // Should be no risk of buffer overflow due to prior validation.
 				goto examine_line; // Have the main loop process the contents of "buf" as though it came in from the script.
 			case 2: // Stage 2.
 				// Copied into a writable buffer for maintainability: AddLine() might rely on this.
@@ -2195,8 +2194,7 @@ continue_main_loop: // This method is used in lieu of "continue" for performance
 					// Since source is keybd and dest is mouse, prevent keyboard auto-repeat from auto-repeating
 					// the mouse button (since that would be undesirable 90% of the time).  This is done
 					// by inserting a single extra IF-statement above the Send that produces the down-event:
-					sprintf(buf, "if not GetKeyState(\"%s\")", remap_dest); // Should be no risk of buffer overflow due to prior validation.
-					buf_length = strlen(buf);
+					buf_length = sprintf(buf, "if not GetKeyState(\"%s\")", remap_dest); // Should be no risk of buffer overflow due to prior validation.
 					remap_stage = 9; // Have it hit special stage 9+1 next time for code reduction purposes.
 					goto examine_line; // Have the main loop process the contents of "buf" as though it came in from the script.
 				}
@@ -2237,8 +2235,7 @@ continue_main_loop: // This method is used in lieu of "continue" for performance
 					return CloseAndReturn(fp, script_buf, FAIL);
 				AddLine(ACT_RETURN);
 				// Add key-up hotkey label, e.g. *LButton up::
-				sprintf(buf, "*%s up::", remap_source); // Should be no risk of buffer overflow due to prior validation.
-				buf_length = strlen(buf);
+				buf_length = sprintf(buf, "*%s up::", remap_source); // Should be no risk of buffer overflow due to prior validation.
 				remap_stage = 2; // Adjust to hit stage 3 next time (in case this is stage 10).
 				goto examine_line; // Have the main loop process the contents of "buf" as though it came in from the script.
 			case 3: // Stage 3.
@@ -2528,12 +2525,12 @@ inline ResultType Script::IsDirective(char *aBuf)
 		StrReplace(parameter, "%A_ScriptDir%", mFileDir, SCS_INSENSITIVE, 1, space_remaining); // v1.0.35.11.  Caller has ensured string is writable.
 		if (strcasestr(parameter, "%A_AppData%")) // v1.0.45.04: This and the next were requested by Tekl to make it easier to customize scripts on a per-user basis.
 		{
-			GetAppData(false, buf);
+			BIV_AppData(buf, "A_AppData");
 			StrReplace(parameter, "%A_AppData%", buf, SCS_INSENSITIVE, 1, space_remaining);
 		}
 		if (strcasestr(parameter, "%A_AppDataCommon%")) // v1.0.45.04.
 		{
-			GetAppData(true, buf);
+			BIV_AppData(buf, "A_AppDataCommon");
 			StrReplace(parameter, "%A_AppDataCommon%", buf, SCS_INSENSITIVE, 1, space_remaining);
 		}
 
@@ -2902,6 +2899,29 @@ inline ResultType Script::IsDirective(char *aBuf)
 
 
 
+void ScriptTimer::Disable()
+{
+	mEnabled = false;
+	--g_script.mTimerEnabledCount;
+	if (!g_script.mTimerEnabledCount && !g_nLayersNeedingTimer && !Hotkey::sJoyHotkeyCount)
+		KILL_MAIN_TIMER
+	// Above: If there are now no enabled timed subroutines, kill the main timer since there's no other
+	// reason for it to exist if we're here.   This is because or direct or indirect caller is
+	// currently always ExecUntil(), which doesn't need the timer while its running except to
+	// support timed subroutines.  UPDATE: The above is faulty; Must also check g_nLayersNeedingTimer
+	// because our caller can be one that still needs a timer as proven by this script that
+	// hangs otherwise:
+	//SetTimer, Test, on 
+	//Sleep, 1000 
+	//msgbox, done
+	//return
+	//Test: 
+	//SetTimer, Test, off 
+	//return
+}
+
+
+
 ResultType Script::UpdateOrCreateTimer(Label *aLabel, char *aPeriod, char *aPriority, bool aEnable
 	, bool aUpdatePriorityOnly)
 // Caller should specific a blank aPeriod to prevent the timer's period from being changed
@@ -2929,41 +2949,34 @@ ResultType Script::UpdateOrCreateTimer(Label *aLabel, char *aPeriod, char *aPrio
 		++mTimerCount;
 	}
 	// Update its members:
-	if (aEnable && !timer->mEnabled) // Must check both or the below count will be wrong.
+	if (aEnable && !timer->mEnabled) // Must check both or the mTimerEnabledCount below will be wrong.
 	{
 		// The exception is if the timer already existed but the caller only wanted its priority changed:
 		if (!(timer_existed && aUpdatePriorityOnly))
 		{
 			timer->mEnabled = true;
 			++mTimerEnabledCount;
-			SET_MAIN_TIMER  // Ensure the timer is always running when there is at least one enabled timed subroutine.
+			SET_MAIN_TIMER  // Ensure the API timer is always running when there is at least one enabled timed subroutine.
 		}
 		//else do nothing, leave it disabled.
 	}
 	else if (!aEnable && timer->mEnabled) // Must check both or the below count will be wrong.
-	{
-		timer->mEnabled = false;
-		--mTimerEnabledCount;
-		// If there are now no enabled timed subroutines, kill the main timer since there's no other
-		// reason for it to exist if we're here.   This is because or direct or indirect caller is
-		// currently always ExecUntil(), which doesn't need the timer while its running except to
-		// support timed subroutines.  UPDATE: The above is faulty; Must also check g_nLayersNeedingTimer
-		// because our caller can be one that still needs a timer as proven by this script that
-		// hangs otherwise:
-		//SetTimer, Test, on 
-		//Sleep, 1000 
-		//msgbox, done
-		//return
-		//Test: 
-		//SetTimer, Test, off 
-		//return
-		if (!mTimerEnabledCount && !g_nLayersNeedingTimer && !Hotkey::sJoyHotkeyCount)
-			KILL_MAIN_TIMER
-	}
+		timer->Disable();
 
 	if (*aPeriod) // Caller wanted us to update this member.
-		// v1.0.36.33: Changed from int to DWORD, and ATOI to ATOU, to double its capacity:
-		timer->mPeriod = ATOU(aPeriod);  // Always use this method & check to retain compatibility with existing scripts.
+	{
+		__int64 period = ATOI64(aPeriod);
+		if (period < 0) // v1.0.46.16: Support negative periods to mean "run only once".
+		{
+			timer->mRunOnlyOnce = true;
+			timer->mPeriod = (DWORD)-period;
+		}
+		else // Positive number.  v1.0.36.33: Changed from int to DWORD, and ATOI to ATOU, to double its capacity:
+		{
+			timer->mPeriod = (DWORD)period; // Always use this method & check to retain compatibility with existing scripts.
+			timer->mRunOnlyOnce = false;
+		}
+	}
 
 	if (*aPriority) // Caller wants this member to be changed from its current or default value.
 		timer->mPriority = ATOI(aPriority); // Read any float in a runtime variable reference as an int.
@@ -4593,8 +4606,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 							return FAIL;  // The above already displayed the error.
 						// If this action type is something that modifies the contents of the var, ensure the var
 						// isn't a special/reserved one:
-						if (this_new_arg.type == ARG_TYPE_OUTPUT_VAR && VAR_IS_RESERVED(*target_var))
-							return ScriptError(ERR_VAR_IS_RESERVED, this_aArg);
+						if (this_new_arg.type == ARG_TYPE_OUTPUT_VAR && VAR_IS_READONLY(*target_var))
+							return ScriptError(ERR_VAR_IS_READONLY, this_aArg);
 						// Rather than removing this arg from the list altogether -- which would distrub
 						// the ordering and hurt the maintainability of the code -- the next best thing
 						// in terms of saving memory is to store an empty string in place of the arg's
@@ -5127,7 +5140,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				if (IsPureNumeric(new_raw_arg1, false))
 					line.mAttribute = ATTR_LOOP_NORMAL;
 				else
-					line.mAttribute = line.RegConvertRootKey(new_raw_arg1) ? ATTR_LOOP_REG : ATTR_LOOP_FILE;
+					line.mAttribute = line.RegConvertRootKey(new_raw_arg1) ? ATTR_LOOP_REG : ATTR_LOOP_FILEPATTERN;
 			}
 			break;
 		default:  // has 2 or more args.
@@ -5139,8 +5152,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				line.mAttribute = ATTR_LOOP_PARSE;
 			else // the 1st arg can either be a Root Key or a File Pattern, depending on the type of loop.
 			{
-				line.mAttribute = line.RegConvertRootKey(new_raw_arg1) ? ATTR_LOOP_REG : ATTR_LOOP_FILE;
-				if (line.mAttribute == ATTR_LOOP_FILE)
+				line.mAttribute = line.RegConvertRootKey(new_raw_arg1) ? ATTR_LOOP_REG : ATTR_LOOP_FILEPATTERN;
+				if (line.mAttribute == ATTR_LOOP_FILEPATTERN)
 				{
 					// Validate whatever we can rather than waiting for runtime validation:
 					if (!line.ArgHasDeref(2) && Line::ConvertLoopMode(new_raw_arg2) == FILE_LOOP_INVALID)
@@ -6685,6 +6698,11 @@ Func *Script::FindFunc(char *aFuncName, size_t aFuncNameLength)
 		bif = BIF_Asc;
 	else if (!stricmp(func_name, "Chr"))
 		bif = BIF_Chr;
+	//else if (!stricmp(func_name, "ExtractInteger"))
+	//{
+	//	bif = BIF_ExtractInteger;
+	//	max_params = 4;
+	//}
 	else if (!stricmp(func_name, "IsLabel"))
 		bif = BIF_IsLabel;
 	else if (!stricmp(func_name, "DllCall"))
@@ -6968,7 +6986,7 @@ Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 	// Terminate the buffer, even if nothing was written into it:
 	sVarName[var_name_length] = '\0';
 
-	static Var empty_var(sVarName, VAR_NORMAL, false); // Must use sVarName here.  See comment above for why.
+	static Var empty_var(sVarName, (void *)VAR_NORMAL, false); // Must use sVarName here.  See comment above for why.
 
 	Var *found_var;
 	if (!aCreateIfNecessary)
@@ -6984,7 +7002,7 @@ Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 			return found_var;
 		// At this point, this is either a non-existent variable or a reserved/built-in variable
 		// that was never statically referenced in the script (only dynamically), e.g. A_IPAddress%A_Index%
-		if (Script::GetVarType(sVarName) == VAR_NORMAL)
+		if (Script::GetVarType(sVarName) == (void *)VAR_NORMAL)
 			// If not found: for performance reasons, don't create it because caller just wants an empty variable.
 			return &empty_var;
 		//else it's the clipboard or some other built-in variable, so continue onward so that the
@@ -6999,9 +7017,9 @@ Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 	// of variable exists, a global variable will be created if assume-global is in effect.
 	if (   !(found_var = g_script.FindOrAddVar(sVarName, var_name_length, ALWAYS_PREFER_LOCAL))   )
 		return NULL;  // Above will already have displayed the error.
-	if (this_arg.type == ARG_TYPE_OUTPUT_VAR && VAR_IS_RESERVED(*found_var))
+	if (this_arg.type == ARG_TYPE_OUTPUT_VAR && VAR_IS_READONLY(*found_var))
 	{
-		LineError(ERR_VAR_IS_RESERVED, FAIL, sVarName);
+		LineError(ERR_VAR_IS_READONLY, FAIL, sVarName);
 		return NULL;  // Don't return the var, preventing the caller from assigning to it.
 	}
 	else
@@ -7261,8 +7279,8 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, int aInsertPos, int a
 	// built-in vars in the global list for efficiency and to keep them out of ListVars.  Note that another
 	// section at loadtime displays an error for any attempt to explicitly declare built-in variables as
 	// either global or local.
-	VarTypeType var_type = GetVarType(var_name);
-	if (aIsLocal && (var_type != VAR_NORMAL || !stricmp(var_name, "ErrorLevel"))) // Attempt to create built-in variable as local.
+	void *var_type = GetVarType(var_name);
+	if (aIsLocal && (var_type != (void *)VAR_NORMAL || !stricmp(var_name, "ErrorLevel"))) // Attempt to create built-in variable as local.
 	{
 		if (aIsLocal == 1) // It's not a UDF's parameter, so fall back to the global built-in variable of this name rather than displaying an error.
 			return FindOrAddVar(var_name, aVarNameLength, ALWAYS_USE_GLOBAL); // Force find-or-create of global.
@@ -7445,7 +7463,7 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, int aInsertPos, int a
 
 
 
-VarTypes Script::GetVarType(char *aVarName)
+void *Script::GetVarType(char *aVarName)
 {
 	// Convert to lowercase to help performance a little (it typically only helps loadtime performance because
 	// this function is rarely called during script-runtime).
@@ -7459,191 +7477,195 @@ VarTypes Script::GetVarType(char *aVarName)
 
 	if (lowercase[0] != 'a' || lowercase[1] != '_')  // This check helps average-case performance.
 	{
-		if (!strcmp(lowercase, "true")) return VAR_TRUE;
-		if (!strcmp(lowercase, "false")) return VAR_FALSE;
-		if (!strcmp(lowercase, "clipboard")) return VAR_CLIPBOARD;
-		if (!strcmp(lowercase, "clipboardall")) return VAR_CLIPBOARDALL;
-		if (!strcmp(lowercase, "comspec")) return VAR_COMSPEC; // Lacks an "A_" prefix for backward compatibility with pre-NoEnv scripts and also it's easier to type & remember.
-		if (!strcmp(lowercase, "programfiles")) return VAR_PROGRAMFILES; // v1.0.43.08: Added to ease the transition to #NoEnv.
+		if (   !strcmp(lowercase, "true")
+			|| !strcmp(lowercase, "false")) return BIV_True_False;
+		if (!strcmp(lowercase, "clipboard")) return (void *)VAR_CLIPBOARD;
+		if (!strcmp(lowercase, "clipboardall")) return (void *)VAR_CLIPBOARDALL;
+		if (!strcmp(lowercase, "comspec")) return BIV_ComSpec; // Lacks an "A_" prefix for backward compatibility with pre-NoEnv scripts and also it's easier to type & remember.
+		if (!strcmp(lowercase, "programfiles")) return BIV_ProgramFiles; // v1.0.43.08: Added to ease the transition to #NoEnv.
 		// Otherwise:
-		return VAR_NORMAL;
+		return (void *)VAR_NORMAL;
 	}
 
 	// Otherwise, lowercase begins with "a_", so it's probably one of the built-in variables.
 	char *lower = lowercase + 2;
 
 	// Keeping the most common ones near the top helps performance a little.
-	if (!strcmp(lower, "index")) return VAR_INDEX;  // A short name since it's typed so often.
+	if (!strcmp(lower, "index")) return BIV_LoopIndex;  // A short name since it's typed so often.
 
-	if (!strcmp(lower, "yyyy") || !strcmp(lower, "year")) return VAR_YYYY;
-	if (!strcmp(lower, "mmmm")) return VAR_MMMM; // Long name of month.
-	if (!strcmp(lower, "mmm")) return VAR_MMM;   // 3-char abbrev. month name.
-	if (!strcmp(lower, "mm") || !strcmp(lower, "mon")) return VAR_MM;  // 01 thru 12
-	if (!strcmp(lower, "dddd")) return VAR_DDDD; // Name of weekday, e.g. Sunday
-	if (!strcmp(lower, "ddd")) return VAR_DDD;   // Abbrev., e.g. Sun
-	if (!strcmp(lower, "dd") || !strcmp(lower, "mday")) return VAR_DD; // 01 thru 31
-	if (!strcmp(lower, "wday")) return VAR_WDAY;
-	if (!strcmp(lower, "yday")) return VAR_YDAY;
-	if (!strcmp(lower, "yweek")) return VAR_YWEEK;
+	if (   !strcmp(lower, "mmmm")    // Long name of month.
+		|| !strcmp(lower, "mmm")     // 3-char abbrev. month name.
+		|| !strcmp(lower, "dddd")    // Name of weekday, e.g. Sunday
+		|| !strcmp(lower, "ddd")   ) // Abbrev., e.g. Sun
+		return BIV_MMM_DDD;
 
-	if (!strcmp(lower, "hour")) return VAR_HOUR;
-	if (!strcmp(lower, "min")) return VAR_MIN;
-	if (!strcmp(lower, "sec")) return VAR_SEC;
-	if (!strcmp(lower, "msec")) return VAR_MSEC;
-	if (!strcmp(lower, "tickcount")) return VAR_TICKCOUNT;
-	if (!strcmp(lower, "now")) return VAR_NOW;
-	if (!strcmp(lower, "nowutc")) return VAR_NOWUTC;
+	if (   !strcmp(lower, "yyyy")
+		|| !strcmp(lower, "year") // Same as above.
+		|| !strcmp(lower, "mm")   // 01 thru 12
+		|| !strcmp(lower, "mon")  // Same
+		|| !strcmp(lower, "dd")   // 01 thru 31
+		|| !strcmp(lower, "mday") // Same
+		|| !strcmp(lower, "wday")
+		|| !strcmp(lower, "yday")
+		|| !strcmp(lower, "yweek")
+		|| !strcmp(lower, "hour")
+		|| !strcmp(lower, "min")
+		|| !strcmp(lower, "sec")
+		|| !strcmp(lower, "msec")   )
+		return BIV_DateTime;
 
-	if (!strcmp(lower, "workingdir")) return VAR_WORKINGDIR;
-	if (!strcmp(lower, "scriptname")) return VAR_SCRIPTNAME;
-	if (!strcmp(lower, "scriptdir")) return VAR_SCRIPTDIR;
-	if (!strcmp(lower, "scriptfullpath")) return VAR_SCRIPTFULLPATH;
-	if (!strcmp(lower, "linenumber")) return VAR_LINENUMBER;
-	if (!strcmp(lower, "linefile")) return VAR_LINEFILE;
+	if (!strcmp(lower, "tickcount")) return BIV_TickCount;
+	if (   !strcmp(lower, "now")
+		|| !strcmp(lower, "nowutc")) return BIV_Now;
 
-// A_IsCompiled is undefined in uncompiled scripts.
+	if (!strcmp(lower, "workingdir")) return BIV_WorkingDir;
+	if (!strcmp(lower, "scriptname")) return BIV_ScriptName;
+	if (!strcmp(lower, "scriptdir")) return BIV_ScriptDir;
+	if (!strcmp(lower, "scriptfullpath")) return BIV_ScriptFullPath;
+	if (!strcmp(lower, "linenumber")) return BIV_LineNumber;
+	if (!strcmp(lower, "linefile")) return BIV_LineFile;
+
+// A_IsCompiled is left blank/undefined in uncompiled scripts.
 #ifdef AUTOHOTKEYSC
-	if (!strcmp(lower, "iscompiled")) return VAR_ISCOMPILED;
+	if (!strcmp(lower, "iscompiled")) return BIV_IsCompiled;
 #endif
 
-	if (!strcmp(lower, "batchlines") || !strcmp(lower, "numbatchlines")) return VAR_BATCHLINES;
-	if (!strcmp(lower, "titlematchmode")) return VAR_TITLEMATCHMODE;
-	if (!strcmp(lower, "titlematchmodespeed")) return VAR_TITLEMATCHMODESPEED;
-	if (!strcmp(lower, "detecthiddenwindows")) return VAR_DETECTHIDDENWINDOWS;
-	if (!strcmp(lower, "detecthiddentext")) return VAR_DETECTHIDDENTEXT;
-	if (!strcmp(lower, "autotrim")) return VAR_AUTOTRIM;
-	if (!strcmp(lower, "stringcasesense")) return VAR_STRINGCASESENSE;
-	if (!strcmp(lower, "formatinteger")) return VAR_FORMATINTEGER;
-	if (!strcmp(lower, "formatfloat")) return VAR_FORMATFLOAT;
-	if (!strcmp(lower, "keydelay")) return VAR_KEYDELAY;
-	if (!strcmp(lower, "windelay")) return VAR_WINDELAY;
-	if (!strcmp(lower, "controldelay")) return VAR_CONTROLDELAY;
-	if (!strcmp(lower, "mousedelay")) return VAR_MOUSEDELAY;
-	if (!strcmp(lower, "defaultmousespeed")) return VAR_DEFAULTMOUSESPEED;
-	if (!strcmp(lower, "issuspended")) return VAR_ISSUSPENDED;
+	if (   !strcmp(lower, "batchlines")
+		|| !strcmp(lower, "numbatchlines")) return BIV_BatchLines;
+	if (!strcmp(lower, "titlematchmode")) return BIV_TitleMatchMode;
+	if (!strcmp(lower, "titlematchmodespeed")) return BIV_TitleMatchModeSpeed;
+	if (!strcmp(lower, "detecthiddenwindows")) return BIV_DetectHiddenWindows;
+	if (!strcmp(lower, "detecthiddentext")) return BIV_DetectHiddenText;
+	if (!strcmp(lower, "autotrim")) return BIV_AutoTrim;
+	if (!strcmp(lower, "stringcasesense")) return BIV_StringCaseSense;
+	if (!strcmp(lower, "formatinteger")) return BIV_FormatInteger;
+	if (!strcmp(lower, "formatfloat")) return BIV_FormatFloat;
+	if (!strcmp(lower, "keydelay")) return BIV_KeyDelay;
+	if (!strcmp(lower, "windelay")) return BIV_WinDelay;
+	if (!strcmp(lower, "controldelay")) return BIV_ControlDelay;
+	if (!strcmp(lower, "mousedelay")) return BIV_MouseDelay;
+	if (!strcmp(lower, "defaultmousespeed")) return BIV_DefaultMouseSpeed;
+	if (!strcmp(lower, "issuspended")) return BIV_IsSuspended;
 
-	if (!strcmp(lower, "iconhidden")) return VAR_ICONHIDDEN;
-	if (!strcmp(lower, "icontip")) return VAR_ICONTIP;
-	if (!strcmp(lower, "iconfile")) return VAR_ICONFILE;
-	if (!strcmp(lower, "iconnumber")) return VAR_ICONNUMBER;
+	if (!strcmp(lower, "iconhidden")) return BIV_IconHidden;
+	if (!strcmp(lower, "icontip")) return BIV_IconTip;
+	if (!strcmp(lower, "iconfile")) return BIV_IconFile;
+	if (!strcmp(lower, "iconnumber")) return BIV_IconNumber;
 
-	if (!strcmp(lower, "exitreason")) return VAR_EXITREASON;
+	if (!strcmp(lower, "exitreason")) return BIV_ExitReason;
 
-	if (!strcmp(lower, "ostype")) return VAR_OSTYPE;
-	if (!strcmp(lower, "osversion")) return VAR_OSVERSION;
-	if (!strcmp(lower, "language")) return VAR_LANGUAGE;
-	if (!strcmp(lower, "computername")) return VAR_COMPUTERNAME;
-	if (!strcmp(lower, "username")) return VAR_USERNAME;
+	if (!strcmp(lower, "ostype")) return BIV_OSType;
+	if (!strcmp(lower, "osversion")) return BIV_OSVersion;
+	if (!strcmp(lower, "language")) return BIV_Language;
+	if (   !strcmp(lower, "computername")
+		|| !strcmp(lower, "username")) return BIV_User_Computer;
 
-	if (!strcmp(lower, "windir")) return VAR_WINDIR;
-	if (!strcmp(lower, "temp")) return VAR_TEMP; // Debatably should be A_TempDir, but brevity seemed more popular with users, perhaps for heavy uses of the temp folder.
-	if (!strcmp(lower, "programfiles")) return VAR_PROGRAMFILES;
-	if (!strcmp(lower, "appdata")) return VAR_APPDATA;
-	if (!strcmp(lower, "appdatacommon")) return VAR_APPDATACOMMON;
-	if (!strcmp(lower, "desktop")) return VAR_DESKTOP;
-	if (!strcmp(lower, "desktopcommon")) return VAR_DESKTOPCOMMON;
-	if (!strcmp(lower, "startmenu")) return VAR_STARTMENU;
-	if (!strcmp(lower, "startmenucommon")) return VAR_STARTMENUCOMMON;
-	if (!strcmp(lower, "programs")) return VAR_PROGRAMS;
-	if (!strcmp(lower, "programscommon")) return VAR_PROGRAMSCOMMON;
-	if (!strcmp(lower, "startup")) return VAR_STARTUP;
-	if (!strcmp(lower, "startupcommon")) return VAR_STARTUPCOMMON;
-	if (!strcmp(lower, "mydocuments")) return VAR_MYDOCUMENTS;
+	if (!strcmp(lower, "windir")) return BIV_WinDir;
+	if (!strcmp(lower, "temp")) return BIV_Temp; // Debatably should be A_TempDir, but brevity seemed more popular with users, perhaps for heavy uses of the temp folder.
+	if (!strcmp(lower, "programfiles")) return BIV_ProgramFiles;
+	if (!strcmp(lower, "mydocuments")) return BIV_MyDocuments;
 
-	if (!strcmp(lower, "isadmin")) return VAR_ISADMIN;
-	if (!strcmp(lower, "cursor")) return VAR_CURSOR;
-	if (!strcmp(lower, "caretx")) return VAR_CARETX;
-	if (!strcmp(lower, "carety")) return VAR_CARETY;
-	if (!strcmp(lower, "screenwidth")) return VAR_SCREENWIDTH;
-	if (!strcmp(lower, "screenheight")) return VAR_SCREENHEIGHT;
+	if (   !strcmp(lower, "appdata")
+		|| !strcmp(lower, "appdatacommon")) return BIV_AppData;
+	if (   !strcmp(lower, "desktop")
+		|| !strcmp(lower, "desktopcommon")) return BIV_Desktop;
+	if (   !strcmp(lower, "startmenu")
+		|| !strcmp(lower, "startmenucommon")) return BIV_StartMenu;
+	if (   !strcmp(lower, "programs")
+		|| !strcmp(lower, "programscommon")) return BIV_Programs;
+	if (   !strcmp(lower, "startup")
+		|| !strcmp(lower, "startupcommon")) return BIV_Startup;
+
+	if (!strcmp(lower, "isadmin")) return BIV_IsAdmin;
+	if (!strcmp(lower, "cursor")) return BIV_Cursor;
+	if (   !strcmp(lower, "caretx")
+		|| !strcmp(lower, "carety")) return BIV_Caret;
+	if (   !strcmp(lower, "screenwidth")
+		|| !strcmp(lower, "screenheight")) return BIV_ScreenWidth_Height;
 
 	if (!strncmp(lower, "ipaddress", 9))
 	{
 		lower += 9;
-		if (*lower && !lower[1]) // Make sure has only one more character rather than none or several (e.g. A_IPAddress1abc should not be match).
-		{
-			switch(*lower) // More maintainable to use switch() vs. something more optimized.
-			{
-			case '1': return VAR_IPADDRESS1;
-			case '2': return VAR_IPADDRESS2;
-			case '3': return VAR_IPADDRESS3;
-			case '4': return VAR_IPADDRESS4;
-			}
-		}
-		// Otherwise, it can't be a match for any built-in variable:
-		return VAR_NORMAL;
+		return (*lower >= '1' && *lower <= '4'
+			&& !lower[1]) // Make sure has only one more character rather than none or several (e.g. A_IPAddress1abc should not be match).
+			? BIV_IPAddress
+			: (void *)VAR_NORMAL; // Otherwise it can't be a match for any built-in variable.
 	}
 
 	if (!strncmp(lower, "loop", 4))
 	{
 		lower += 4;
-		if (!strcmp(lower, "readline")) return VAR_LOOPREADLINE;
-		if (!strcmp(lower, "field")) return VAR_LOOPFIELD;
+		if (!strcmp(lower, "readline")) return BIV_LoopReadLine;
+		if (!strcmp(lower, "field")) return BIV_LoopField;
 
 		if (!strncmp(lower, "file", 4))
 		{
 			lower += 4;
-			if (!strcmp(lower, "name")) return VAR_LOOPFILENAME;
-			if (!strcmp(lower, "shortname")) return VAR_LOOPFILESHORTNAME;
-			if (!strcmp(lower, "ext")) return VAR_LOOPFILEEXT;
-			if (!strcmp(lower, "dir")) return VAR_LOOPFILEDIR;
-			if (!strcmp(lower, "fullpath")) return VAR_LOOPFILEFULLPATH;
-			if (!strcmp(lower, "longpath")) return VAR_LOOPFILELONGPATH;
-			if (!strcmp(lower, "shortpath")) return VAR_LOOPFILESHORTPATH;
-			if (!strcmp(lower, "timemodified")) return VAR_LOOPFILETIMEMODIFIED;
-			if (!strcmp(lower, "timecreated")) return VAR_LOOPFILETIMECREATED;
-			if (!strcmp(lower, "timeaccessed")) return VAR_LOOPFILETIMEACCESSED;
-			if (!strcmp(lower, "attrib")) return VAR_LOOPFILEATTRIB;
-			if (!strcmp(lower, "size")) return VAR_LOOPFILESIZE;
-			if (!strcmp(lower, "sizekb")) return VAR_LOOPFILESIZEKB;
-			if (!strcmp(lower, "sizemb")) return VAR_LOOPFILESIZEMB;
+			if (!strcmp(lower, "name")) return BIV_LoopFileName;
+			if (!strcmp(lower, "shortname")) return BIV_LoopFileShortName;
+			if (!strcmp(lower, "ext")) return BIV_LoopFileExt;
+			if (!strcmp(lower, "dir")) return BIV_LoopFileDir;
+			if (!strcmp(lower, "fullpath")) return BIV_LoopFileFullPath;
+			if (!strcmp(lower, "longpath")) return BIV_LoopFileLongPath;
+			if (!strcmp(lower, "shortpath")) return BIV_LoopFileShortPath;
+			if (!strcmp(lower, "attrib")) return BIV_LoopFileAttrib;
+
+			if (   !strcmp(lower, "timemodified")
+				|| !strcmp(lower, "timecreated")
+				|| !strcmp(lower, "timeaccessed")) return BIV_LoopFileTime;
+			if (   !strcmp(lower, "size")
+				|| !strcmp(lower, "sizekb")
+				|| !strcmp(lower, "sizemb")) return BIV_LoopFileSize;
 			// Otherwise, it can't be a match for any built-in variable:
-			return VAR_NORMAL;
+			return (void *)VAR_NORMAL;
 		}
 
 		if (!strncmp(lower, "reg", 3))
 		{
 			lower += 3;
-			if (!strcmp(lower, "type")) return VAR_LOOPREGTYPE;
-			if (!strcmp(lower, "key")) return VAR_LOOPREGKEY;
-			if (!strcmp(lower, "subkey")) return VAR_LOOPREGSUBKEY;
-			if (!strcmp(lower, "name")) return VAR_LOOPREGNAME;
-			if (!strcmp(lower, "timemodified")) return VAR_LOOPREGTIMEMODIFIED;
+			if (!strcmp(lower, "type")) return BIV_LoopRegType;
+			if (!strcmp(lower, "key")) return BIV_LoopRegKey;
+			if (!strcmp(lower, "subkey")) return BIV_LoopRegSubKey;
+			if (!strcmp(lower, "name")) return BIV_LoopRegName;
+			if (!strcmp(lower, "timemodified")) return BIV_LoopRegTimeModified;
 			// Otherwise, it can't be a match for any built-in variable:
-			return VAR_NORMAL;
+			return (void *)VAR_NORMAL;
 		}
 	}
 
-	if (!strcmp(lower, "thismenuitem")) return VAR_THISMENUITEM;
-	if (!strcmp(lower, "thismenuitempos")) return VAR_THISMENUITEMPOS;
-	if (!strcmp(lower, "thismenu")) return VAR_THISMENU;
-	if (!strcmp(lower, "thishotkey")) return VAR_THISHOTKEY;
-	if (!strcmp(lower, "priorhotkey")) return VAR_PRIORHOTKEY;
-	if (!strcmp(lower, "timesincethishotkey")) return VAR_TIMESINCETHISHOTKEY;
-	if (!strcmp(lower, "timesincepriorhotkey")) return VAR_TIMESINCEPRIORHOTKEY;
-	if (!strcmp(lower, "endchar")) return VAR_ENDCHAR;
-	if (!strcmp(lower, "lasterror")) return VAR_LASTERROR;
+	if (!strcmp(lower, "thisfunc")) return BIV_ThisFunc;
+	if (!strcmp(lower, "thislabel")) return BIV_ThisLabel;
+	if (!strcmp(lower, "thismenuitem")) return BIV_ThisMenuItem;
+	if (!strcmp(lower, "thismenuitempos")) return BIV_ThisMenuItemPos;
+	if (!strcmp(lower, "thismenu")) return BIV_ThisMenu;
+	if (!strcmp(lower, "thishotkey")) return BIV_ThisHotkey;
+	if (!strcmp(lower, "priorhotkey")) return BIV_PriorHotkey;
+	if (!strcmp(lower, "timesincethishotkey")) return BIV_TimeSinceThisHotkey;
+	if (!strcmp(lower, "timesincepriorhotkey")) return BIV_TimeSincePriorHotkey;
+	if (!strcmp(lower, "endchar")) return BIV_EndChar;
+	if (!strcmp(lower, "lasterror")) return BIV_LastError;
 
-	if (!strcmp(lower, "gui")) return VAR_GUI;
-	if (!strcmp(lower, "guicontrol")) return VAR_GUICONTROL;
-	// v1.0.36: A_GuiEvent was added as a synonym for A_GuiControlEvent because it seems unlikely that
-	// A_GuiEvent will ever be needed for anything:
-	if (!strcmp(lower, "guicontrolevent") || !strcmp(lower, "guievent")) return VAR_GUICONTROLEVENT;
-	if (!strcmp(lower, "eventinfo")) return VAR_EVENTINFO; // It's called "EventInfo" vs. "GuiEventInfo" because it applies to non-Gui events such as OnClipboardChange.
-	if (!strcmp(lower, "guiwidth")) return VAR_GUIWIDTH;
-	if (!strcmp(lower, "guiheight")) return VAR_GUIHEIGHT;
-	if (!strcmp(lower, "guix")) return VAR_GUIX; // Naming: Brevity seems more a benefit than would A_GuiEventX's improved clarity.
-	if (!strcmp(lower, "guiy")) return VAR_GUIY; // These can be overloaded if a GuiMove label or similar is ever needed.
+	if (!strcmp(lower, "eventinfo")) return BIV_EventInfo; // It's called "EventInfo" vs. "GuiEventInfo" because it applies to non-Gui events such as OnClipboardChange.
+	if (!strcmp(lower, "guicontrol")) return BIV_GuiControl;
 
-	if (!strcmp(lower, "timeidle")) return VAR_TIMEIDLE;
-	if (!strcmp(lower, "timeidlephysical")) return VAR_TIMEIDLEPHYSICAL;
-	if (!strcmp(lower, "space")) return VAR_SPACE;
-	if (!strcmp(lower, "tab")) return VAR_TAB;
-	if (!strcmp(lower, "ahkversion")) return VAR_AHKVERSION;
-	if (!strcmp(lower, "ahkpath")) return VAR_AHKPATH;
+	if (   !strcmp(lower, "guicontrolevent") // v1.0.36: A_GuiEvent was added as a synonym for A_GuiControlEvent because it seems unlikely that A_GuiEvent will ever be needed for anything:
+		|| !strcmp(lower, "guievent")) return BIV_GuiEvent;
+
+	if (   !strcmp(lower, "gui")
+		|| !strcmp(lower, "guiwidth")
+		|| !strcmp(lower, "guiheight")
+		|| !strcmp(lower, "guix") // Naming: Brevity seems more a benefit than would A_GuiEventX's improved clarity.
+		|| !strcmp(lower, "guiy")) return BIV_Gui; // These can be overloaded if a GuiMove label or similar is ever needed.
+
+	if (!strcmp(lower, "timeidle")) return BIV_TimeIdle;
+	if (!strcmp(lower, "timeidlephysical")) return BIV_TimeIdlePhysical;
+	if (   !strcmp(lower, "space")
+		|| !strcmp(lower, "tab")) return BIV_Space_Tab;
+	if (!strcmp(lower, "ahkversion")) return BIV_AhkVersion;
+	if (!strcmp(lower, "ahkpath")) return BIV_AhkPath;
 
 	// Since above didn't return:
-	return VAR_NORMAL;
+	return (void *)VAR_NORMAL;
 }
 
 
@@ -8042,13 +8064,13 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 			if (line_temp->mActionType == ACT_ELSE || line_temp->mActionType == ACT_BLOCK_END)
 				return line->PreparseError("Inappropriate line beneath IF or LOOP.");
 
-			// We're checking for ATTR_LOOP_FILE here to detect whether qualified commands enclosed
+			// We're checking for ATTR_LOOP_FILEPATTERN here to detect whether qualified commands enclosed
 			// in a true file loop are allowed to omit their filename parameter:
 			loop_type_file = ATTR_NONE;
-			if (aLoopTypeFile == ATTR_LOOP_FILE || line->mAttribute == ATTR_LOOP_FILE)
+			if (aLoopTypeFile == ATTR_LOOP_FILEPATTERN || line->mAttribute == ATTR_LOOP_FILEPATTERN)
 				// i.e. if either one is a file-loop, that's enough to establish
 				// the fact that we're in a file loop.
-				loop_type_file = ATTR_LOOP_FILE;
+				loop_type_file = ATTR_LOOP_FILEPATTERN;
 			else if (aLoopTypeFile == ATTR_LOOP_UNKNOWN || line->mAttribute == ATTR_LOOP_UNKNOWN)
 				// ATTR_LOOP_UNKNOWN takes precedence over ATTR_LOOP_NORMAL because
 				// we can't be sure if we're in a file loop, but it's correct to
@@ -8245,7 +8267,7 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 				if (   !(line->mAttribute = FindLabel(line_raw_arg1))   )
 					return line->PreparseError(ERR_NO_LABEL);
 			if (*line_raw_arg2 && !line->ArgHasDeref(2))
-				if (!Line::ConvertOnOff(line_raw_arg2) && !IsPureNumeric(line_raw_arg2)
+				if (!Line::ConvertOnOff(line_raw_arg2) && !IsPureNumeric(line_raw_arg2, true) // v1.0.46.16: Allow negatives to support the new run-only-once mode.
 					&& !line->mArg[1].is_expression) // v1.0.46.10: Don't consider expressions THAT CONTAIN NO VARIABLES OR FUNCTION-CALLS like "% 2*500" to be a syntax error.
 					return line->PreparseError(ERR_PARAM2_INVALID);
 			break;
@@ -8259,7 +8281,7 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 				Label *label = FindLabel(LINE_RAW_ARG4);
 				if (!label)
 					return line->PreparseError(ERR_NO_LABEL);
-				line->mRelatedLine = label->mJumpToLine; // The script loader has ensured that this can't be NULL.
+				line->mRelatedLine = (Line *)label; // The script loader has ensured that this can't be NULL.
 				// Can't do this because the current line won't be the launching point for the
 				// Gosub.  Instead, the launching point will be the GroupActivate rather than the
 				// GroupAdd, so it will be checked by the GroupActivate or not at all (since it's
@@ -8378,7 +8400,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 	char *loop_field;
 
 	Line *jump_to_line; // Don't use *apJumpToLine because it might not exist.
-	Line *jump_target;  // For use with Gosub & Goto & GroupActivate.
+	Label *jump_to_label;  // For use with Gosub & Goto & GroupActivate.
 	ResultType if_condition, result;
 	LONG_OPERATION_INIT
 
@@ -8612,17 +8634,17 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 			// A single gosub can cause an infinite loop if misused (i.e. recusive gosubs),
 			// so be sure to do this to prevent the program from hanging:
 			++g_script.mLinesExecutedThisCycle;
-			if (   !(jump_target = line->mRelatedLine)   )
+			if (   !(jump_to_label = (Label *)line->mRelatedLine)   )
 				// The label is a dereference, otherwise it would have been resolved at load-time.
 				// So send true because we don't want to update its mRelatedLine.  This is because
 				// we want to resolve the label every time through the loop in case the variable
 				// that contains the label changes, e.g. Gosub, %MyLabel%
-				if (   !(jump_target = line->GetJumpTarget(true))   )
+				if (   !(jump_to_label = line->GetJumpTarget(true))   )
 					return FAIL; // Error was already displayed by called function.
 			// I'm pretty sure it's not valid for this call to ExecUntil() to tell us to jump
 			// somewhere, because the called function, or a layer even deeper, should handle
 			// the goto prior to returning to us?  So the last parameter is omitted:
-			result = jump_target->ExecUntil(UNTIL_RETURN, NULL, NULL);
+			result = jump_to_label->Execute();
 			// Must do these return conditions in this specific order:
 			if (result == FAIL || result == EARLY_EXIT)
 				return result;
@@ -8639,26 +8661,28 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 			// A single goto can cause an infinite loop if misused, so be sure to do this to
 			// prevent the program from hanging:
 			++g_script.mLinesExecutedThisCycle;
-			if (   !(jump_target = line->mRelatedLine)   )
+			if (   !(jump_to_label = (Label *)line->mRelatedLine)   )
 				// The label is a dereference, otherwise it would have been resolved at load-time.
 				// So send true because we don't want to update its mRelatedLine.  This is because
 				// we want to resolve the label every time through the loop in case the variable
 				// that contains the label changes, e.g. Gosub, %MyLabel%
-				if (   !(jump_target = line->GetJumpTarget(true))   )
+				if (   !(jump_to_label = line->GetJumpTarget(true))   )
 					return FAIL; // Error was already displayed by called function.
+			// Now that the Goto is certain to occur:
+			g.CurrentLabel = jump_to_label; // v1.0.46.16: Support A_ThisLabel.
 			// One or both of these lines can be NULL.  But the preparser should have
 			// ensured that all we need to do is a simple compare to determine
 			// whether this Goto should be handled by this layer or its caller
 			// (i.e. if this Goto's target is not in our nesting level, it MUST be the
 			// caller's responsibility to either handle it or pass it on to its
 			// caller).
-			if (aMode == ONLY_ONE_LINE || line->mParentLine != jump_target->mParentLine)
+			if (aMode == ONLY_ONE_LINE || line->mParentLine != jump_to_label->mJumpToLine->mParentLine)
 			{
-				caller_jump_to_line = jump_target; // Tell the caller to handle this jump.
+				caller_jump_to_line = jump_to_label->mJumpToLine; // Tell the caller to handle this jump.
 				return OK;
 			}
 			// Otherwise, we will handle this Goto since it's in our nesting layer:
-			line = jump_target;
+			line = jump_to_label->mJumpToLine;
 			continue;  // Resume looping starting at the above line.  "continue" is actually slight faster than "break" in these cases.
 
 		case ACT_GROUPACTIVATE: // Similar to ACT_GOSUB, which is why this section is here rather than in Perform().
@@ -8671,16 +8695,16 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 			if (group)
 			{
 				// Note: This will take care of DoWinDelay if needed:
-				group->Activate(*ARG2 && !stricmp(ARG2, "R"), NULL, (void **)&jump_target);
-				if (jump_target)
+				group->Activate(*ARG2 && !stricmp(ARG2, "R"), NULL, &jump_to_label);
+				if (jump_to_label)
 				{
-					if (!line->IsJumpValid(jump_target))
+					if (!line->IsJumpValid(*jump_to_label))
 						// This check probably isn't necessary since IsJumpValid() is mostly
 						// for Goto's.  But just in case the gosub's target label is some
 						// crazy place:
 						return FAIL;
 					// This section is just like the Gosub code above, so maintain them together.
-					result = jump_target->ExecUntil(UNTIL_RETURN, NULL, NULL);
+					result = jump_to_label->Execute();
 					if (result == FAIL || result == EARLY_EXIT)
 						return result;
 				}
@@ -8754,7 +8778,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 					else
 					{
 						root_key_type = RegConvertRootKey(ARG1);
-						attr = root_key_type ? ATTR_LOOP_REG : ATTR_LOOP_FILE;
+						attr = root_key_type ? ATTR_LOOP_REG : ATTR_LOOP_FILEPATTERN;
 					}
 					break;
 				default: // 2 or more args.
@@ -8768,58 +8792,35 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 					else
 					{
 						root_key_type = RegConvertRootKey(ARG1);
-						attr = root_key_type ? ATTR_LOOP_REG : ATTR_LOOP_FILE;
+						attr = root_key_type ? ATTR_LOOP_REG : ATTR_LOOP_FILEPATTERN;
 					}
 				}
 			}
 
+			// HANDLE ANY ERROR CONDITIONS THAT CAN ABORT THE LOOP:
 			FileLoopModeType file_loop_mode;
 			bool recurse_subfolders;
-			bool is_infinite = false; // Set default early to improve maintainability. "is_infinite" is more maintainable and future-proof than using LLONG_MAX to simulate an infinite loop. Plus it gives peace-of-mind and the LLONG_MAX method doesn't measurably improve benchmarks.
-			__int64 iteration_limit;
-
-			if (attr == ATTR_LOOP_NORMAL)
+			if (attr == ATTR_LOOP_FILEPATTERN)
 			{
-				file_loop_mode = FILE_LOOP_INVALID; // This signals PerformLoop() that its a normal loop vs. file-pattern loop.
-				recurse_subfolders = false; // Avoids debug-mode's "used without having been defined" (though it's merely passed as a parameter, not ever used in this case).
-				if (line->mArgc > 0) // At least one parameter is present.
-				{
-					iteration_limit = ATOI64(ARG1);
-					if (line->mActionType == ACT_REPEAT && !iteration_limit)
-						is_infinite = true; // Because a 0 means infinite in AutoIt2 for the REPEAT command.
-					// else if it's negative, zero iterations will be performed automatically.
-				}
-				else // It's either ACT_REPEAT or an ACT_LOOP without parameters.
-				{
-					is_infinite = true;  // Override the default set earlier.
-					iteration_limit = 0; // Avoids debug-mode's "used without having been defined" (though it's merely passed as a parameter, not ever used in this case).
-				}
+				file_loop_mode = (line->mArgc <= 1) ? FILE_LOOP_FILES_ONLY : ConvertLoopMode(ARG2);
+				if (file_loop_mode == FILE_LOOP_INVALID)
+					return line->LineError(ERR_PARAM2_INVALID ERR_ABORT, FAIL, ARG2);
+				recurse_subfolders = (*ARG3 == '1' && !*(ARG3 + 1));
 			}
-			else // attr != ATTR_LOOP_NORMAL
+			else if (attr == ATTR_LOOP_REG)
 			{
-				iteration_limit = 0; // Must be set to zero at least for ATTR_LOOP_FILE because some things rely on such loops always being beyond their iteration limit so that other criteria take effect rather than getting short-circuited.
-				if (attr == ATTR_LOOP_FILE)
-				{
-					file_loop_mode = (line->mArgc <= 1) ? FILE_LOOP_FILES_ONLY : ConvertLoopMode(ARG2);
-					if (file_loop_mode == FILE_LOOP_INVALID)
-						return line->LineError(ERR_PARAM2_INVALID ERR_ABORT, FAIL, ARG2);
-					recurse_subfolders = (*ARG3 == '1' && !*(ARG3 + 1));
-				}
-				else if (attr == ATTR_LOOP_REG)
-				{
-					file_loop_mode = (line->mArgc <= 2) ? FILE_LOOP_FILES_ONLY : ConvertLoopMode(ARG3);
-					if (file_loop_mode == FILE_LOOP_INVALID)
-						return line->LineError(ERR_PARAM3_INVALID ERR_ABORT, FAIL, ARG3);
-					recurse_subfolders = (*ARG4 == '1' && !*(ARG4 + 1));
-				}
+				file_loop_mode = (line->mArgc <= 2) ? FILE_LOOP_FILES_ONLY : ConvertLoopMode(ARG3);
+				if (file_loop_mode == FILE_LOOP_INVALID)
+					return line->LineError(ERR_PARAM3_INVALID ERR_ABORT, FAIL, ARG3);
+				recurse_subfolders = (*ARG4 == '1' && !*(ARG4 + 1));
 			}
 
-			// Now that it's certain the loop will launch (i.e. there was no error or early return above),
-			// it's safe to make changes to global things like g.mLoopIteration.
-			bool continue_main_loop = false; // Init prior to below call.
-			jump_to_line = NULL; // Init prior to below call.
+			// ONLY AFTER THE ABOVE IS IT CERTAIN THE LOOP WILL LAUNCH (i.e. there was no error or early return).
+			// So only now is it safe to make changes to global things like g.mLoopIteration.
+			bool continue_main_loop = false; // Init these output parameters prior to starting each type of loop.
+			jump_to_line = NULL;             //
 
-			// BACK UP THE OUTER LOOP'S A_LOOPXXX VARIABLES:
+			// IN CASE THERE'S AN OUTER LOOP ENCLOSING THIS ONE, BACK UP THE A_LOOPXXX VARIABLES:
 			loop_iteration = g.mLoopIteration;
 			loop_file = g.mLoopFile;
 			loop_reg_item = g.mLoopRegItem;
@@ -8834,20 +8835,37 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 			g.mLoopIteration = 1;
 
 			// PERFORM THE LOOP:
-			if (attr == ATTR_LOOP_PARSE)
+			switch ((size_t)attr)
 			{
+			case ATTR_LOOP_NORMAL: // Listed first for performance.
+				bool is_infinite; // "is_infinite" is more maintainable and future-proof than using LLONG_MAX to simulate an infinite loop. Plus it gives peace-of-mind and the LLONG_MAX method doesn't measurably improve benchmarks (nor does BOOL vs. bool).
+				__int64 iteration_limit;
+				if (line->mArgc > 0) // At least one parameter is present.
+				{
+					// Note that a 0 means infinite in AutoIt2 for the REPEAT command; so the following handles
+					// that too.
+					iteration_limit = ATOI64(ARG1); // If it's negative, zero iterations will be performed automatically.
+					is_infinite = (line->mActionType == ACT_REPEAT && !iteration_limit);
+				}
+				else // It's either ACT_REPEAT or an ACT_LOOP without parameters.
+				{
+					iteration_limit = 0; // Avoids debug-mode's "used without having been defined" (though it's merely passed as a parameter, not ever used in this case).
+					is_infinite = true;  // Override the default set earlier.
+				}
+				result = line->PerformLoop(apReturnValue, continue_main_loop, jump_to_line
+					, iteration_limit, is_infinite);
+				break;
+			case ATTR_LOOP_PARSE:
 				// The phrase "csv" is unique enough since user can always rearrange the letters
 				// to do a literal parse using C, S, and V as delimiters:
 				if (stricmp(ARG3, "CSV"))
 					result = line->PerformLoopParse(apReturnValue, continue_main_loop, jump_to_line);
 				else
 					result = line->PerformLoopParseCSV(apReturnValue, continue_main_loop, jump_to_line);
-			}
-			else if (attr == ATTR_LOOP_READ_FILE)
-			{
-				// Open the input file:
-				FILE *read_file = fopen(ARG2, "r");
-				if (read_file)
+				break;
+			case ATTR_LOOP_READ_FILE:
+				FILE *read_file;
+				if (read_file = fopen(ARG2, "r"))
 				{
 					result = line->PerformLoopReadFile(apReturnValue, continue_main_loop, jump_to_line, read_file, ARG3);
 					fclose(read_file);
@@ -8858,16 +8876,18 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 					// of ErrorLevel, perhaps changing its value too often when the user would want
 					// it saved -- in any case, changing that now might break existing scripts).
 					result = OK;
-			}
-			else if (attr == ATTR_LOOP_REG)
-			{
+				break;
+			case ATTR_LOOP_FILEPATTERN:
+				result = line->PerformLoopFilePattern(apReturnValue, continue_main_loop, jump_to_line, file_loop_mode
+					, recurse_subfolders, ARG1);
+				break;
+			case ATTR_LOOP_REG:
 				// This isn't the most efficient way to do things (e.g. the repeated calls to
 				// RegConvertRootKey()), but it the simplest way for now.  Optimization can
 				// be done at a later time:
 				bool is_remote_registry;
-				// This will open the key if it's remote:
-				HKEY root_key = RegConvertRootKey(ARG1, &is_remote_registry);
-				if (root_key)
+				HKEY root_key;
+				if (root_key = RegConvertRootKey(ARG1, &is_remote_registry)) // This will open the key if it's remote.
 				{
 					// root_key_type needs to be passed in order to support GetLoopRegKey():
 					result = line->PerformLoopReg(apReturnValue, continue_main_loop, jump_to_line, file_loop_mode
@@ -8882,10 +8902,8 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 					// of ErrorLevel, perhaps changing its value too often when the user would want
 					// it saved.  But in any case, changing that now might break existing scripts).
 					result = OK;
+				break;
 			}
-			else // All other loops types are handled this way:
-				result = line->PerformLoop(apReturnValue, continue_main_loop, jump_to_line, file_loop_mode
-					, recurse_subfolders, ARG1, iteration_limit, is_infinite);
 
 			// RESTORE THE PREVIOUS A_LOOPXXX VARIABLES.  If there isn't an outer loop, this will set them
 			// all to NULL/0, which is the most proper and also in keeping with historical behavior.
@@ -9411,126 +9429,145 @@ ResultType Line::EvaluateCondition() // __forceinline on this reduces benchmarks
 
 
 ResultType Line::PerformLoop(char **apReturnValue, bool &aContinueMainLoop, Line *&aJumpToLine
-	, FileLoopModeType aFileLoopMode, bool aRecurseSubfolders, char *aFilePattern
-	, __int64 aIterationLimit, bool aIsInfinite)
+	, __int64 aIterationLimit, bool aIsInfinite) // bool performs better than BOOL in current benchmarks for this.
+// This performs much better (by at least 7%) as a function than as inline code, probably because
+// it's only called to set up the loop, not each time through the loop.
+{
+	ResultType result;
+	Line *jump_to_line;
+	for (; aIsInfinite || g.mLoopIteration <= aIterationLimit; ++g.mLoopIteration)
+	{
+		// Execute once the body of the loop (either just one statement or a block of statements).
+		// Preparser has ensured that every LOOP has a non-NULL next line.
+		result = mNextLine->ExecUntil(ONLY_ONE_LINE, apReturnValue, &jump_to_line);
+		if (result == LOOP_BREAK || result == EARLY_RETURN || result == EARLY_EXIT || result == FAIL)
+		{
+			// Although ExecUntil() will treat the LOOP_BREAK result identically to OK, we
+			// need to return LOOP_BREAK in case our caller is another instance of this
+			// same function (i.e. due to recursing into subfolders):
+			return result;
+		}
+		if (jump_to_line)
+		{
+			if (jump_to_line == this)
+				// Since this LOOP's ExecUntil() encountered a Goto whose target is the LOOP
+				// itself, continue with the for-loop without moving to a different
+				// line.  Also: stay in this recursion layer even if aMode == ONLY_ONE_LINE
+				// because we don't want the caller handling it because then it's cleanup
+				// to jump to its end-point (beyond its own and any unowned elses) won't work.
+				// Example:
+				// if x  <-- If this layer were to do it, its own else would be unexpectedly encountered.
+				//    label1:
+				//    loop  <-- We want this statement's layer to handle the goto.
+				//       goto, label1
+				// else
+				//   ...
+				// Also, signal all our callers to return until they get back to the original
+				// ExecUntil() instance that started the loop:
+				aContinueMainLoop = true;
+			else // jump_to_line must be a line that's at the same level or higher as our Exec_Until's LOOP statement itself.
+				aJumpToLine = jump_to_line; // Signal the caller to handle this jump.
+			break;
+		}
+		// Otherwise, the result of executing the body of the loop, above, was either OK
+		// (the current iteration completed normally) or LOOP_CONTINUE (the current loop
+		// iteration was cut short).  In both cases, just continue on through the loop.
+	} // for()
+
+	// The script's loop is now over.
+	return OK;
+}
+
+
+
+ResultType Line::PerformLoopFilePattern(char **apReturnValue, bool &aContinueMainLoop, Line *&aJumpToLine
+	, FileLoopModeType aFileLoopMode, bool aRecurseSubfolders, char *aFilePattern)
 // Note: Even if aFilePattern is just a directory (i.e. with not wildcard pattern), it seems best
 // not to append "\\*.*" to it because the pattern might be a script variable that the user wants
 // to conditionally resolve to various things at runtime.  In other words, it's valid to have
 // only a single directory be the target of the loop.
 {
+	// Make a local copy of the path given in aFilePattern because as the lines of
+	// the loop are executed, the deref buffer (which is what aFilePattern might
+	// point to if we were called from ExecUntil()) may be overwritten --
+	// and we will need the path string for every loop iteration.  We also need
+	// to determine naked_filename_or_pattern:
+	char file_path[MAX_PATH], naked_filename_or_pattern[MAX_PATH]; // Giving +3 extra for "*.*" seems fairly pointless because any files that actually need that extra room would fail to be retrieved by FindFirst/Next due to their inability to support paths much over 256.
+	size_t file_path_length;
+	strlcpy(file_path, aFilePattern, sizeof(file_path));
+	char *last_backslash = strrchr(file_path, '\\');
+	if (last_backslash)
+	{
+		strcpy(naked_filename_or_pattern, last_backslash + 1); // Naked filename.  No danger of overflow due size of src vs. dest.
+		*(last_backslash + 1) = '\0';  // Convert file_path to be the file's path, but use +1 to retain the final backslash on the string.
+		file_path_length = strlen(file_path);
+	}
+	else
+	{
+		strcpy(naked_filename_or_pattern, file_path); // No danger of overflow due size of src vs. dest.
+		*file_path = '\0'; // There is no path, so make it empty to use current working directory.
+		file_path_length = 0;
+	}
+
 	// g.mLoopFile is the current file of the file-loop that encloses this file-loop, if any.
 	// The below is our own current_file, which will take precedence over g.mLoopFile if this
 	// loop is a file-loop:
-	WIN32_FIND_DATA new_current_file;
 	BOOL file_found;
-	HANDLE file_search;
-	char file_path[MAX_PATH], naked_filename_or_pattern[MAX_PATH]; // Giving +3 extra for "*.*" seems fairly pointless because any files that actually need that extra room would fail to be retrieved by FindFirst/Next due to their inability to support paths much over 256.
-	size_t file_path_length;
-
-	if (aFileLoopMode != FILE_LOOP_INVALID) // This is a file-pattern loop (ATTR_LOOP_FILE).
-	{
-		// Make a local copy of the path given in aFilePattern because as the lines of
-		// the loop are executed, the deref buffer (which is what aFilePattern might
-		// point to if we were called from ExecUntil()) may be overwritten --
-		// and we will need the path string for every loop iteration.  We also need
-		// to determine naked_filename_or_pattern:
-		strlcpy(file_path, aFilePattern, sizeof(file_path));
-		char *last_backslash = strrchr(file_path, '\\');
-		if (last_backslash)
-		{
-			strcpy(naked_filename_or_pattern, last_backslash + 1); // Naked filename.  No danger of overflow due size of src vs. dest.
-			*(last_backslash + 1) = '\0';  // Convert file_path to be the file's path, but use +1 to retain the final backslash on the string.
-			file_path_length = strlen(file_path);
-		}
-		else
-		{
-			strcpy(naked_filename_or_pattern, file_path); // No danger of overflow due size of src vs. dest.
-			*file_path = '\0'; // There is no path, so make it empty to use current working directory.
-			file_path_length = 0;
-		}
-
-		file_search = FindFirstFile(aFilePattern, &new_current_file);
-		for ( file_found = (file_search != INVALID_HANDLE_VALUE) // Convert FindFirst's return value into a boolean so that it's compatible with with FindNext's.
-			; file_found && FileIsFilteredOut(new_current_file, aFileLoopMode, file_path, file_path_length)
-			; file_found = FindNextFile(file_search, &new_current_file));
-		// file_found and new_current_file have now been set for use below.
-	}
-	else // Not a file loop, but some of its things still need initializing.
-	{
-		file_found = FALSE;
-		file_search = INVALID_HANDLE_VALUE; // Setting this simplifies the checking in multiple points of return.
-	}
+	WIN32_FIND_DATA new_current_file;
+	HANDLE file_search = FindFirstFile(aFilePattern, &new_current_file);
+	for ( file_found = (file_search != INVALID_HANDLE_VALUE) // Convert FindFirst's return value into a boolean so that it's compatible with with FindNext's.
+		; file_found && FileIsFilteredOut(new_current_file, aFileLoopMode, file_path, file_path_length)
+		; file_found = FindNextFile(file_search, &new_current_file));
+	// file_found and new_current_file have now been set for use below.
 	// Above is responsible for having properly set file_found and file_search.
 
 	ResultType result;
-	Line *jump_to_line = NULL;
-	for (; aIsInfinite || g.mLoopIteration <= aIterationLimit || file_found; ++g.mLoopIteration) // Ordered for short-circuit performance.
+	Line *jump_to_line;
+	for (; file_found; ++g.mLoopIteration)
 	{
-		if (file_found) // inner loop's file takes precedence over outer's.
-			g.mLoopFile = &new_current_file;
-		//else leave g.mLoopFile unchanged so that a file-loop can enclose some other type of inner loop,
-		// and that inner loop will still have access to the outer loop's current file.
+		g.mLoopFile = &new_current_file; // inner file-loop's file takes precedence over any outer file-loop's.
+		// Other types of loops leave g.mLoopFile unchanged so that a file-loop can enclose some other type of
+		// inner loop, and that inner loop will still have access to the outer loop's current file.
 
 		// Execute once the body of the loop (either just one statement or a block of statements).
 		// Preparser has ensured that every LOOP has a non-NULL next line.
 		result = mNextLine->ExecUntil(ONLY_ONE_LINE, apReturnValue, &jump_to_line);
 		if (result == LOOP_BREAK || result == EARLY_RETURN || result == EARLY_EXIT || result == FAIL)
 		{
-			if (file_search != INVALID_HANDLE_VALUE)
-				FindClose(file_search);
+			FindClose(file_search);
 			// Although ExecUntil() will treat the LOOP_BREAK result identically to OK, we
 			// need to return LOOP_BREAK in case our caller is another instance of this
 			// same function (i.e. due to recursing into subfolders):
 			return result;
 		}
-		if (jump_to_line == this)
+		if (jump_to_line) // See comments in PerformLoop() about this section.
 		{
-			// Since this LOOP's ExecUntil() encountered a Goto whose target is the LOOP
-			// itself, continue with the for-loop without moving to a different
-			// line.  Also: stay in this recursion layer even if aMode == ONLY_ONE_LINE
-			// because we don't want the caller handling it because then it's cleanup
-			// to jump to its end-point (beyond its own and any unowned elses) won't work.
-			// Example:
-			// if x  <-- If this layer were to do it, its own else would be unexpectedly encountered.
-			//    label1:
-			//    loop  <-- We want this statement's layer to handle the goto.
-			//       goto, label1
-			// else
-			//   ...
-			// Also, signal all our callers to return until they get back to the original
-			// ExecUntil() instance that started the loop:
-			aContinueMainLoop = true;
-			break;
-		}
-		if (jump_to_line)
-		{
-			// Since the above didn't break, jump_to_line must be a line that's at the
-			// same level or higher as our Exec_Until's LOOP statement itself.
-			// Our ExecUntilCaller must handle the jump in either case:
-			aJumpToLine = jump_to_line; // Signal the caller to handle this jump.
+			if (jump_to_line == this)
+				aContinueMainLoop = true;
+			else
+				aJumpToLine = jump_to_line; // Signal our caller to handle this jump.
 			break;
 		}
 		// Otherwise, the result of executing the body of the loop, above, was either OK
 		// (the current iteration completed normally) or LOOP_CONTINUE (the current loop
 		// iteration was cut short).  In both cases, just continue on through the loop.
-		// But first do any end-of-iteration stuff:
-		if (file_search != INVALID_HANDLE_VALUE)
-			while ((file_found = FindNextFile(file_search, &new_current_file))
-				&& FileIsFilteredOut(new_current_file, aFileLoopMode, file_path, file_path_length)); // Relies on short-circuit boolean order.
-				// Above is a self-contained loop that keeps fetching files until there's no more files, or a file
-				// is found that isn't filtered out.  It also sets file_found and new_current_file for use by the
-				// outer loop.
+		// But first do end-of-iteration steps:
+		while ((file_found = FindNextFile(file_search, &new_current_file))
+			&& FileIsFilteredOut(new_current_file, aFileLoopMode, file_path, file_path_length)); // Relies on short-circuit boolean order.
+			// Above is a self-contained loop that keeps fetching files until there's no more files, or a file
+			// is found that isn't filtered out.  It also sets file_found and new_current_file for use by the
+			// outer loop.
 	} // for()
 
 	// The script's loop is now over.
 	if (file_search != INVALID_HANDLE_VALUE)
 		FindClose(file_search);
 
-	// If it's a file_loop and aRecurseSubfolders is true, we now need to perform the loop's body for
-	// every subfolder to search for more files and folders inside that match aFilePattern.  We can't
-	// do this in the first loop, above, because it may have a restricted file-pattern such as *.txt
-	// and we want to find and recurse into ALL folders:
-	if (aFileLoopMode == FILE_LOOP_INVALID || !aRecurseSubfolders) // Not a file-pattern loop, or it is but it's not recursing.
+	// If aRecurseSubfolders is true, we now need to perform the loop's body for every subfolder to
+	// search for more files and folders inside that match aFilePattern.  We can't do this in the
+	// first loop, above, because it may have a restricted file-pattern such as *.txt and we want to
+	// find and recurse into ALL folders:
+	if (!aRecurseSubfolders) // No need to continue into the "recurse" section.
 		return OK;
 
 	// Since above didn't return, this is a file-loop and recursion into sub-folders has been requested.
@@ -9567,8 +9604,7 @@ ResultType Line::PerformLoop(char **apReturnValue, bool &aContinueMainLoop, Line
 		// its first loop iteration.  This is because this directory is being recursed into, not
 		// processed itself as a file-loop item (since this was already done in the first loop,
 		// above, if its name matches the original search pattern):
-		result = PerformLoop(apReturnValue, aContinueMainLoop, aJumpToLine, aFileLoopMode, aRecurseSubfolders
-			, file_path, aIterationLimit, aIsInfinite);
+		result = PerformLoopFilePattern(apReturnValue, aContinueMainLoop, aJumpToLine, aFileLoopMode, aRecurseSubfolders, file_path);
 		// result should never be LOOP_CONTINUE because the above call to PerformLoop() should have
 		// handled that case.  However, it can be LOOP_BREAK if it encoutered the break command.
 		if (result == LOOP_BREAK || result == EARLY_RETURN || result == EARLY_EXIT || result == FAIL)
@@ -9631,14 +9667,12 @@ ResultType Line::PerformLoopReg(char **apReturnValue, bool &aContinueMainLoop, L
 			RegCloseKey(hRegKey);\
 			return result;\
 		}\
-		if (jump_to_line == this)\
-		{\
-			aContinueMainLoop = true;\
-			break;\
-		}\
 		if (jump_to_line)\
 		{\
-			aJumpToLine = jump_to_line;\
+			if (jump_to_line == this)\
+				aContinueMainLoop = true;\
+			else\
+				aJumpToLine = jump_to_line;\
 			break;\
 		}\
 	}
@@ -9652,7 +9686,7 @@ ResultType Line::PerformLoopReg(char **apReturnValue, bool &aContinueMainLoop, L
 		reg_item.InitForValues();
 		// Going in reverse order allows values to be deleted without disrupting the enumeration,
 		// at least in some cases:
-		for (i = count_values - 1, jump_to_line = NULL;; --i) 
+		for (i = count_values - 1;; --i) 
 		{ 
 			// Don't use CONTINUE in loops such as this due to the loop-ending condition being explicitly
 			// checked at the bottom.
@@ -9679,7 +9713,7 @@ ResultType Line::PerformLoopReg(char **apReturnValue, bool &aContinueMainLoop, L
 	// at least in some cases:
 	reg_item.InitForSubkeys();
 	char subkey_full_path[MAX_REG_ITEM_LENGTH + 1]; // But doesn't include the root key name, which is not only by design but testing shows that if it did, the length could go over 260.
-	for (i = count_subkeys - 1, jump_to_line = NULL;; --i) // Will have zero iterations if there are no subkeys.
+	for (i = count_subkeys - 1;; --i) // Will have zero iterations if there are no subkeys.
 	{
 		// Don't use CONTINUE in loops such as this due to the loop-ending condition being explicitly
 		// checked at the bottom.
@@ -9812,14 +9846,12 @@ ResultType Line::PerformLoopParse(char **apReturnValue, bool &aContinueMainLoop,
 			FREE_PARSE_MEMORY;
 			return result;
 		}
-		if (jump_to_line == this)
+		if (jump_to_line) // See comments in PerformLoop() about this section.
 		{
-			aContinueMainLoop = true;
-			break;
-		}
-		if (jump_to_line)
-		{
-			aJumpToLine = jump_to_line;
+			if (jump_to_line == this)
+				aContinueMainLoop = true;
+			else
+				aJumpToLine = jump_to_line; // Signal our caller to handle this jump.
 			break;
 		}
 		if (!saved_char) // The last item in the list has just been processed, so the loop is done.
@@ -9931,14 +9963,12 @@ ResultType Line::PerformLoopParseCSV(char **apReturnValue, bool &aContinueMainLo
 			FREE_PARSE_MEMORY;
 			return result;
 		}
-		if (jump_to_line == this)
+		if (jump_to_line) // See comments in PerformLoop() about this section.
 		{
-			aContinueMainLoop = true;
-			break;
-		}
-		if (jump_to_line)
-		{
-			aJumpToLine = jump_to_line;
+			if (jump_to_line == this)
+				aContinueMainLoop = true;
+			else
+				aJumpToLine = jump_to_line; // Signal our caller to handle this jump.
 			break;
 		}
 
@@ -9987,14 +10017,12 @@ ResultType Line::PerformLoopReadFile(char **apReturnValue, bool &aContinueMainLo
 				fclose(loop_info.mWriteFile);
 			return result;
 		}
-		if (jump_to_line == this)
+		if (jump_to_line) // See comments in PerformLoop() about this section.
 		{
-			aContinueMainLoop = true;
-			break;
-		}
-		if (jump_to_line)
-		{
-			aJumpToLine = jump_to_line;
+			if (jump_to_line == this)
+				aContinueMainLoop = true;
+			else
+				aJumpToLine = jump_to_line; // Signal our caller to handle this jump.
 			break;
 		}
 	}
@@ -10696,8 +10724,8 @@ __forceinline ResultType Line::Perform() // __forceinline() currently boosts per
 		// to break compatibility or something else:
 		switch(toggle)
 		{
-		case TOGGLED_ON:  g_script.UpdateOrCreateTimer(target_label, "", ARG3, true, false); break;
-		case TOGGLED_OFF: g_script.UpdateOrCreateTimer(target_label, "", ARG3, false, false); break;
+		case TOGGLED_ON:  
+		case TOGGLED_OFF: g_script.UpdateOrCreateTimer(target_label, "", ARG3, toggle == TOGGLED_ON, false); break;
 		// Timer is always (re)enabled when ARG2 specifies a numeric period or is blank + there's no ARG3.
 		// If ARG2 is blank but ARG3 (priority) isn't, tell it to update only the priority and nothing else:
 		default: g_script.UpdateOrCreateTimer(target_label, ARG2, ARG3, true, !*ARG2 && *ARG3);
@@ -10766,24 +10794,19 @@ __forceinline ResultType Line::Perform() // __forceinline() currently boosts per
 		if (   !(group = (WinGroup *)mAttribute)   )
 			if (   !(group = g_script.FindGroup(ARG1, true))   )  // Last parameter -> create-if-not-found.
 				return FAIL;  // It already displayed the error for us.
-		Line *jump_to_line = NULL;
+		target_label = NULL;
 		if (*ARG4)
 		{
-			jump_to_line = mRelatedLine;
-			if (!jump_to_line) // Jump target hasn't been resolved yet, probably due to it being a deref.
-			{
-				Label *label = g_script.FindLabel(ARG4);
-				if (!label)
+			if (   !(target_label = (Label *)mRelatedLine)   ) // Jump target hasn't been resolved yet, probably due to it being a deref.
+				if (   !(target_label = g_script.FindLabel(ARG4))   )
 					return LineError(ERR_NO_LABEL ERR_ABORT, FAIL, ARG4);
-				jump_to_line = label->mJumpToLine; // The script loader has ensured that this can't be NULL.
-			}
 			// Can't do this because the current line won't be the launching point for the
 			// Gosub.  Instead, the launching point will be the GroupActivate rather than the
 			// GroupAdd, so it will be checked by the GroupActivate or not at all (since it's
 			// not that important in the case of a Gosub -- it's mostly for Goto's):
 			//return IsJumpValid(label->mJumpToLine);
 		}
-		return group->AddWindow(ARG2, ARG3, jump_to_line, ARG5, ARG6);
+		return group->AddWindow(ARG2, ARG3, target_label, ARG5, ARG6);
 	}
 
 	// Note ACT_GROUPACTIVATE is handled by ExecUntil(), since it's better suited to do the Gosub.
@@ -11442,7 +11465,7 @@ ResultType Line::Deref(Var *aOutputVar, char *aBuf)
 	// in the script's variable list (due to the fact that they aren't directly referenced elsewhere
 	// in the script):
 	char var_name[MAX_VAR_NAME_LENGTH + 1] = "";
-	Var temp_var(var_name, VAR_NORMAL, false);
+	Var temp_var(var_name, (void *)VAR_NORMAL, false);
 
 	Var *var;
 	VarSizeType expanded_length;
@@ -11546,1271 +11569,6 @@ ResultType Line::Deref(Var *aOutputVar, char *aBuf)
 	*dest = '\0';  // Terminate the output variable.
 	aOutputVar->Length() = (VarSizeType)strlen(aOutputVar->Contents()); // Update to actual in case estimate was too large.
 	return aOutputVar->Close();  // In case it's the clipboard.
-}
-
-
-
-VarSizeType Script::GetBatchLines(char *aBuf)
-{
-	// The BatchLine value can be either a numerical string or a string that ends in "ms".
-	char buf[256];
-	char *target_buf = aBuf ? aBuf : buf;
-	if (g.IntervalBeforeRest > -1) // Have this new method take precedence, if it's in use by the script.
-		sprintf(target_buf, "%dms", g.IntervalBeforeRest); // Not snprintf().
-	else
-		ITOA64(g.LinesPerCycle, target_buf);
-	return (VarSizeType)strlen(target_buf);
-}
-
-VarSizeType Script::GetTitleMatchMode(char *aBuf)
-{
-	if (g.TitleMatchMode == FIND_REGEX) // v1.0.45.
-	{
-		if (aBuf)  // For backward compatibility (due to StringCaseSense), never change the case used here:
-			strcpy(aBuf, "RegEx");
-		return 5; // The length.
-	}
-	// Otherwise, it's a numerical mode:
-	// It's done this way in case it's ever allowed to go beyond a single-digit number.
-	char buf[MAX_NUMBER_SIZE];
-	char *target_buf = aBuf ? aBuf : buf;
-	_itoa(g.TitleMatchMode, target_buf, 10);  // Always output as decimal vs. hex in this case (so that scripts can use "If var in list" with confidence).
-	return (VarSizeType)strlen(target_buf);
-}
-
-VarSizeType Script::GetTitleMatchModeSpeed(char *aBuf)
-{
-	if (aBuf)  // For backward compatibility (due to StringCaseSense), never change the case used here:
-		strcpy(aBuf, g.TitleFindFast ? "Fast" : "Slow");
-	return 4;  // Always length 4
-}
-
-VarSizeType Script::GetDetectHiddenWindows(char *aBuf)
-{
-	if (!aBuf)
-		return 3;  // Room for either On or Off (in the estimation phase).
-	// For backward compatibility (due to StringCaseSense), never change the case used here:
-	return (VarSizeType)strlen(strcpy(aBuf, g.DetectHiddenWindows ? "On" : "Off")); // Fixed in v1.0.42.01 to return exact length (required).
-}
-
-VarSizeType Script::GetDetectHiddenText(char *aBuf)
-{
-	if (!aBuf)
-		return 3;  // Room for either On or Off (in the estimation phase).
-	// For backward compatibility (due to StringCaseSense), never change the case used here:
-	return (VarSizeType)strlen(strcpy(aBuf, g.DetectHiddenText ? "On" : "Off")); // Fixed in v1.0.42.01 to return exact length (required).
-}
-
-VarSizeType Script::GetAutoTrim(char *aBuf)
-{
-	if (!aBuf)
-		return 3;  // Room for either On or Off (in the estimation phase).
-	// For backward compatibility (due to StringCaseSense), never change the case used here:
-	return (VarSizeType)strlen(strcpy(aBuf, g.AutoTrim ? "On" : "Off")); // Fixed in v1.0.42.01 to return exact length (required).
-}
-
-VarSizeType Script::GetStringCaseSense(char *aBuf)
-{
-	if (!aBuf)
-		return 6;  // Room for On, Off, or Locale (in the estimation phase).
-	// For backward compatibility (due to StringCaseSense), never change the case used here.
-	// Fixed in v1.0.42.01 to return exact length (required).
-	return (VarSizeType)strlen(strcpy(aBuf, g.StringCaseSense == SCS_INSENSITIVE ? "Off"
-		: (g.StringCaseSense == SCS_SENSITIVE ? "On" : "Locale")));
-}
-
-VarSizeType Script::GetFormatInteger(char *aBuf)
-{
-	if (aBuf)
-	{
-		// For backward compatibility (due to StringCaseSense), never change the case used here:
-		*aBuf = g.FormatIntAsHex ? 'H' : 'D';
-		*(aBuf + 1) = '\0';
-	}
-	return 1;
-}
-
-VarSizeType Script::GetFormatFloat(char *aBuf)
-{
-	if (!aBuf)
-		return (VarSizeType)strlen(g.FormatFloat);  // Include the extra chars since this is just an estimate.
-	char *str_with_leading_percent_omitted = g.FormatFloat + 1;
-	size_t length = strlen(str_with_leading_percent_omitted);
-	strlcpy(aBuf, str_with_leading_percent_omitted
-		, length + !(length && str_with_leading_percent_omitted[length-1] == 'f')); // Omit the trailing character only if it's an 'f', not any other letter such as the 'e' in "%0.6e" (for backward compatibility).
-	return (VarSizeType)strlen(aBuf); // Must return exact length when aBuf isn't NULL.
-}
-
-VarSizeType Script::GetKeyDelay(char *aBuf)
-{
-	char buf[MAX_NUMBER_SIZE];
-	char *target_buf = aBuf ? aBuf : buf;
-	_itoa(g.KeyDelay, target_buf, 10);  // Always output as decimal vs. hex in this case (so that scripts can use "If var in list" with confidence).
-	return (VarSizeType)strlen(target_buf);
-}
-
-VarSizeType Script::GetWinDelay(char *aBuf)
-{
-	char buf[MAX_NUMBER_SIZE];
-	char *target_buf = aBuf ? aBuf : buf;
-	_itoa(g.WinDelay, target_buf, 10);  // Always output as decimal vs. hex in this case (so that scripts can use "If var in list" with confidence).
-	return (VarSizeType)strlen(target_buf);
-}
-
-VarSizeType Script::GetControlDelay(char *aBuf)
-{
-	char buf[MAX_NUMBER_SIZE];
-	char *target_buf = aBuf ? aBuf : buf;
-	_itoa(g.ControlDelay, target_buf, 10);  // Always output as decimal vs. hex in this case (so that scripts can use "If var in list" with confidence).
-	return (VarSizeType)strlen(target_buf);
-}
-
-VarSizeType Script::GetMouseDelay(char *aBuf)
-{
-	char buf[MAX_NUMBER_SIZE];
-	char *target_buf = aBuf ? aBuf : buf;
-	_itoa(g.MouseDelay, target_buf, 10);  // Always output as decimal vs. hex in this case (so that scripts can use "If var in list" with confidence).
-	return (VarSizeType)strlen(target_buf);
-}
-
-VarSizeType Script::GetDefaultMouseSpeed(char *aBuf)
-{
-	char buf[MAX_NUMBER_SIZE];
-	char *target_buf = aBuf ? aBuf : buf;
-	_itoa(g.DefaultMouseSpeed, target_buf, 10);  // Always output as decimal vs. hex in this case (so that scripts can use "If var in list" with confidence).
-	return (VarSizeType)strlen(target_buf);
-}
-
-VarSizeType Script::ScriptGetLastError(char *aBuf)
-{
-	char buf[MAX_NUMBER_SIZE];
-	char *target_buf = aBuf ? aBuf : buf;
-	_itoa(g.LastError, target_buf, 10);  // Always output as decimal vs. hex in this case (so that scripts can use "If var in list" with confidence).
-	return (VarSizeType)strlen(target_buf);
-}
-
-
-
-VarSizeType Script::GetIconHidden(char *aBuf)
-{
-	if (aBuf)
-	{
-		*aBuf = g_NoTrayIcon ? '1' : '0';
-		*(aBuf + 1) = '\0';
-	}
-	return 1;  // Length is always 1.
-}
-
-VarSizeType Script::GetIconTip(char *aBuf)
-{
-	if (!aBuf)
-		return g_script.mTrayIconTip ? (VarSizeType)strlen(g_script.mTrayIconTip) : 0;
-	if (g_script.mTrayIconTip)
-		return (VarSizeType)strlen(strcpy(aBuf, g_script.mTrayIconTip));
-	else
-	{
-		*aBuf = '\0';
-		return 0;
-	}
-}
-
-VarSizeType Script::GetIconFile(char *aBuf)
-{
-	if (!aBuf)
-		return g_script.mCustomIconFile ? (VarSizeType)strlen(g_script.mCustomIconFile) : 0;
-	if (g_script.mCustomIconFile)
-		return (VarSizeType)strlen(strcpy(aBuf, g_script.mCustomIconFile));
-	else
-	{
-		*aBuf = '\0';
-		return 0;
-	}
-}
-
-VarSizeType Script::GetIconNumber(char *aBuf)
-{
-	char buf[MAX_NUMBER_SIZE];
-	char *target_buf = aBuf ? aBuf : buf;
-	if (!g_script.mCustomIconNumber) // Yield an empty string rather than the digit "0".
-	{
-		*target_buf = '\0';
-		return 0;
-	}
-	return (VarSizeType)strlen(UTOA(g_script.mCustomIconNumber, target_buf));
-}
-
-
-
-VarSizeType Script::GetExitReason(char *aBuf)
-{
-	char *str;
-	switch(mExitReason)
-	{
-	case EXIT_LOGOFF: str = "Logoff"; break;
-	case EXIT_SHUTDOWN: str = "Shutdown"; break;
-	// Since the below are all relatively rare, except WM_CLOSE perhaps, they are all included
-	// as one word to cut down on the number of possible words (it's easier to write OnExit
-	// routines to cover all possibilities if there are fewer of them).
-	case EXIT_WM_QUIT:
-	case EXIT_CRITICAL:
-	case EXIT_DESTROY:
-	case EXIT_WM_CLOSE: str = "Close"; break;
-	case EXIT_ERROR: str = "Error"; break;
-	case EXIT_MENU: str = "Menu"; break;  // Standard menu, not a user-defined menu.
-	case EXIT_EXIT: str = "Exit"; break;  // ExitApp or Exit command.
-	case EXIT_RELOAD: str = "Reload"; break;
-	case EXIT_SINGLEINSTANCE: str = "Single"; break;
-	default:  // EXIT_NONE or unknown value (unknown would be considered a bug if it ever happened).
-		str = "";
-	}
-	if (aBuf)
-		strcpy(aBuf, str);
-	return (VarSizeType)strlen(str);
-}
-
-
-
-VarSizeType Script::GetSpace(VarTypeType aType, char *aBuf)
-{
-	if (aBuf)
-	{
-		*(aBuf++) = aType == VAR_SPACE ? ' ' : '\t';
-		*aBuf = '\0';
-	}
-	return 1;
-}
-
-VarSizeType Script::GetAhkVersion(char *aBuf)
-{
-	if (aBuf)
-		strcpy(aBuf, NAME_VERSION);
-	return (VarSizeType)strlen(NAME_VERSION);
-}
-
-VarSizeType Script::GetAhkPath(char *aBuf) // v1.0.41.
-{
-#ifdef AUTOHOTKEYSC
-	if (aBuf)
-	{
-		GetAHKInstallDir(aBuf);
-		if (*aBuf)
-		{
-			char *cp = aBuf + strlen(aBuf); // Position of terminator.
-			// Name "AutoHotkey.exe" is assumed for code size reduction and because it's not stored in the registry:
-			strlcpy(cp, "\\AutoHotkey.exe", MAX_PATH - (cp - aBuf)); // strlcpy() in case registry has a path that is too close to MAX_PATH to fit AutoHotkey.exe
-		}
-		//else leave it blank as documented.
-		return (VarSizeType)strlen(aBuf);
-	}
-	// Otherwise: Always return an estimate of MAX_PATH in case the registry entry changes between the
-	// first call and the second.  This is also relied upon by strlcpy() above, which zero-fills the tail
-	// of the destination up through the limit of its capacity (due to calling strncpy, which does this).
-	return MAX_PATH;
-#else
-	char buf[MAX_PATH];
-	return (VarSizeType)GetModuleFileName(NULL, aBuf ? aBuf : buf, MAX_PATH);
-#endif
-}
-
-
-
-// Confirmed: The below will all automatically use the local time (not UTC) when 3rd param is NULL.
-VarSizeType Script::GetMMMM(char *aBuf)
-{
-	return (VarSizeType)(GetDateFormat(LOCALE_USER_DEFAULT, 0, NULL, "MMMM", aBuf, aBuf ? 999 : 0) - 1);
-}
-
-VarSizeType Script::GetMMM(char *aBuf)
-{
-	return (VarSizeType)(GetDateFormat(LOCALE_USER_DEFAULT, 0, NULL, "MMM", aBuf, aBuf ? 999 : 0) - 1);
-}
-
-VarSizeType Script::GetDDDD(char *aBuf)
-{
-	return (VarSizeType)(GetDateFormat(LOCALE_USER_DEFAULT, 0, NULL, "dddd", aBuf, aBuf ? 999 : 0) - 1);
-}
-
-VarSizeType Script::GetDDD(char *aBuf)
-{
-	return (VarSizeType)(GetDateFormat(LOCALE_USER_DEFAULT, 0, NULL, "ddd", aBuf, aBuf ? 999 : 0) - 1);
-}
-
-
-
-VarSizeType Script::MyGetTickCount(char *aBuf)
-{
-	// UPDATE: The below comments are now obsolete in light of having switched over to
-	// using 64-bit integers (which aren't that much slower than 32-bit on 32-bit hardware):
-	// Known limitation:
-	// Although TickCount is an unsigned value, I'm not sure that our EnvSub command
-	// will properly be able to compare two tick-counts if either value is larger than
-	// INT_MAX.  So if the system has been up for more than about 25 days, there might be
-	// problems if the user tries compare two tick-counts in the script using EnvSub.
-	// UPDATE: It seems better to store all unsigned values as signed within script
-	// variables.  Otherwise, when the var's value is next accessed and converted using
-	// ATOI(), the outcome won't be as useful.  In other words, since the negative value
-	// will be properly converted by ATOI(), comparing two negative tickcounts works
-	// correctly (confirmed).  Even if one of them is negative and the other positive,
-	// it will probably work correctly due to the nature of implicit unsigned math.
-	// Thus, we use %d vs. %u in the snprintf() call below.
-	if (!aBuf)
-		return MAX_NUMBER_LENGTH; // IMPORTANT: Conservative estimate because tick might change between 1st & 2nd calls.
-	return (VarSizeType)strlen(ITOA64(GetTickCount(), aBuf));
-}
-
-
-
-VarSizeType Script::GetNow(char *aBuf)
-{
-	if (!aBuf)
-		return DATE_FORMAT_LENGTH;
-	SYSTEMTIME st;
-	GetLocalTime(&st);
-	SystemTimeToYYYYMMDD(aBuf, st);
-	return (VarSizeType)strlen(aBuf);
-}
-
-VarSizeType Script::GetNowUTC(char *aBuf)
-{
-	if (!aBuf)
-		return DATE_FORMAT_LENGTH;
-	SYSTEMTIME st;
-	GetSystemTime(&st);
-	SystemTimeToYYYYMMDD(aBuf, st);
-	return (VarSizeType)strlen(aBuf);
-}
-
-
-
-VarSizeType Script::GetOSType(char *aBuf)
-{
-	char *type = g_os.IsWinNT() ? "WIN32_NT" : "WIN32_WINDOWS";
-	if (aBuf)
-		strcpy(aBuf, type);
-	return (VarSizeType)strlen(type); // Return length of type, not aBuf.
-}
-
-VarSizeType Script::GetOSVersion(char *aBuf)
-{
-	char *version = "";  // Init in case OS is something later than Win2003.
-	if (g_os.IsWinNT()) // "NT" includes all NT-kernal OSes: NT4/2000/XP/2003/Vista.
-	{
-		if (g_os.IsWinXP())
-			version = "WIN_XP";
-		else if (g_os.IsWinVista())
-			version = "WIN_VISTA";
-		else if (g_os.IsWin2003())
-			version = "WIN_2003";
-		else
-		{
-			if (g_os.IsWin2000())
-				version = "WIN_2000";
-			else
-				version = "WIN_NT4";
-		}
-	}
-	else
-	{
-		if (g_os.IsWin95())
-			version = "WIN_95";
-		else
-		{
-			if (g_os.IsWin98())
-				version = "WIN_98";
-			else
-				version = "WIN_ME";
-		}
-	}
-	if (aBuf)
-		strcpy(aBuf, version);
-	return (VarSizeType)strlen(version); // Always return the length of version, not aBuf.
-}
-
-VarSizeType Script::GetLanguage(char *aBuf)
-// Registry locations from J-Paul Mesnage.
-{
-	char buf[MAX_PATH];
-	char *target_buf = aBuf ? aBuf : buf;
-	if (g_os.IsWinNT())  // NT/2k/XP+
-	{
-		if (g_os.IsWin2000orLater())
-			ReadRegString(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Nls\\Language", "InstallLanguage", target_buf, MAX_PATH);
-		else // NT4
-			ReadRegString(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Nls\\Language", "Default", target_buf, MAX_PATH);
-	}
-	else // Win9x
-	{
-		ReadRegString(HKEY_USERS, ".DEFAULT\\Control Panel\\Desktop\\ResourceLocale", "", target_buf, MAX_PATH);
-		memmove(target_buf, target_buf + 4, strlen(target_buf + 4) + 1); // +1 to include the zero terminator.
-	}
-	return (VarSizeType)strlen(target_buf);
-}
-
-VarSizeType Script::GetUserOrComputer(bool aGetUser, char *aBuf)
-{
-	char buf[MAX_PATH];  // Doesn't use MAX_COMPUTERNAME_LENGTH + 1 in case longer names are allowed in the future.
-	char *target_buf = aBuf ? aBuf : buf;
-	DWORD buf_size = MAX_PATH;
-	if (   !(aGetUser ? GetUserName(target_buf, &buf_size) : GetComputerName(target_buf, &buf_size))   )
-		*target_buf = '\0';
-	return (VarSizeType)strlen(target_buf);
-}
-
-
-
-VarSizeType Script::GetProgramFiles(char *aBuf)
-{
-	char buf[MAX_PATH];
-	char *target_buf = aBuf ? aBuf : buf;
-	ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion", "ProgramFilesDir", target_buf, MAX_PATH);
-	return (VarSizeType)strlen(target_buf);
-}
-
-VarSizeType Script::GetAppData(bool aGetCommon, char *aBuf)
-{
-	char buf[MAX_PATH]; // One caller relies on this being explicitly limited to MAX_PATH.
-	char *target_buf = aBuf ? aBuf : buf;
-	*target_buf = '\0'; // Set default.
-	if (aGetCommon)
-		ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders"
-			, "Common AppData", target_buf, MAX_PATH);
-	if (!*target_buf) // Either the above failed or we were told to get the user/private dir instead.
-		ReadRegString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders"
-			, "AppData", target_buf, MAX_PATH);
-	return (VarSizeType)strlen(target_buf);
-}
-
-VarSizeType Script::GetDesktop(bool aGetCommon, char *aBuf)
-{
-	char buf[MAX_PATH];
-	char *target_buf = aBuf ? aBuf : buf;
-	*target_buf = '\0'; // Set default.
-	if (aGetCommon)
-		ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Desktop", target_buf, MAX_PATH);
-	if (!*target_buf) // Either the above failed or we were told to get the user/private dir instead.
-		ReadRegString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Desktop", target_buf, MAX_PATH);
-	return (VarSizeType)strlen(target_buf);
-}
-
-VarSizeType Script::GetStartMenu(bool aGetCommon, char *aBuf)
-{
-	char buf[MAX_PATH];
-	char *target_buf = aBuf ? aBuf : buf;
-	*target_buf = '\0'; // Set default.
-	if (aGetCommon)
-		ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Start Menu", target_buf, MAX_PATH);
-	if (!*target_buf) // Either the above failed or we were told to get the user/private dir instead.
-		ReadRegString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Start Menu", target_buf, MAX_PATH);
-	return (VarSizeType)strlen(target_buf);
-}
-
-VarSizeType Script::GetPrograms(bool aGetCommon, char *aBuf)
-{
-	char buf[MAX_PATH];
-	char *target_buf = aBuf ? aBuf : buf;
-	*target_buf = '\0'; // Set default.
-	if (aGetCommon)
-		ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Programs", target_buf, MAX_PATH);
-	if (!*target_buf) // Either the above failed or we were told to get the user/private dir instead.
-		ReadRegString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Programs", target_buf, MAX_PATH);
-	return (VarSizeType)strlen(target_buf);
-}
-
-VarSizeType Script::GetStartup(bool aGetCommon, char *aBuf)
-{
-	char buf[MAX_PATH];
-	char *target_buf = aBuf ? aBuf : buf;
-	*target_buf = '\0'; // Set default.
-	if (aGetCommon)
-		ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Startup", target_buf, MAX_PATH);
-	if (!*target_buf) // Either the above failed or we were told to get the user/private dir instead.
-		ReadRegString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Startup", target_buf, MAX_PATH);
-	return (VarSizeType)strlen(target_buf);
-}
-
-VarSizeType Script::GetMyDocuments(char *aBuf)
-// This one is called from at least one unconventional place.
-{
-	char buf[MAX_PATH];
-	char *target_buf = aBuf ? aBuf : buf;
-	ReadRegString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders"
-		, "Personal", target_buf, MAX_PATH); // Some callers might rely on MAX_PATH being the limit, to avoid overflow.
-	// Since it is common (such as in networked environments) to have My Documents on the root of a drive
-	// (such as a mapped drive letter), remove the backslash from something like M:\ because M: is more
-	// appropriate for most uses:
-	return (VarSizeType)strip_trailing_backslash(target_buf);
-}
-
-
-
-VarSizeType Script::ScriptGetCaret(VarTypeType aVarType, char *aBuf)
-{
-	if (!aBuf)
-		return MAX_NUMBER_LENGTH; // Conservative, both for performance and in case the value changes between first and second call.
-
-	// These static variables are used to keep the X and Y coordinates in sync with each other, as a snapshot
-	// of where the caret was at one precise instant in time.  This is because the X and Y vars are resolved
-	// separately by the script, and due to split second timing, they might otherwise not be accurate with
-	// respect to each other.  This method also helps performance since it avoids unnecessary calls to
-	// ATTACH_THREAD_INPUT.
-	static HWND sForeWinPrev = NULL;
-	static DWORD sTimestamp = GetTickCount();
-	static POINT sPoint;
-	static BOOL sResult;
-
-	// I believe only the foreground window can have a caret position due to relationship with focused control.
-	HWND target_window = GetForegroundWindow(); // Variable must be named target_window for ATTACH_THREAD_INPUT.
-	if (!target_window) // No window is in the foreground, report blank coordinate.
-	{
-		*aBuf = '\0';
-		return 0;
-	}
-
-	DWORD now_tick = GetTickCount();
-
-	if (target_window != sForeWinPrev || now_tick - sTimestamp > 5) // Different window or too much time has passed.
-	{
-		// Otherwise:
-		ATTACH_THREAD_INPUT
-		sResult = GetCaretPos(&sPoint);
-		HWND focused_control = GetFocus();  // Also relies on threads being attached.
-		DETACH_THREAD_INPUT
-		if (!sResult)
-		{
-			*aBuf = '\0';
-			return 0;
-		}
-		ClientToScreen(focused_control ? focused_control : target_window, &sPoint);
-		if (!(g.CoordMode & COORD_MODE_CARET))  // Using the default, which is coordinates relative to window.
-			ScreenToWindow(sPoint, target_window);
-		// Now that all failure conditions have been checked, update static variables for the next caller:
-		sForeWinPrev = target_window;
-		sTimestamp = now_tick;
-	}
-	else // Same window and recent enough, but did prior call fail?  If so, provide a blank result like the prior.
-	{
-		if (!sResult)
-		{
-			*aBuf = '\0';
-			return 0;
-		}
-	}
-	// Now the above has ensured that sPoint contains valid coordinates that are up-to-date enough to be used.
-	_itoa(aVarType == VAR_CARETX ? sPoint.x : sPoint.y, aBuf, 10);  // Always output as decimal vs. hex in this case (so that scripts can use "If var in list" with confidence).
-	return (VarSizeType)strlen(aBuf);
-}
-
-
-
-VarSizeType Script::ScriptGetCursor(char *aBuf)
-{
-	if (!aBuf)
-		return SMALL_STRING_LENGTH;  // We're returning the length of the var's contents, not the size.
-
-	// Must fetch it at runtime, otherwise the program can't even be launched on Windows 95:
-	typedef BOOL (WINAPI *MyGetCursorInfoType)(PCURSORINFO);
-	static MyGetCursorInfoType MyGetCursorInfo = (MyGetCursorInfoType)GetProcAddress(GetModuleHandle("user32"), "GetCursorInfo");
-
-	HCURSOR current_cursor;
-	if (MyGetCursorInfo) // v1.0.42.02: This method is used to avoid ATTACH_THREAD_INPUT, which interferes with double-clicking if called repeatedly at a high frequency.
-	{
-		CURSORINFO ci;
-		ci.cbSize = sizeof(CURSORINFO);
-		current_cursor = MyGetCursorInfo(&ci) ? ci.hCursor : NULL;
-	}
-	else // Windows 95 and old-service-pack versions of NT4 require the old method.
-	{
-		POINT point;
-		GetCursorPos(&point);
-		HWND target_window = WindowFromPoint(point);
-
-		// MSDN docs imply that threads must be attached for GetCursor() to work.
-		// A side-effect of attaching threads or of GetCursor() itself is that mouse double-clicks
-		// are interfered with, at least if this function is called repeatedly at a high frequency.
-		ATTACH_THREAD_INPUT
-		current_cursor = GetCursor();
-		DETACH_THREAD_INPUT
-	}
-
-	if (!current_cursor)
-	{
-		#define CURSOR_UNKNOWN "Unknown"
-		strlcpy(aBuf, CURSOR_UNKNOWN, SMALL_STRING_LENGTH + 1);
-		return (VarSizeType)strlen(aBuf);
-	}
-
-	// Static so that it's initialized on first use (should help performance after the first time):
-	static HCURSOR sCursor[] = {LoadCursor(NULL, IDC_APPSTARTING), LoadCursor(NULL, IDC_ARROW)
-		, LoadCursor(NULL, IDC_CROSS), LoadCursor(NULL, IDC_HELP), LoadCursor(NULL, IDC_IBEAM)
-		, LoadCursor(NULL, IDC_ICON), LoadCursor(NULL, IDC_NO), LoadCursor(NULL, IDC_SIZE)
-		, LoadCursor(NULL, IDC_SIZEALL), LoadCursor(NULL, IDC_SIZENESW), LoadCursor(NULL, IDC_SIZENS)
-		, LoadCursor(NULL, IDC_SIZENWSE), LoadCursor(NULL, IDC_SIZEWE), LoadCursor(NULL, IDC_UPARROW)
-		, LoadCursor(NULL, IDC_WAIT)}; // If IDC_HAND were added, it would break existing scripts that rely on Unknown being synonymous with Hand.  If ever added, IDC_HAND should return NULL on Win95/NT.
-	// The order in the below array must correspond to the order in the above array:
-	static char *sCursorName[] = {"AppStarting", "Arrow"
-		, "Cross", "Help", "IBeam"
-		, "Icon", "No", "Size"
-		, "SizeAll", "SizeNESW", "SizeNS"  // NESW = NorthEast+SouthWest
-		, "SizeNWSE", "SizeWE", "UpArrow"
-		, "Wait", CURSOR_UNKNOWN};  // The last item is used to mark end-of-array.
-	static int cursor_count = sizeof(sCursor) / sizeof(HCURSOR);
-
-	int i;
-	for (i = 0; i < cursor_count; ++i)
-		if (sCursor[i] == current_cursor)
-			break;
-
-	strlcpy(aBuf, sCursorName[i], SMALL_STRING_LENGTH + 1);  // If a is out-of-bounds, "Unknown" will be used.
-	return (VarSizeType)strlen(aBuf);
-}
-
-
-
-VarSizeType Script::GetScreenWidth(char *aBuf)
-{
-	if (!aBuf)
-		return MAX_NUMBER_LENGTH;
-	return (VarSizeType)strlen(ITOA(GetSystemMetrics(SM_CXSCREEN), aBuf));
-}
-
-VarSizeType Script::GetScreenHeight(char *aBuf)
-{
-	if (!aBuf)
-		return MAX_NUMBER_LENGTH;
-	return (VarSizeType)strlen(ITOA(GetSystemMetrics(SM_CYSCREEN), aBuf));
-}
-
-
-
-VarSizeType Script::GetFilename(char *aBuf)
-{
-	if (aBuf)
-		strcpy(aBuf, mFileName);
-	return (VarSizeType)strlen(mFileName);
-}
-
-VarSizeType Script::GetFileDir(char *aBuf)
-{
-	// v1.0.42.06: This function has been fixed not to call the following when we're called with aBuf!=NULL:
-	// strlcpy(target_buf, mFileDir, MAX_PATH);
-	// The above could crash because strlcpy() calls strncpy(), which zero fills the tail of the destination
-	// up through the limit of its capacity.  But we might have returned an estimate less than MAX_PATH
-	// when the caller called us the first time, which usually means that aBuf is smaller than MAX_PATH.
-	if (!aBuf)
-		return (VarSizeType)strlen(mFileDir) + 1; // +1 for conservative estimate in case mIsAutoIt2 (see below).
-	// Otherwise, write the result to the buffer and return its exact length, not an estimate:
-	size_t length = strlen(strcpy(aBuf, mFileDir)); // Caller has ensured that aBuf is large enough.
-	// If it doesn't already have a final backslash, namely due to it being a root directory,
-	// provide one so that it is backward compatible with AutoIt v2:
-	if (mIsAutoIt2 && length && aBuf[length - 1] != '\\')
-	{
-		aBuf[length++] = '\\';
-		aBuf[length] = '\0';
-	}
-	return (VarSizeType)length;
-}
-
-VarSizeType Script::GetFilespec(char *aBuf)
-{
-	if (aBuf)
-		sprintf(aBuf, "%s\\%s", mFileDir, mFileName);
-	return (VarSizeType)(strlen(mFileDir) + strlen(mFileName) + 1);
-}
-
-VarSizeType Script::GetLineNumber(char *aBuf)
-// Caller has ensured that mCurrLine is not NULL.
-{
-	if (!aBuf)
-		return MAX_NUMBER_LENGTH;
-	return (VarSizeType)strlen(ITOA(mCurrLine->mLineNumber, aBuf));
-}
-
-VarSizeType Script::GetLineFile(char *aBuf)
-// Caller has ensured that mCurrLine is not NULL.
-{
-	if (aBuf)
-		strcpy(aBuf, Line::sSourceFile[mCurrLine->mFileNumber]);
-	return (VarSizeType)strlen(Line::sSourceFile[mCurrLine->mFileNumber]);
-}
-
-
-
-VarSizeType Script::GetLoopFileName(char *aBuf)
-{
-	char *naked_filename;
-	if (g.mLoopFile)
-	{
-		// The loop handler already prepended the script's directory in here for us:
-		if (naked_filename = strrchr(g.mLoopFile->cFileName, '\\'))
-			++naked_filename;
-		else // No backslash, so just make it the entire file name.
-			naked_filename = g.mLoopFile->cFileName;
-	}
-	else
-		naked_filename = "";
-	if (aBuf)
-		strcpy(aBuf, naked_filename);
-	return (VarSizeType)strlen(naked_filename);
-}
-
-VarSizeType Script::GetLoopFileShortName(char *aBuf)
-{
-	char *short_filename = "";  // Set default.
-	if (g.mLoopFile)
-	{
-		if (   !*(short_filename = g.mLoopFile->cAlternateFileName)   )
-			// Files whose long name is shorter than the 8.3 usually don't have value stored here,
-			// so use the long name whenever a short name is unavailable for any reason (could
-			// also happen if NTFS has short-name generation disabled?)
-			return GetLoopFileName(aBuf);
-	}
-	if (aBuf)
-		strcpy(aBuf, short_filename);
-	return (VarSizeType)strlen(short_filename);
-}
-
-VarSizeType Script::GetLoopFileExt(char *aBuf)
-{
-	char *file_ext = "";  // Set default.
-	if (g.mLoopFile)
-	{
-		// The loop handler already prepended the script's directory in here for us:
-		if (file_ext = strrchr(g.mLoopFile->cFileName, '.'))
-			++file_ext;
-		else // Reset to empty string vs. NULL.
-			file_ext = "";
-	}
-	if (aBuf)
-		strcpy(aBuf, file_ext);
-	return (VarSizeType)strlen(file_ext);
-}
-
-VarSizeType Script::GetLoopFileDir(char *aBuf)
-{
-	char *file_dir = "";  // Set default.
-	char *last_backslash = NULL;
-	if (g.mLoopFile)
-	{
-		// The loop handler already prepended the script's directory in here for us.
-		// But if the loop had a relative path in its FilePattern, there might be
-		// only a relative directory here, or no directory at all if the current
-		// file is in the origin/root dir of the search:
-		if (last_backslash = strrchr(g.mLoopFile->cFileName, '\\'))
-		{
-			*last_backslash = '\0'; // Temporarily terminate.
-			file_dir = g.mLoopFile->cFileName;
-		}
-		else // No backslash, so there is no directory in this case.
-			file_dir = "";
-	}
-	VarSizeType length = (VarSizeType)strlen(file_dir);
-	if (!aBuf)
-	{
-		if (last_backslash)
-			*last_backslash = '\\';  // Restore the orginal value.
-		return length;
-	}
-	strcpy(aBuf, file_dir);
-	if (last_backslash)
-		*last_backslash = '\\';  // Restore the orginal value.
-	return length;
-}
-
-VarSizeType Script::GetLoopFileFullPath(char *aBuf)
-{
-	// The loop handler already prepended the script's directory in cFileName for us:
-	char *full_path = g.mLoopFile ? g.mLoopFile->cFileName : "";
-	if (aBuf)
-		strcpy(aBuf, full_path);
-	return (VarSizeType)strlen(full_path);
-}
-
-VarSizeType Script::GetLoopFileLongPath(char *aBuf)
-{
-	char *unused, buf[MAX_PATH];
-	char *target_buf = aBuf ? aBuf : buf;
-	*target_buf = '\0';  // Set default.
-	if (g.mLoopFile)
-	{
-		// GetFullPathName() is done in addition to ConvertFilespecToCorrectCase() for the following reasons:
-		// 1) It's currrently the only easy way to get the full path of the directory in which a file resides.
-		//    For example, if a script is passed a filename via command line parameter, that file could be
-		//    either an absolute path or a relative path.  If relative, of course it's relative to A_WorkingDir.
-		//    The problem is, the script would have to manually detect this, which would probably take several
-		//    extra steps.
-		// 2) A_LoopFileLongPath is mostly intended for the following cases, and in all of them it seems
-		//    preferable to have the full/absolute path rather than the relative path:
-		//    a) Files dragged onto a .ahk script when the drag-and-drop option has been enabled via the Installer.
-		//    b) Files passed into the script via command line.
-		// The below also serves to make a copy because changing the original would yield
-		// unexpected/inconsistent results in a script that retrieves the A_LoopFileFullPath
-		// but only conditionally retrieves A_LoopFileLongPath.
-		if (!GetFullPathName(g.mLoopFile->cFileName, MAX_PATH, target_buf, &unused))
-			*target_buf = '\0'; // It might fail if NtfsDisable8dot3NameCreation is turned on in the registry, and possibly for other reasons.
-		else
-			// The below is called in case the loop is being used to convert filename specs that were passed
-			// in from the command line, which thus might not be the proper case (at least in the path
-			// portion of the filespec), as shown in the file system:
-			ConvertFilespecToCorrectCase(target_buf);
-	}
-	return (VarSizeType)strlen(target_buf); // Must explicitly calculate the length rather than using the return value from GetFullPathName(), because ConvertFilespecToCorrectCase() expands 8.3 path components.
-}
-
-VarSizeType Script::GetLoopFileShortPath(char *aBuf)
-// Unlike GetLoopFileShortName(), this function returns blank when there is no short path.
-// This is done so that there's a way for the script to more easily tell the difference between
-// an 8.3 name not being available (due to the being disabled in the registry) and the short
-// name simply being the same as the long name.  For example, if short name creation is disabled
-// in the registry, A_LoopFileShortName would contain the long name instead, as documented.
-// But to detect if that short name is really a long name, A_LoopFileShortPath could be checked
-// and if it's blank, there is no short name available.
-{
-	char buf[MAX_PATH];
-	char *target_buf = aBuf ? aBuf : buf;
-	*target_buf = '\0'; // Set default.
-	DWORD length = 0;   //
-	if (g.mLoopFile)
-		// The loop handler already prepended the script's directory in cFileName for us:
-		if (   !(length = GetShortPathName(g.mLoopFile->cFileName, target_buf, MAX_PATH))   )
-			*target_buf = '\0'; // It might fail if NtfsDisable8dot3NameCreation is turned on in the registry, and possibly for other reasons.
-	return (VarSizeType)length;
-}
-
-VarSizeType Script::GetLoopFileTimeModified(char *aBuf)
-{
-	char buf[64];
-	char *target_buf = aBuf ? aBuf : buf;
-	*target_buf = '\0'; // Set default.
-	if (g.mLoopFile)
-		FileTimeToYYYYMMDD(target_buf, g.mLoopFile->ftLastWriteTime, true);
-	return (VarSizeType)strlen(target_buf);
-}
-
-VarSizeType Script::GetLoopFileTimeCreated(char *aBuf)
-{
-	char buf[64];
-	char *target_buf = aBuf ? aBuf : buf;
-	*target_buf = '\0'; // Set default.
-	if (g.mLoopFile)
-		FileTimeToYYYYMMDD(target_buf, g.mLoopFile->ftCreationTime, true);
-	return (VarSizeType)strlen(target_buf);
-}
-
-VarSizeType Script::GetLoopFileTimeAccessed(char *aBuf)
-{
-	char buf[64];
-	char *target_buf = aBuf ? aBuf : buf;
-	*target_buf = '\0'; // Set default.
-	if (g.mLoopFile)
-		FileTimeToYYYYMMDD(target_buf, g.mLoopFile->ftLastAccessTime, true);
-	return (VarSizeType)strlen(target_buf);
-}
-
-VarSizeType Script::GetLoopFileAttrib(char *aBuf)
-{
-	char buf[64];
-	char *target_buf = aBuf ? aBuf : buf;
-	*target_buf = '\0'; // Set default.
-	if (g.mLoopFile)
-		FileAttribToStr(target_buf, g.mLoopFile->dwFileAttributes);
-	return (VarSizeType)strlen(target_buf);
-}
-
-VarSizeType Script::GetLoopFileSize(char *aBuf, int aDivider)
-{
-	// Don't use MAX_NUMBER_LENGTH in case user has selected a very long float format via SetFormat.
-	char str[128];
-	char *target_buf = aBuf ? aBuf : str;
-	*target_buf = '\0';  // Set default.
-	if (g.mLoopFile)
-	{
-
-		// UPDATE: 64-bit ints are now standard, so the following is obsolete:
-		// It's a documented limitation that the size will show as negative if
-		// greater than 2 gig, and will be wrong if greater than 4 gig.  For files
-		// that large, scripts should use the KB version of this function instead.
-		// If a file is over 4gig, set the value to be the maximum size (-1 when
-		// expressed as a signed integer, since script variables are based entirely
-		// on 32-bit signed integers due to the use of ATOI(), etc.).
-		//sprintf(str, "%d%", g.mLoopFile->nFileSizeHigh ? -1 : (int)g.mLoopFile->nFileSizeLow);
-		ULARGE_INTEGER ul;
-		ul.HighPart = g.mLoopFile->nFileSizeHigh;
-		ul.LowPart = g.mLoopFile->nFileSizeLow;
-		ITOA64((__int64)(aDivider ? ((unsigned __int64)ul.QuadPart / aDivider) : ul.QuadPart), target_buf);
-	}
-	return (VarSizeType)strlen(target_buf);
-}
-
-VarSizeType Script::GetLoopRegType(char *aBuf)
-{
-	char buf[MAX_PATH];
-	char *target_buf = aBuf ? aBuf : buf;
-	*target_buf = '\0'; // Set default.
-	if (g.mLoopRegItem)
-		Line::RegConvertValueType(target_buf, MAX_PATH, g.mLoopRegItem->type);
-	return (VarSizeType)strlen(target_buf);
-}
-
-VarSizeType Script::GetLoopRegKey(char *aBuf)
-{
-	char buf[MAX_PATH];
-	char *target_buf = aBuf ? aBuf : buf;
-	*target_buf = '\0'; // Set default.
-	if (g.mLoopRegItem)
-		// Use root_key_type, not root_key (which might be a remote vs. local HKEY):
-		Line::RegConvertRootKey(target_buf, MAX_PATH, g.mLoopRegItem->root_key_type);
-	return (VarSizeType)strlen(target_buf);
-}
-
-VarSizeType Script::GetLoopRegSubKey(char *aBuf)
-{
-	char *str = g.mLoopRegItem ? g.mLoopRegItem->subkey : "";
-	if (aBuf)
-		strcpy(aBuf, str);
-	return (VarSizeType)strlen(str);
-}
-
-VarSizeType Script::GetLoopRegName(char *aBuf)
-{
-	// This can be either the name of a subkey or the name of a value.
-	char *str = g.mLoopRegItem ? g.mLoopRegItem->name : "";
-	if (aBuf)
-		strcpy(aBuf, str);
-	return (VarSizeType)strlen(str);
-}
-
-VarSizeType Script::GetLoopRegTimeModified(char *aBuf)
-{
-	char buf[64];
-	char *target_buf = aBuf ? aBuf : buf;
-	*target_buf = '\0'; // Set default.
-	// Only subkeys (not values) have a time.  In addition, Win9x doesn't support retrieval
-	// of the time (nor does it store it), so make the var blank in that case:
-	if (g.mLoopRegItem && g.mLoopRegItem->type == REG_SUBKEY && !g_os.IsWin9x())
-		FileTimeToYYYYMMDD(target_buf, g.mLoopRegItem->ftLastWriteTime, true);
-	return (VarSizeType)strlen(target_buf);
-}
-
-VarSizeType Script::GetLoopReadLine(char *aBuf)
-{
-	char *str = g.mLoopReadFile ? g.mLoopReadFile->mCurrentLine : "";
-	if (aBuf)
-		strcpy(aBuf, str);
-	return (VarSizeType)strlen(str);
-}
-
-VarSizeType Script::GetLoopField(char *aBuf)
-{
-	char *str = g.mLoopField ? g.mLoopField : "";
-	if (aBuf)
-		strcpy(aBuf, str);
-	return (VarSizeType)strlen(str);
-}
-
-VarSizeType Script::GetLoopIndex(char *aBuf)
-{
-	if (!aBuf) // Probably performs better to return a conservative estimate for the first pass than to call ITOA64 for both passes.
-		return MAX_NUMBER_LENGTH;
-	return (VarSizeType)strlen(ITOA64(g.mLoopIteration, aBuf)); // Must return exact length when aBuf isn't NULL.
-}
-
-
-
-VarSizeType Script::GetThisMenuItem(char *aBuf)
-{
-	if (aBuf)
-		strcpy(aBuf, mThisMenuItemName);
-	return (VarSizeType)strlen(mThisMenuItemName);
-}
-
-VarSizeType Script::GetThisMenuItemPos(char *aBuf)
-{
-	if (!aBuf) // To avoid doing possibly high-overhead calls twice, merely return a conservative estimate for the first pass.
-		return MAX_NUMBER_LENGTH;
-	// The menu item's position is discovered through this process -- rather than doing
-	// something higher performance such as storing the menu handle or pointer to menu/item
-	// object in g_script -- because those things tend to be volatile.  For example, a menu
-	// or menu item object might be destroyed between the time the user selects it and the
-	// time this variable is referenced in the script.  Thus, by definition, this variable
-	// contains the CURRENT position of the most recently selected menu item within its
-	// CURRENT menu.
-	if (*mThisMenuName && *mThisMenuItemName)
-	{
-		UserMenu *menu = FindMenu(mThisMenuName);
-		if (menu)
-		{
-			// If the menu does not physically exist yet (perhaps due to being destroyed as a result
-			// of DeleteAll, Delete, or some other operation), create it so that the position of the
-			// item can be determined.  This is done for consistency in behavior.
-			if (!menu->mMenu)
-				menu->Create();
-			UINT menu_item_pos = menu->GetItemPos(mThisMenuItemName);
-			if (menu_item_pos < UINT_MAX) // Success
-				return (VarSizeType)strlen(UTOA(menu_item_pos + 1, aBuf)); // +1 to convert from zero-based to 1-based.
-		}
-	}
-	// Otherwise:
-	*aBuf = '\0';
-	return 0;
-}
-
-VarSizeType Script::GetThisMenu(char *aBuf)
-{
-	if (aBuf)
-		strcpy(aBuf, mThisMenuName);
-	return (VarSizeType)strlen(mThisMenuName);
-}
-
-VarSizeType Script::GetThisHotkey(char *aBuf)
-{
-	if (aBuf)
-		strcpy(aBuf, mThisHotkeyName);
-	return (VarSizeType)strlen(mThisHotkeyName);
-}
-
-VarSizeType Script::GetPriorHotkey(char *aBuf)
-{
-	if (aBuf)
-		strcpy(aBuf, mPriorHotkeyName);
-	return (VarSizeType)strlen(mPriorHotkeyName);
-}
-
-VarSizeType Script::GetTimeSinceThisHotkey(char *aBuf)
-{
-	if (!aBuf) // IMPORTANT: Conservative estimate because the time might change between 1st & 2nd calls.
-		return MAX_NUMBER_LENGTH;
-	// It must be the type of hotkey that has a label because we want the TimeSinceThisHotkey
-	// value to be "in sync" with the value of ThisHotkey itself (i.e. use the same method
-	// to determine which hotkey is the "this" hotkey):
-	if (*mThisHotkeyName)
-		// Even if GetTickCount()'s TickCount has wrapped around to zero and the timestamp hasn't,
-		// DWORD math still gives the right answer as long as the number of days between
-		// isn't greater than about 49.  See MyGetTickCount() for explanation of %d vs. %u.
-		// Update: Using 64-bit ints now, so above is obsolete:
-		//snprintf(str, sizeof(str), "%d", (DWORD)(GetTickCount() - mThisHotkeyStartTime));
-		ITOA64((__int64)(GetTickCount() - mThisHotkeyStartTime), aBuf);
-	else
-		strcpy(aBuf, "-1");
-	return (VarSizeType)strlen(aBuf);
-}
-
-VarSizeType Script::GetTimeSincePriorHotkey(char *aBuf)
-{
-	if (!aBuf) // IMPORTANT: Conservative estimate because the time might change between 1st & 2nd calls.
-		return MAX_NUMBER_LENGTH;
-	if (*mPriorHotkeyName)
-		// See MyGetTickCount() for explanation for explanation:
-		//snprintf(str, sizeof(str), "%d", (DWORD)(GetTickCount() - mPriorHotkeyStartTime));
-		ITOA64((__int64)(GetTickCount() - mPriorHotkeyStartTime), aBuf);
-	else
-		strcpy(aBuf, "-1");
-	return (VarSizeType)strlen(aBuf);
-}
-
-VarSizeType Script::GetEndChar(char *aBuf)
-{
-	if (aBuf)
-	{
-		*aBuf = mEndChar;
-		*(aBuf + 1) = '\0';
-	}
-	return 1;
-}
-
-
-
-VarSizeType Script::GetGui(VarTypeType aVarType, char *aBuf)
-// We're returning the length of the var's contents, not the size.
-{
-	char buf[MAX_NUMBER_SIZE];
-	char *target_buf = aBuf ? aBuf : buf;
-
-	if (g.GuiWindowIndex >= MAX_GUI_WINDOWS) // The current thread was not launched as a result of GUI action.
-	{
-		*target_buf = '\0';
-		return 0;
-	}
-
-	switch (aVarType)
-	{
-	case VAR_GUIWIDTH: // Listed first for perfommance.
-	case VAR_GUIHEIGHT:
-		// g.GuiPoint.x was overloaded to contain the size, since there are currently never any cases when
-		// A_GuiX/Y and A_GuiWidth/Height are both valid simultaneously.  It is documented that each of these
-		// variables is defined only in proper types of subroutines.
-		_itoa(aVarType == VAR_GUIWIDTH ? LOWORD(g.GuiPoint.x) : HIWORD(g.GuiPoint.x), target_buf, 10);
-		// Above is always stored as decimal vs. hex, regardless of script settings.
-		break;
-	case VAR_GUIX:
-		_itoa(g.GuiPoint.x, target_buf, 10);
-		break;
-	case VAR_GUIY:
-		_itoa(g.GuiPoint.y, target_buf, 10);
-		break;
-	case VAR_GUI:
-		_itoa(g.GuiWindowIndex + 1, target_buf, 10);  // Always stored as decimal vs. hex, regardless of script settings.
-		break;
-	}
-
-	return (VarSizeType)strlen(target_buf);
-}
-
-
-
-VarSizeType Script::GetGuiControl(GuiIndexType aGuiWindowIndex, GuiIndexType aControlIndex, char *aBuf)
-// Caller has ensured that aGuiWindowIndex is less than MAX_GUI_WINDOWS.
-// We're returning the length of the var's contents, not the size.
-{
-	GuiType *pgui;
-	// Relies on short-circuit boolean order:
-	if (aControlIndex >= MAX_CONTROLS_PER_GUI // Must check this first due to short-circuit boolean.  A non-GUI thread or one triggered by GuiClose/Escape or Gui menu bar.
-		|| !(pgui = g_gui[aGuiWindowIndex]) // Gui Window no longer exists.
-		|| aControlIndex >= pgui->mControlCount) // Gui control no longer exists, perhaps because window was destroyed and recreated with fewer controls.
-	{
-		if (aBuf)
-			*aBuf = '\0';
-		return 0;
-	}
-	GuiControlType &control = pgui->mControl[aControlIndex]; // For performance and convenience.
-    if (aBuf)
-	{
-		// Caller has already ensured aBuf is large enough.
-		if (control.output_var)
-			return (VarSizeType)strlen(strcpy(aBuf, control.output_var->mName));
-		else // Fall back to getting the leading characters of its caption (most often used for buttons).
-			#define A_GUICONTROL_TEXT_LENGTH (MAX_ALLOC_SIMPLE - 1)
-			return GetWindowText(control.hwnd, aBuf, A_GUICONTROL_TEXT_LENGTH + 1); // +1 is verified correct.
-			// Above: some callers don't call for a length estimate first, so they might rely on size never getting
-			// larger than the above.
-	}
-	// Otherwise, just return the length:
-	if (control.output_var)
-		return (VarSizeType)strlen(control.output_var->mName);
-	// Otherwise: Fall back to getting the leading characters of its caption (most often used for buttons)
-	VarSizeType length = GetWindowTextLength(control.hwnd);
-	return (length > A_GUICONTROL_TEXT_LENGTH) ? A_GUICONTROL_TEXT_LENGTH : length;
-}
-
-
-
-VarSizeType Script::GetGuiEvent(char *aBuf)
-// We're returning the length of the var's contents, not the size.
-{
-	if (g.GuiEvent == GUI_EVENT_DROPFILES)
-	{
-		GuiType *pgui;
-		UINT u, file_count;
-		// GUI_EVENT_DROPFILES should mean that g.GuiWindowIndex < MAX_GUI_WINDOWS, but the below will double check
-		// that in case g.GuiEvent can ever be set to that value as a result of receiving a bogus message in the queue.
-		if (g.GuiWindowIndex >= MAX_GUI_WINDOWS  // The current thread was not launched as a result of GUI action or this is a bogus msg.
-			|| !(pgui = g_gui[g.GuiWindowIndex]) // Gui window no longer exists.  Relies on short-circuit boolean.
-			|| !pgui->mHdrop // No HDROP (probably impossible unless g.GuiEvent was given a bogus value somehow).
-			|| !(file_count = DragQueryFile(pgui->mHdrop, 0xFFFFFFFF, NULL, 0))) // No files in the drop (not sure if this is possible).
-			// All of the above rely on short-circuit boolean order.
-		{
-			// Make the dropped-files list blank since there is no HDROP to query (or no files in it).
-			if (aBuf)
-				*aBuf = '\0';
-			return 0;
-		}
-		// Above has ensured that file_count > 0
-		if (aBuf)
-		{
-			char *cp = aBuf;
-			for (u = 0; u < file_count; ++u)
-			{
-				cp += DragQueryFile(pgui->mHdrop, u, cp, MAX_PATH); // MAX_PATH is arbitrary since aBuf is already known to be large enough.
-				if (u < file_count - 1) // i.e omit the LF after the last file to make parsing via "Loop, Parse" easier.
-					*cp++ = '\n';
-				// Although the transcription of files on the clipboard into their text filenames is done
-				// with \r\n (so that they're in the right format to be pasted to other apps as a plain text
-				// list), it seems best to use a plain linefeed for dropped files since they won't be going
-				// onto the clipboard nearly as often, and `n is easier to parse.  Also, a script array isn't
-				// used because large file lists would then consume a lot more of memory because arrays
-				// are permanent once created, and also there would be wasted space due to the part of each
-				// variable's capacity not used by the filename.
-			}
-			// No need for final termination of string because the last item lacks a newline.
-			return (VarSizeType)(cp - aBuf); // This is the length of what's in the buffer.
-		}
-		else
-		{
-			VarSizeType total_length = 0;
-			for (u = 0; u < file_count; ++u)
-				total_length += DragQueryFile(pgui->mHdrop, u, NULL, 0);
-				// Above: MSDN: "If the lpszFile buffer address is NULL, the return value is the required size,
-				// in characters, of the buffer, not including the terminating null character."
-			return total_length + file_count - 1; // Include space for a linefeed after each filename except the last.
-		}
-		// Don't call DragFinish() because this variable might be referred to again before this thread
-		// is done.  DragFinish() is called by MsgSleep() when the current thread finishes.
-	}
-
-	// Otherwise, this event is not GUI_EVENT_DROPFILES, so use standard modes of operation.
-	static char *sNames[] = GUI_EVENT_NAMES;
-	if (!aBuf)
-		return (g.GuiEvent < GUI_EVENT_FIRST_UNNAMED) ? (VarSizeType)strlen(sNames[g.GuiEvent]) : 1;
-	// Otherwise:
-	if (g.GuiEvent < GUI_EVENT_FIRST_UNNAMED)
-	{
-		strcpy(aBuf, sNames[g.GuiEvent]);
-		return (VarSizeType)strlen(aBuf);
-	}
-	else // g.GuiEvent is assumed to be an ASCII value, such as a digit.  This supports Slider controls.
-	{
-		*aBuf++ = (char)(UCHAR)g.GuiEvent;
-		*aBuf = '\0';
-		return 1;
-	}
-}
-
-
-
-VarSizeType Script::GetEventInfo(char *aBuf)
-// We're returning the length of the var's contents, not the size.
-{
-	if (!aBuf)
-		return MAX_NUMBER_LENGTH;
-	return (VarSizeType)strlen(UTOA(g.EventInfo, aBuf)); // Must return exact length when aBuf isn't NULL.
-}
-
-
-
-VarSizeType Script::GetTimeIdle(char *aBuf)
-{
-	if (!aBuf) // IMPORTANT: Conservative estimate because tick might change between 1st & 2nd calls.
-		return MAX_NUMBER_LENGTH;
-	*aBuf = '\0';  // Set default.
-	if (g_os.IsWin2000orLater()) // Checked in case the function is present but "not implemented".
-	{
-		// Must fetch it at runtime, otherwise the program can't even be launched on Win9x/NT:
-		typedef BOOL (WINAPI *MyGetLastInputInfoType)(PLASTINPUTINFO);
-		static MyGetLastInputInfoType MyGetLastInputInfo = (MyGetLastInputInfoType)
-			GetProcAddress(GetModuleHandle("user32"), "GetLastInputInfo");
-		if (MyGetLastInputInfo)
-		{
-			LASTINPUTINFO lii;
-			lii.cbSize = sizeof(lii);
-			if (MyGetLastInputInfo(&lii))
-				ITOA64(GetTickCount() - lii.dwTime, aBuf);
-		}
-	}
-	return (VarSizeType)strlen(aBuf);
-}
-
-
-
-VarSizeType Script::GetTimeIdlePhysical(char *aBuf)
-// This is here rather than in script.h with the others because it depends on
-// hotkey.h and globaldata.h, which can't be easily included in script.h due to
-// mutual dependency issues.
-{
-	// If neither hook is active, default this to the same as the regular idle time:
-	if (!(g_KeybdHook || g_MouseHook))
-		return GetTimeIdle(aBuf);
-	if (!aBuf)
-		return MAX_NUMBER_LENGTH; // IMPORTANT: Conservative estimate because tick might change between 1st & 2nd calls.
-	return (VarSizeType)strlen(ITOA64(GetTickCount() - g_TimeLastInputPhysical, aBuf)); // Switching keyboard layouts/languages sometimes sees to throw off the timestamps of the incoming events in the hook.
 }
 
 

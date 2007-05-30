@@ -26,9 +26,9 @@ HWND *WinGroup::sAlreadyVisited = NULL;
 int WinGroup::sAlreadyVisitedCount = 0;
 
 
-ResultType WinGroup::AddWindow(char *aTitle, char *aText, void *aJumpToLine, char *aExcludeTitle, char *aExcludeText)
+ResultType WinGroup::AddWindow(char *aTitle, char *aText, Label *aJumpToLabel, char *aExcludeTitle, char *aExcludeText)
 // Caller should ensure that at least one param isn't NULL/blank.
-// GroupActivate will tell its caller to jump to aJumpToLine if a WindowSpec isn't found.
+// GroupActivate will tell its caller to jump to aJumpToLabel if a WindowSpec isn't found.
 // This function is not thread-safe because it adds an entry to the list of window specs.
 // In addition, if this function is being called by one thread while another thread is calling IsMember(),
 // the thread-safety notes in IsMember() apply.
@@ -64,7 +64,7 @@ ResultType WinGroup::AddWindow(char *aTitle, char *aText, void *aJumpToLine, cha
 	// The precise method by which the follows steps are done should be thread-safe even if
 	// some other thread calls IsMember() in the middle of the operation.  But any changes
 	// must be carefully reviewed:
-	WindowSpec *the_new_win = new WindowSpec(new_title, new_text, aJumpToLine, new_exclude_title, new_exclude_text);
+	WindowSpec *the_new_win = new WindowSpec(new_title, new_text, aJumpToLabel, new_exclude_title, new_exclude_text);
 	if (the_new_win == NULL)
 		return g_script.ScriptError(ERR_OUTOFMEM);
 	if (mFirstWindow == NULL)
@@ -145,11 +145,10 @@ ResultType WinGroup::CloseAndGoToNext(bool aStartWithMostRecent)
 
 
 
-ResultType WinGroup::Activate(bool aStartWithMostRecent, WindowSpec *aWinSpec, void **aJumpToLine)
+ResultType WinGroup::Activate(bool aStartWithMostRecent, WindowSpec *aWinSpec, Label **aJumpToLabel)
 {
-	// Be sure initialize this before doing any returns:
-	if (aJumpToLine)
-		*aJumpToLine = NULL;
+	if (aJumpToLabel) // Initialize early in case of early return.
+		*aJumpToLabel = NULL;
 	if (IsEmpty())
 		return OK;  // OK since this is the expected behavior in this case.
 	// Otherwise:
@@ -237,11 +236,11 @@ ResultType WinGroup::Activate(bool aStartWithMostRecent, WindowSpec *aWinSpec, v
 			break;
 		}
 		// Otherwise, no window was found to activate.
-		if (aJumpToLine && win->mJumpToLine && !sAlreadyVisitedCount)
+		if (aJumpToLabel && win->mJumpToLabel && !sAlreadyVisitedCount)
 		{
 			// Caller asked us to return in this case, so that it can
 			// use this value to execute a user-specified Gosub:
-			*aJumpToLine = win->mJumpToLine;  // Set output param for the caller.
+			*aJumpToLabel = win->mJumpToLabel;  // Set output param for the caller.
 			return OK;
 		}
 		if (retry_is_in_effect)

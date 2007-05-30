@@ -806,7 +806,7 @@ void Hotkey::Perform(HotkeyVariant &aVariant)
 	if (unregistered_during_thread) // Do it every time through the loop in case the hotkey is re-registered by its own subroutine.
 		Unregister(); // This takes care of other details for us.
 	++aVariant.mExistingThreads;  // This is the thread count for this particular hotkey only.
-	ResultType result = aVariant.mJumpToLabel->mJumpToLine->ExecUntil(UNTIL_RETURN);
+	ResultType result = aVariant.mJumpToLabel->Execute();
 	--aVariant.mExistingThreads;
 	if (unregistered_during_thread)
 		Register();
@@ -2217,7 +2217,7 @@ ResultType Hotstring::Perform()
 	// is still timely/accurate -- it seems best to set to "no modifiers":
 	g_script.mThisHotkeyModifiersLR = 0;
 	++mExistingThreads;  // This is the thread count for this particular hotstring only.
-	ResultType result = mJumpToLabel->mJumpToLine->ExecUntil(UNTIL_RETURN);
+	ResultType result = mJumpToLabel->Execute();
 	--mExistingThreads;
 	return result ? OK : FAIL;	// Return OK on all non-failure results.
 }

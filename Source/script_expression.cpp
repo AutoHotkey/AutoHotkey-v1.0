@@ -145,7 +145,6 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 	// Another benefit to deferring the resolution of these types of items is that they become eligible
 	// for short-circuiting, which further helps performance (they're quite similar to built-in
 	// functions in this respect).
-	SymbolType sym_prev;
 	char *op_end, *cp;
 	DerefType *deref, *this_deref, *deref_start, *deref_alloca;
 	int derefs_in_this_double;
@@ -189,8 +188,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 					}
 					else
 					{
-						sym_prev = infix_count ? infix[infix_count - 1].symbol : SYM_OPAREN; // OPARAN is just a placeholder.
-						if (YIELDS_AN_OPERAND(sym_prev))
+						if (infix_count && YIELDS_AN_OPERAND(infix[infix_count - 1].symbol))
 						{
 							if (cp1 == '+')
 							{
@@ -230,10 +228,9 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 						break;
 					}
 					// Otherwise (since above didn't "break"):
-					sym_prev = infix_count ? infix[infix_count - 1].symbol : SYM_OPAREN; // OPARAN is just a placeholder.
 					// Must allow consecutive unary minuses because otherwise, the following example
 					// would not work correctly when y contains a negative value: var := 3 * -y
-					if (YIELDS_AN_OPERAND(sym_prev))
+					if (infix_count && YIELDS_AN_OPERAND(infix[infix_count - 1].symbol))
 					{
 						if (cp1 == '-')
 						{
@@ -323,17 +320,20 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 						++cp; // An additional increment to have loop skip over the operator's second symbol.
 						this_infix_item.symbol = SYM_ASSIGN_MULTIPLY;
 					}
-					else if (cp1 == '*') // Python, Perl, and other languages also use ** for power.
-					{
-						++cp; // An additional increment to have loop skip over the second '*' too.
-						this_infix_item.symbol = SYM_POWER;
-					}
 					else
 					{
-						// Differentiate between unary dereference (*) and the "multiply" operator:
-						// See '-' above for more details:
-						this_infix_item.symbol = YIELDS_AN_OPERAND(infix_count ? infix[infix_count - 1].symbol : SYM_OPAREN)
-							? SYM_MULTIPLY : SYM_DEREF;
+						if (cp1 == '*') // Python, Perl, and other languages also use ** for power.
+						{
+							++cp; // An additional increment to have loop skip over the second '*' too.
+							this_infix_item.symbol = SYM_POWER;
+						}
+						else
+						{
+							// Differentiate between unary dereference (*) and the "multiply" operator:
+							// See '-' above for more details:
+							this_infix_item.symbol = (infix_count && YIELDS_AN_OPERAND(infix[infix_count - 1].symbol))
+								? SYM_MULTIPLY : SYM_DEREF;
+						}
 					}
 					break;
 				case '!':
@@ -441,7 +441,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 					{
 						// Differentiate between unary "take the address of" and the "bitwise and" operator:
 						// See '-' above for more details:
-						this_infix_item.symbol = YIELDS_AN_OPERAND(infix_count ? infix[infix_count - 1].symbol : SYM_OPAREN)
+						this_infix_item.symbol = (infix_count && YIELDS_AN_OPERAND(infix[infix_count - 1].symbol))
 							? SYM_BITAND : SYM_ADDRESS;
 					}
 					break;
@@ -718,7 +718,7 @@ double_deref: // Caller has set cp to be start and op_end to be the character af
 	token_begin.symbol = SYM_BEGIN;
 	STACK_PUSH(&token_begin);
 
-	SymbolType stack_symbol, infix_symbol;
+	SymbolType stack_symbol, infix_symbol, sym_prev;
 	ExprTokenType *fwd_infix, *this_infix = infix;
 	int functions_on_stack = 0;
 
@@ -879,8 +879,8 @@ double_deref: // Caller has set cp to be start and op_end to be the character af
 				//    an lvalue); so divide by 5 then do the increment.
 				// -> i++ := 5 (and i++ /= 5) ; Postfix operator can't produce an lvalue, so do the assignment
 				//    first and then the postfix op.
-				// SYM_DEREF is the only exception to the above because there's a slight chance that *Var:=X
-				// (evaluated strictly according to precedence as (*Var):=X) will be used for something someday.
+				// SYM_DEREF is the only exception to the above because there's a slight chance that
+				// *Var:=X (evaluated strictly according to precedence as (*Var):=X) will be used for someday.
 				// Also, SYM_FUNC seems unaffected by any of this due to its enclosing parentheses (i.e. even
 				// if a function-call can someday generate an lvalue [SYM_VAR], the current rules probably
 				// already support it.
@@ -1380,7 +1380,7 @@ end_of_infix_to_postfix:
 				j = func.mParamCount - 1; // The index of the last formal parameter. Relied upon by BOTH loops below.
 				// The following loop will have zero iterations unless at least one formal parameter lacks an actual,
 				// which should be possible only if the parameter is optional (i.e. has a default value).
-				for (; j >= actual_param_count; --j) // For each formal parameter (reverse order to mirror the nature of the stack).
+				for (; j >= actual_param_count; --j) // For each formal parameter that lacks an actual (reverse order to mirror the nature of the stack).
 				{
 					// The following worsens performance by 7% under UPX 2.0 but is the faster method on UPX 3.0.
 					// This could merely be due to unpredictable cache hits/misses in a my particular CPU.
@@ -1393,9 +1393,7 @@ end_of_infix_to_postfix:
 					case PARAM_DEFAULT_STR:   this_formal_param.var->Assign(this_formal_param.default_str);    break;
 					case PARAM_DEFAULT_INT:   this_formal_param.var->Assign(this_formal_param.default_int64);  break;
 					case PARAM_DEFAULT_FLOAT: this_formal_param.var->Assign(this_formal_param.default_double); break;
-					default: // PARAM_DEFAULT_NONE or some other value.  This is probably a bug; assign blank for now.
-						this_formal_param.var->Assign(); // By not specifying "" as the first param, the var's memory is not freed, which seems best to help performance when the function is called repeatedly in a loop.
-						break;
+					// case PARAM_DEFAULT_NONE: Not possible due to the nature of this loop and due to load-time validation.
 					}
 				}
 				// Pop the actual number of params involved in this function-call off the stack.  Load-time
@@ -1859,7 +1857,7 @@ end_of_infix_to_postfix:
 			is_pre_op = (this_token.symbol >= SYM_PRE_INCREMENT); // Store this early because its symbol will soon be overwritten.
 			if (right.symbol != SYM_VAR || right_is_number == PURE_NOT_NUMERIC) // Invalid operation.
 			{
-				if (right_is_number == PURE_NOT_NUMERIC) // Non-numeric target such as ++i when "i" is blank or contains text.
+				if (right.symbol == SYM_VAR) // Thus due to the above check, it's a non-numeric target such as ++i when "i" is blank or contains text. This line was fixed in v1.0.46.16.
 				{
 					right.var->Assign(); // If target var contains "" or "non-numeric text", make it blank. Clipboard is also supported here.
 					if (is_pre_op)
@@ -1946,8 +1944,8 @@ end_of_infix_to_postfix:
 				this_token.symbol = right_is_number; // Set the symbol type to match the double or int64 that was already stored higher above.
 			break;
 
-		case SYM_BITNOT: // The tilde (~) operator.
-		case SYM_DEREF:  // Dereference an address.
+		case SYM_DEREF:   // Dereference an address to retrieve a single byte.
+		case SYM_BITNOT:           // The tilde (~) operator.
 			if (right_is_number == PURE_INTEGER) // But in this case, it can be hex, so use ATOI64().
 				right_int64 = right.symbol == SYM_INTEGER ? right.value_int64 : ATOI64(right_contents);
 			else if (right_is_number == PURE_FLOAT)
@@ -1960,7 +1958,17 @@ end_of_infix_to_postfix:
 				break;
 			}
 			// Since above didn't "break":
-			if (this_token.symbol == SYM_DEREF)
+			if (this_token.symbol == SYM_BITNOT)
+			{
+				// Note that it is not legal to perform ~, &, |, or ^ on doubles.  Because of this, and also to
+				// conform to the behavior of the Transform command, any floating point operand is truncated to
+				// an integer above.
+				if (right_int64 < 0 || right_int64 > UINT_MAX)
+					this_token.value_int64 = ~right_int64;
+				else // See comments at TRANS_CMD_BITNOT for why it's done this way:
+					this_token.value_int64 = (size_t)~(DWORD)right_int64; // Casting this way avoids compiler warning.
+			}
+			else // SYM_DEREF
 			{
 				// Reasons for resolving *Var to a number rather than a single-char string:
 				// 1) More consistent with future uses of * that might operate on the address of 2-byte,
@@ -1978,20 +1986,10 @@ end_of_infix_to_postfix:
 				// justified.  In the future, could also put a __try/__except block around this (like DllCall
 				// uses) to prevent buggy scripts from crashing.  In addition to ruling out the dereferencing of
 				// a NULL address, the >255 check also rules out common-bug addresses (I don't think addresses
-				// this low can realistically never be legitimate, but it would be nice to get confirmation).
+				// this low can realistically ever be legitimate, but it would be nice to get confirmation).
 				// For simplicity and due to rarity, a zero is yielded in such cases rather than an empty string.
-				// If address is valid, dereference it to extract one unsigned character, just like Asc().
-				this_token.value_int64 = (right_int64 < 256 || right_int64 > 0xFFFFFFFF) ? 0 : *(UCHAR *)right_int64;
-			}
-			else // SYM_BITNOT
-			{
-				// Note that it is not legal to perform ~, &, |, or ^ on doubles.  Because of this, and also to
-				// conform to the behavior of the Transform command, any floating point operand is truncated to
-				// an integer above.
-				if (right_int64 < 0 || right_int64 > UINT_MAX)
-					this_token.value_int64 = ~right_int64;
-				else // See comments at TRANS_CMD_BITNOT for why it's done this way:
-					this_token.value_int64 = (size_t)~(DWORD)right_int64; // Casting this way avoids compiler warning.
+				this_token.value_int64 = (right_int64 < 256 || right_int64 > 0xFFFFFFFF)
+					? 0 : this_token.value_int64 = *(UCHAR *)right_int64; // Dereference to extract one unsigned character, just like Asc().
 			}
 			this_token.symbol = SYM_INTEGER; // Must be done only after its old value was used above. v1.0.36.07: Fixed to be SYM_INTEGER vs. right_is_number for SYM_BITNOT.
 			break;

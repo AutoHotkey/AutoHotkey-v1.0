@@ -3456,9 +3456,9 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 			{
 				// Otherwise, since the target window has been determined, we know that it is
 				// the only window to be put into the array:
-				snprintf(var_name, sizeof(var_name), "%s1", output_var.mName);
-				if (   !(array_item = g_script.FindOrAddVar(var_name, 0, output_var.IsLocal()
-					? ALWAYS_USE_LOCAL : ALWAYS_USE_GLOBAL))   )  // Find or create element #1.
+				if (   !(array_item = g_script.FindOrAddVar(var_name
+					, snprintf(var_name, sizeof(var_name), "%s1", output_var.mName)
+					, output_var.IsLocal() ? ALWAYS_USE_LOCAL : ALWAYS_USE_GLOBAL))   )  // Find or create element #1.
 					return FAIL;  // It will have already displayed the error.
 				if (!array_item->AssignHWND(target_window))
 					return FAIL;
@@ -3892,17 +3892,20 @@ ResultType Line::SysGet(char *aCmd, char *aValue)
 		// numerical ordering:
 		int always_use;
 		always_use = output_var.IsLocal() ? ALWAYS_USE_LOCAL : ALWAYS_USE_GLOBAL;
-		snprintf(var_name, sizeof(var_name), "%sLeft", output_var.mName);
-		if (   !(output_var_left = g_script.FindOrAddVar(var_name, 0, always_use))   )
+		if (   !(output_var_left = g_script.FindOrAddVar(var_name
+			, snprintf(var_name, sizeof(var_name), "%sLeft", output_var.mName)
+			, always_use))   )
 			return FAIL;  // It already reported the error.
-		snprintf(var_name, sizeof(var_name), "%sTop", output_var.mName);
-		if (   !(output_var_top = g_script.FindOrAddVar(var_name, 0, always_use))   )
+		if (   !(output_var_top = g_script.FindOrAddVar(var_name
+			, snprintf(var_name, sizeof(var_name), "%sTop", output_var.mName)
+			, always_use))   )
 			return FAIL;
-		snprintf(var_name, sizeof(var_name), "%sRight", output_var.mName);
-		if (   !(output_var_right = g_script.FindOrAddVar(var_name, 0, always_use))   )
+		if (   !(output_var_right = g_script.FindOrAddVar(var_name
+			, snprintf(var_name, sizeof(var_name), "%sRight", output_var.mName)
+			, always_use))   )
 			return FAIL;
-		snprintf(var_name, sizeof(var_name), "%sBottom", output_var.mName);
-		if (   !(output_var_bottom = g_script.FindOrAddVar(var_name, 0, always_use))   )
+		if (   !(output_var_bottom = g_script.FindOrAddVar(var_name
+			, snprintf(var_name, sizeof(var_name), "%sBottom", output_var.mName), always_use))   )
 			return FAIL;
 
 		RECT monitor_rect;
@@ -6997,7 +7000,7 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 	Var &output_var = *OUTPUT_VAR; // The input var (ARG1) is also the output var in this case.
 	// Do nothing for reserved variables, since most of them are read-only and besides, none
 	// of them (realistically) should ever need sorting:
-	if (VAR_IS_RESERVED(output_var)) // output_var can be a reserved variable because it's not marked as an output-var by ArgIsVar() [since it has a dual purpose as an input-var].
+	if (VAR_IS_READONLY(output_var)) // output_var can be a reserved variable because it's not marked as an output-var by ArgIsVar() [since it has a dual purpose as an input-var].
 		return OK;
 
 	// Resolve options.  Set defaults first:
@@ -9722,7 +9725,7 @@ bool Line::FileIsFilteredOut(WIN32_FIND_DATA &aCurrentFile, FileLoopModeType aFi
 
 
 
-Line *Line::GetJumpTarget(bool aIsDereferenced)
+Label *Line::GetJumpTarget(bool aIsDereferenced)
 {
 	char *target_label = aIsDereferenced ? ARG1 : RAW_ARG1;
 	Label *label = g_script.FindLabel(target_label);
@@ -9735,49 +9738,1427 @@ Line *Line::GetJumpTarget(bool aIsDereferenced)
 		return NULL;
 	}
 	if (!aIsDereferenced)
-		mRelatedLine = label->mJumpToLine; // The script loader has ensured that label->mJumpToLine isn't NULL.
+		mRelatedLine = (Line *)label; // The script loader has ensured that label->mJumpToLine isn't NULL.
 	// else don't update it, because that would permanently resolve the jump target, and we want it to stay dynamic.
 	// Seems best to do this even for GOSUBs even though it's a bit weird:
-	return IsJumpValid(label->mJumpToLine) ? label->mJumpToLine : NULL;
+	return IsJumpValid(*label);
 	// Any error msg was already displayed by the above call.
 }
 
 
 
-ResultType Line::IsJumpValid(Line *aDestination)
-// The caller has ensured that aDestination is not NULL.
-// The caller relies on this function returning either OK or FAIL.
+Label *Line::IsJumpValid(Label &aTargetLabel)
+// Returns aTargetLabel is the jump is valid, or NULL otherwise.
 {
-	// aDestination can be NULL if this Goto's target is the physical end of the script.
+	// aTargetLabel can be NULL if this Goto's target is the physical end of the script.
 	// And such a destination is always valid, regardless of where aOrigin is.
 	// UPDATE: It's no longer possible for the destination of a Goto or Gosub to be
 	// NULL because the script loader has ensured that the end of the script always has
 	// an extra ACT_EXIT that serves as an anchor for any final labels in the script:
-	//if (aDestination == NULL)
+	//if (aTargetLabel == NULL)
 	//	return OK;
 	// The above check is also necessary to avoid dereferencing a NULL pointer below.
 
-	// A Goto/Gosub can always jump to a point anywhere in the outermost layer
-	// (i.e. outside all blocks) without restriction:
-	if (aDestination->mParentLine == NULL)
-		return OK;
+	Line *parent_line_of_label_line;
+	if (   !(parent_line_of_label_line = aTargetLabel.mJumpToLine->mParentLine)   )
+		// A Goto/Gosub can always jump to a point anywhere in the outermost layer
+		// (i.e. outside all blocks) without restriction:
+		return &aTargetLabel; // Indicate success.
 
 	// So now we know this Goto/Gosub is attempting to jump into a block somewhere.  Is that
 	// block a legal place to jump?:
 
 	for (Line *ancestor = mParentLine; ancestor != NULL; ancestor = ancestor->mParentLine)
-		if (aDestination->mParentLine == ancestor)
-			// Since aDestination is in the same block as the Goto line itself (or a block
+		if (parent_line_of_label_line == ancestor)
+			// Since aTargetLabel is in the same block as the Goto line itself (or a block
 			// that encloses that block), it's allowed:
-			return OK;
+			return &aTargetLabel; // Indicate success.
 	// This can happen if the Goto's target is at a deeper level than it, or if the target
 	// is at a more shallow level but is in some block totally unrelated to it!
 	// Returns FAIL by default, which is what we want because that value is zero:
-	return LineError("A Goto/Gosub must not jump into a block that doesn't enclose it."); // Omit GroupActivate from the error msg since that is rare enough to justify the increase in common-case clarify.
+	LineError("A Goto/Gosub must not jump into a block that doesn't enclose it."); // Omit GroupActivate from the error msg since that is rare enough to justify the increase in common-case clarify.
+	return NULL;
 	// Above currently doesn't attempt to detect runtime vs. load-time for the purpose of appending
 	// ERR_ABORT.
 }
 
+
+
+////////////////////////
+// BUILT-IN VARIABLES //
+////////////////////////
+
+VarSizeType BIV_True_False(char *aBuf, char *aVarName)
+{
+	if (aBuf)
+	{
+		*aBuf++ = aVarName[4] ? '0': '1';
+		*aBuf = '\0';
+	}
+	return 1; // The length of the value.
+}
+
+VarSizeType BIV_MMM_DDD(char *aBuf, char *aVarName)
+{
+	char *format_str;
+	switch(toupper(aVarName[2]))
+	{
+	// Use the case-sensitive formats required by GetDateFormat():
+	case 'M': format_str = (aVarName[5] ? "MMMM" : "MMM"); break;
+	case 'D': format_str = (aVarName[5] ? "dddd" : "ddd"); break;
+	}
+	// Confirmed: The below will automatically use the local time (not UTC) when 3rd param is NULL.
+	return (VarSizeType)(GetDateFormat(LOCALE_USER_DEFAULT, 0, NULL, format_str, aBuf, aBuf ? 999 : 0) - 1);
+}
+
+VarSizeType BIV_DateTime(char *aBuf, char *aVarName)
+{
+	if (!aBuf)
+		return 6; // Since only an estimate is needed in this mode, return the maximum length of any item.
+
+	aVarName += 2; // Skip past the "A_".
+
+	// The current time is refreshed only if it's been a certain number of milliseconds since
+	// the last fetch of one of these built-in time variables.  This keeps the variables in
+	// sync with one another when they are used consecutively such as this example:
+	// Var = %A_Hour%:%A_Min%:%A_Sec%
+	// Using GetTickCount() because it's very low overhead compared to the other time functions:
+	static DWORD sLastUpdate = 0; // Static should be thread + recursion safe in this case.
+	static SYSTEMTIME sST = {0}; // Init to detect when it's empty.
+	BOOL is_msec = !stricmp(aVarName, "MSec"); // Always refresh if it's milliseconds, for better accuracy.
+	DWORD now_tick = GetTickCount();
+	if (is_msec || now_tick - sLastUpdate > 50 || !sST.wYear) // See comments above.
+	{
+		GetLocalTime(&sST);
+		sLastUpdate = now_tick;
+	}
+
+	if (is_msec)
+		return sprintf(aBuf, "%03d", sST.wMilliseconds);
+
+	char second_letter = toupper(aVarName[1]);
+	switch(toupper(aVarName[0]))
+	{
+	case 'Y':
+		switch(second_letter)
+		{
+		case 'D': // A_YDay
+			return sprintf(aBuf, "%d", GetYDay(sST.wMonth, sST.wDay, IS_LEAP_YEAR(sST.wYear)));
+		case 'W': // A_YWeek
+			return GetISOWeekNumber(aBuf, sST.wYear
+				, GetYDay(sST.wMonth, sST.wDay, IS_LEAP_YEAR(sST.wYear))
+				, sST.wDayOfWeek);
+		default:  // A_Year/A_YYYY
+			return sprintf(aBuf, "%d", sST.wYear);
+		}
+		// No break because all cases above return:
+		//break;
+	case 'M':
+		switch(second_letter)
+		{
+		case 'D': // A_MDay (synonymous with A_DD)
+			return sprintf(aBuf, "%02d", sST.wDay);
+		case 'I': // A_Min
+			return sprintf(aBuf, "%02d", sST.wMinute);
+		default: // A_MM and A_Mon (A_MSec was already completely handled higher above).
+			return sprintf(aBuf, "%02d", sST.wMonth);
+		}
+		// No break because all cases above return:
+		//break;
+	case 'D': // A_DD (synonymous with A_MDay)
+		return sprintf(aBuf, "%02d", sST.wDay);
+	case 'W': // A_WDay
+		return sprintf(aBuf, "%d", sST.wDayOfWeek + 1);
+	case 'H': // A_Hour
+		return sprintf(aBuf, "%02d", sST.wHour);
+	case 'S': // A_Sec (A_MSec was already completely handled higher above).
+		return sprintf(aBuf, "%02d", sST.wSecond);
+	}
+	return 0; // Never reached, but avoids compiler warning.
+}
+
+VarSizeType BIV_BatchLines(char *aBuf, char *aVarName)
+{
+	// The BatchLine value can be either a numerical string or a string that ends in "ms".
+	char buf[256];
+	char *target_buf = aBuf ? aBuf : buf;
+	if (g.IntervalBeforeRest > -1) // Have this new method take precedence, if it's in use by the script.
+		return sprintf(target_buf, "%dms", g.IntervalBeforeRest); // Not snprintf().
+	// Otherwise:
+	ITOA64(g.LinesPerCycle, target_buf);
+	return (VarSizeType)strlen(target_buf);
+}
+
+VarSizeType BIV_TitleMatchMode(char *aBuf, char *aVarName)
+{
+	if (g.TitleMatchMode == FIND_REGEX) // v1.0.45.
+	{
+		if (aBuf)  // For backward compatibility (due to StringCaseSense), never change the case used here:
+			strcpy(aBuf, "RegEx");
+		return 5; // The length.
+	}
+	// Otherwise, it's a numerical mode:
+	// It's done this way in case it's ever allowed to go beyond a single-digit number.
+	char buf[MAX_NUMBER_SIZE];
+	char *target_buf = aBuf ? aBuf : buf;
+	_itoa(g.TitleMatchMode, target_buf, 10);  // Always output as decimal vs. hex in this case (so that scripts can use "If var in list" with confidence).
+	return (VarSizeType)strlen(target_buf);
+}
+
+VarSizeType BIV_TitleMatchModeSpeed(char *aBuf, char *aVarName)
+{
+	if (aBuf)  // For backward compatibility (due to StringCaseSense), never change the case used here:
+		strcpy(aBuf, g.TitleFindFast ? "Fast" : "Slow");
+	return 4;  // Always length 4
+}
+
+VarSizeType BIV_DetectHiddenWindows(char *aBuf, char *aVarName)
+{
+	return aBuf
+		? (VarSizeType)strlen(strcpy(aBuf, g.DetectHiddenWindows ? "On" : "Off")) // For backward compatibility (due to StringCaseSense), never change the case used here.  Fixed in v1.0.42.01 to return exact length (required).
+		: 3; // Room for either On or Off (in the estimation phase).
+}
+
+VarSizeType BIV_DetectHiddenText(char *aBuf, char *aVarName)
+{
+	return aBuf
+		? (VarSizeType)strlen(strcpy(aBuf, g.DetectHiddenText ? "On" : "Off")) // For backward compatibility (due to StringCaseSense), never change the case used here. Fixed in v1.0.42.01 to return exact length (required).
+		: 3; // Room for either On or Off (in the estimation phase).
+}
+
+VarSizeType BIV_AutoTrim(char *aBuf, char *aVarName)
+{
+	return aBuf
+		? (VarSizeType)strlen(strcpy(aBuf, g.AutoTrim ? "On" : "Off")) // For backward compatibility (due to StringCaseSense), never change the case used here. Fixed in v1.0.42.01 to return exact length (required).
+		: 3; // Room for either On or Off (in the estimation phase).
+}
+
+VarSizeType BIV_StringCaseSense(char *aBuf, char *aVarName)
+{
+	return aBuf
+		? (VarSizeType)strlen(strcpy(aBuf, g.StringCaseSense == SCS_INSENSITIVE ? "Off" // For backward compatibility (due to StringCaseSense), never change the case used here.  Fixed in v1.0.42.01 to return exact length (required).
+			: (g.StringCaseSense == SCS_SENSITIVE ? "On" : "Locale")))
+		: 6; // Room for On, Off, or Locale (in the estimation phase).
+}
+
+VarSizeType BIV_FormatInteger(char *aBuf, char *aVarName)
+{
+	if (aBuf)
+	{
+		// For backward compatibility (due to StringCaseSense), never change the case used here:
+		*aBuf++ = g.FormatIntAsHex ? 'H' : 'D';
+		*aBuf = '\0';
+	}
+	return 1;
+}
+
+VarSizeType BIV_FormatFloat(char *aBuf, char *aVarName)
+{
+	if (!aBuf)
+		return (VarSizeType)strlen(g.FormatFloat);  // Include the extra chars since this is just an estimate.
+	char *str_with_leading_percent_omitted = g.FormatFloat + 1;
+	size_t length = strlen(str_with_leading_percent_omitted);
+	strlcpy(aBuf, str_with_leading_percent_omitted
+		, length + !(length && str_with_leading_percent_omitted[length-1] == 'f')); // Omit the trailing character only if it's an 'f', not any other letter such as the 'e' in "%0.6e" (for backward compatibility).
+	return (VarSizeType)strlen(aBuf); // Must return exact length when aBuf isn't NULL.
+}
+
+VarSizeType BIV_KeyDelay(char *aBuf, char *aVarName)
+{
+	char buf[MAX_NUMBER_SIZE];
+	char *target_buf = aBuf ? aBuf : buf;
+	_itoa(g.KeyDelay, target_buf, 10);  // Always output as decimal vs. hex in this case (so that scripts can use "If var in list" with confidence).
+	return (VarSizeType)strlen(target_buf);
+}
+
+VarSizeType BIV_WinDelay(char *aBuf, char *aVarName)
+{
+	char buf[MAX_NUMBER_SIZE];
+	char *target_buf = aBuf ? aBuf : buf;
+	_itoa(g.WinDelay, target_buf, 10);  // Always output as decimal vs. hex in this case (so that scripts can use "If var in list" with confidence).
+	return (VarSizeType)strlen(target_buf);
+}
+
+VarSizeType BIV_ControlDelay(char *aBuf, char *aVarName)
+{
+	char buf[MAX_NUMBER_SIZE];
+	char *target_buf = aBuf ? aBuf : buf;
+	_itoa(g.ControlDelay, target_buf, 10);  // Always output as decimal vs. hex in this case (so that scripts can use "If var in list" with confidence).
+	return (VarSizeType)strlen(target_buf);
+}
+
+VarSizeType BIV_MouseDelay(char *aBuf, char *aVarName)
+{
+	char buf[MAX_NUMBER_SIZE];
+	char *target_buf = aBuf ? aBuf : buf;
+	_itoa(g.MouseDelay, target_buf, 10);  // Always output as decimal vs. hex in this case (so that scripts can use "If var in list" with confidence).
+	return (VarSizeType)strlen(target_buf);
+}
+
+VarSizeType BIV_DefaultMouseSpeed(char *aBuf, char *aVarName)
+{
+	char buf[MAX_NUMBER_SIZE];
+	char *target_buf = aBuf ? aBuf : buf;
+	_itoa(g.DefaultMouseSpeed, target_buf, 10);  // Always output as decimal vs. hex in this case (so that scripts can use "If var in list" with confidence).
+	return (VarSizeType)strlen(target_buf);
+}
+
+VarSizeType BIV_IsSuspended(char *aBuf, char *aVarName)
+{
+	if (aBuf)
+	{
+		*aBuf++ = g_IsSuspended ? '1' : '0';
+		*aBuf = '\0';
+	}
+	return 1;
+}
+
+#ifdef AUTOHOTKEYSC  // A_IsCompiled is left blank/undefined in uncompiled scripts.
+VarSizeType BIV_IsCompiled(char *aBuf, char *aVarName)
+{
+	if (aBuf)
+	{
+		*aBuf++ = '1';
+		*aBuf = '\0';
+	}
+	return 1;
+}
+#endif
+
+VarSizeType BIV_LastError(char *aBuf, char *aVarName)
+{
+	char buf[MAX_NUMBER_SIZE];
+	char *target_buf = aBuf ? aBuf : buf;
+	_itoa(g.LastError, target_buf, 10);  // Always output as decimal vs. hex in this case (so that scripts can use "If var in list" with confidence).
+	return (VarSizeType)strlen(target_buf);
+}
+
+
+
+VarSizeType BIV_IconHidden(char *aBuf, char *aVarName)
+{
+	if (aBuf)
+	{
+		*aBuf++ = g_NoTrayIcon ? '1' : '0';
+		*aBuf = '\0';
+	}
+	return 1;  // Length is always 1.
+}
+
+VarSizeType BIV_IconTip(char *aBuf, char *aVarName)
+{
+	if (!aBuf)
+		return g_script.mTrayIconTip ? (VarSizeType)strlen(g_script.mTrayIconTip) : 0;
+	if (g_script.mTrayIconTip)
+		return (VarSizeType)strlen(strcpy(aBuf, g_script.mTrayIconTip));
+	else
+	{
+		*aBuf = '\0';
+		return 0;
+	}
+}
+
+VarSizeType BIV_IconFile(char *aBuf, char *aVarName)
+{
+	if (!aBuf)
+		return g_script.mCustomIconFile ? (VarSizeType)strlen(g_script.mCustomIconFile) : 0;
+	if (g_script.mCustomIconFile)
+		return (VarSizeType)strlen(strcpy(aBuf, g_script.mCustomIconFile));
+	else
+	{
+		*aBuf = '\0';
+		return 0;
+	}
+}
+
+VarSizeType BIV_IconNumber(char *aBuf, char *aVarName)
+{
+	char buf[MAX_NUMBER_SIZE];
+	char *target_buf = aBuf ? aBuf : buf;
+	if (!g_script.mCustomIconNumber) // Yield an empty string rather than the digit "0".
+	{
+		*target_buf = '\0';
+		return 0;
+	}
+	return (VarSizeType)strlen(UTOA(g_script.mCustomIconNumber, target_buf));
+}
+
+
+
+VarSizeType BIV_ExitReason(char *aBuf, char *aVarName)
+{
+	char *str;
+	switch(g_script.mExitReason)
+	{
+	case EXIT_LOGOFF: str = "Logoff"; break;
+	case EXIT_SHUTDOWN: str = "Shutdown"; break;
+	// Since the below are all relatively rare, except WM_CLOSE perhaps, they are all included
+	// as one word to cut down on the number of possible words (it's easier to write OnExit
+	// routines to cover all possibilities if there are fewer of them).
+	case EXIT_WM_QUIT:
+	case EXIT_CRITICAL:
+	case EXIT_DESTROY:
+	case EXIT_WM_CLOSE: str = "Close"; break;
+	case EXIT_ERROR: str = "Error"; break;
+	case EXIT_MENU: str = "Menu"; break;  // Standard menu, not a user-defined menu.
+	case EXIT_EXIT: str = "Exit"; break;  // ExitApp or Exit command.
+	case EXIT_RELOAD: str = "Reload"; break;
+	case EXIT_SINGLEINSTANCE: str = "Single"; break;
+	default:  // EXIT_NONE or unknown value (unknown would be considered a bug if it ever happened).
+		str = "";
+	}
+	if (aBuf)
+		strcpy(aBuf, str);
+	return (VarSizeType)strlen(str);
+}
+
+
+
+VarSizeType BIV_Space_Tab(char *aBuf, char *aVarName)
+{
+	// Really old comment:
+	// A_Space is a built-in variable rather than using an escape sequence such as `s, because the escape
+	// sequence method doesn't work (probably because `s resolves to a space and is that trimmed at
+	// some point in process prior to when it can be used):
+	if (aBuf)
+	{
+		*aBuf++ = aVarName[5] ? ' ' : '\t'; // A_Tab[]
+		*aBuf = '\0';
+	}
+	return 1;
+}
+
+VarSizeType BIV_AhkVersion(char *aBuf, char *aVarName)
+{
+	if (aBuf)
+		strcpy(aBuf, NAME_VERSION);
+	return (VarSizeType)strlen(NAME_VERSION);
+}
+
+VarSizeType BIV_AhkPath(char *aBuf, char *aVarName) // v1.0.41.
+{
+#ifdef AUTOHOTKEYSC
+	if (aBuf)
+	{
+		GetAHKInstallDir(aBuf);
+		if (*aBuf)
+		{
+			char *cp = aBuf + strlen(aBuf); // Position of terminator.
+			// Name "AutoHotkey.exe" is assumed for code size reduction and because it's not stored in the registry:
+			strlcpy(cp, "\\AutoHotkey.exe", MAX_PATH - (cp - aBuf)); // strlcpy() in case registry has a path that is too close to MAX_PATH to fit AutoHotkey.exe
+		}
+		//else leave it blank as documented.
+		return (VarSizeType)strlen(aBuf);
+	}
+	// Otherwise: Always return an estimate of MAX_PATH in case the registry entry changes between the
+	// first call and the second.  This is also relied upon by strlcpy() above, which zero-fills the tail
+	// of the destination up through the limit of its capacity (due to calling strncpy, which does this).
+	return MAX_PATH;
+#else
+	char buf[MAX_PATH];
+	return (VarSizeType)GetModuleFileName(NULL, aBuf ? aBuf : buf, MAX_PATH);
+#endif
+}
+
+
+
+VarSizeType BIV_TickCount(char *aBuf, char *aVarName)
+{
+	// UPDATE: The below comments are now obsolete in light of having switched over to
+	// using 64-bit integers (which aren't that much slower than 32-bit on 32-bit hardware):
+	// Known limitation:
+	// Although TickCount is an unsigned value, I'm not sure that our EnvSub command
+	// will properly be able to compare two tick-counts if either value is larger than
+	// INT_MAX.  So if the system has been up for more than about 25 days, there might be
+	// problems if the user tries compare two tick-counts in the script using EnvSub.
+	// UPDATE: It seems better to store all unsigned values as signed within script
+	// variables.  Otherwise, when the var's value is next accessed and converted using
+	// ATOI(), the outcome won't be as useful.  In other words, since the negative value
+	// will be properly converted by ATOI(), comparing two negative tickcounts works
+	// correctly (confirmed).  Even if one of them is negative and the other positive,
+	// it will probably work correctly due to the nature of implicit unsigned math.
+	// Thus, we use %d vs. %u in the snprintf() call below.
+	return aBuf
+		? (VarSizeType)strlen(ITOA64(GetTickCount(), aBuf))
+		: MAX_NUMBER_LENGTH; // IMPORTANT: Conservative estimate because tick might change between 1st & 2nd calls.
+}
+
+
+
+VarSizeType BIV_Now(char *aBuf, char *aVarName)
+{
+	if (!aBuf)
+		return DATE_FORMAT_LENGTH;
+	SYSTEMTIME st;
+	if (aVarName[5]) // A_Now[U]TC
+		GetSystemTime(&st);
+	else
+		GetLocalTime(&st);
+	SystemTimeToYYYYMMDD(aBuf, st);
+	return (VarSizeType)strlen(aBuf);
+}
+
+VarSizeType BIV_OSType(char *aBuf, char *aVarName)
+{
+	char *type = g_os.IsWinNT() ? "WIN32_NT" : "WIN32_WINDOWS";
+	if (aBuf)
+		strcpy(aBuf, type);
+	return (VarSizeType)strlen(type); // Return length of type, not aBuf.
+}
+
+VarSizeType BIV_OSVersion(char *aBuf, char *aVarName)
+{
+	char *version = "";  // Init in case OS is something later than Win2003.
+	if (g_os.IsWinNT()) // "NT" includes all NT-kernal OSes: NT4/2000/XP/2003/Vista.
+	{
+		if (g_os.IsWinXP())
+			version = "WIN_XP";
+		else if (g_os.IsWinVista())
+			version = "WIN_VISTA";
+		else if (g_os.IsWin2003())
+			version = "WIN_2003";
+		else
+		{
+			if (g_os.IsWin2000())
+				version = "WIN_2000";
+			else
+				version = "WIN_NT4";
+		}
+	}
+	else
+	{
+		if (g_os.IsWin95())
+			version = "WIN_95";
+		else
+		{
+			if (g_os.IsWin98())
+				version = "WIN_98";
+			else
+				version = "WIN_ME";
+		}
+	}
+	if (aBuf)
+		strcpy(aBuf, version);
+	return (VarSizeType)strlen(version); // Always return the length of version, not aBuf.
+}
+
+VarSizeType BIV_Language(char *aBuf, char *aVarName)
+// Registry locations from J-Paul Mesnage.
+{
+	char buf[MAX_PATH];
+	char *target_buf = aBuf ? aBuf : buf;
+	if (g_os.IsWinNT())  // NT/2k/XP+
+	{
+		if (g_os.IsWin2000orLater())
+			ReadRegString(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Nls\\Language", "InstallLanguage", target_buf, MAX_PATH);
+		else // NT4
+			ReadRegString(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Nls\\Language", "Default", target_buf, MAX_PATH);
+	}
+	else // Win9x
+	{
+		ReadRegString(HKEY_USERS, ".DEFAULT\\Control Panel\\Desktop\\ResourceLocale", "", target_buf, MAX_PATH);
+		memmove(target_buf, target_buf + 4, strlen(target_buf + 4) + 1); // +1 to include the zero terminator.
+	}
+	return (VarSizeType)strlen(target_buf);
+}
+
+VarSizeType BIV_User_Computer(char *aBuf, char *aVarName)
+{
+	char buf[MAX_PATH];  // Doesn't use MAX_COMPUTERNAME_LENGTH + 1 in case longer names are allowed in the future.
+	char *target_buf = aBuf ? aBuf : buf;
+	DWORD buf_size = MAX_PATH;
+	if (   !(aVarName[6] ? GetComputerName(target_buf, &buf_size) : GetUserName(target_buf, &buf_size))   )
+		*target_buf = '\0';
+	return (VarSizeType)strlen(target_buf);
+}
+
+VarSizeType BIV_WorkingDir(char *aBuf, char *aVarName)
+{
+	// Use GetCurrentDirectory() vs. g_WorkingDir because any in-progrses FileSelectFile()
+	// dialog is able to keep functioning even when it's quasi-thread is suspended.  The
+	// dialog can thus change the current directory as seen by the active quasi-thread even
+	// though g_WorkingDir hasn't been updated.  It might also be possible for the working
+	// directory to change in unusual circumstances such as a network drive being lost).
+	//
+	// Fix for v1.0.43.11: Changed size below from 9999 to MAX_PATH, otherwise it fails sometimes on Win9x.
+	// Testing shows that the failure is not caused by GetCurrentDirectory() writing to the unused part of the
+	// buffer, such as zeroing it (which is good because that would require this part to be redesigned to pass
+	// the actual buffer size or use a temp buffer).  So there's something else going on to explain why the
+	// problem only occurs in longer scripts on Win98se, not in trivial ones such as Var=%A_WorkingDir%.
+	// Nor did the problem affect expression assignments such as Var:=A_WorkingDir.
+	return aBuf
+		? GetCurrentDirectory(MAX_PATH, aBuf)
+		: GetCurrentDirectory(0, NULL); // MSDN says that this is a valid way to call it on all OSes, and testing shows that it works on WinXP and 98se.
+		// Above avoids subtracting 1 to be conservative and to reduce code size (due to the need to otherwise check for zero and avoid subtracting 1 in that case).
+}
+
+VarSizeType BIV_WinDir(char *aBuf, char *aVarName)
+{
+	char buf_temp[1]; // Just a fake buffer to pass to some API functions in lieu of a NULL, to avoid any chance of misbehavior. Keep the size at 1 so that API functions will always fail to copy to buf.
+	// Sizes/lengths/-1/return-values/etc. have been verified correct.
+	return aBuf
+		? GetWindowsDirectory(aBuf, MAX_PATH) // MAX_PATH is kept in case it's needed on Win9x for reasons similar to those in GetEnvironmentVarWin9x().
+		: GetWindowsDirectory(buf_temp, 0);
+		// Above avoids subtracting 1 to be conservative and to reduce code size (due to the need to otherwise check for zero and avoid subtracting 1 in that case).
+}
+
+VarSizeType BIV_Temp(char *aBuf, char *aVarName)
+{
+	char buf_temp[1]; // Just a fake buffer to pass to some API functions in lieu of a NULL, to avoid any chance of misbehavior. Keep the size at 1 so that API functions will always fail to copy to buf.
+	// Sizes/lengths/-1/return-values/etc. have been verified correct.
+	if (!aBuf) // Avoids subtracting 1 to be conservative and to reduce code size (due to the need to otherwise check for zero and avoid subtracting 1 in that case).
+		return GetTempPath(0, buf_temp);
+	// Otherwise:
+	VarSizeType length;
+	if (length = GetTempPath(MAX_PATH, aBuf)) // aBuf[-1] below relies on this check having been done.
+	{
+		aBuf += length - 1;
+		if (*aBuf == '\\') // For some reason, it typically yields a trailing backslash, so omit it to improve friendliness/consistency.
+		{
+			*aBuf = '\0';
+			--length;
+		}
+	}
+	return length;
+}
+
+VarSizeType BIV_ComSpec(char *aBuf, char *aVarName)
+{
+	char buf_temp[1]; // Just a fake buffer to pass to some API functions in lieu of a NULL, to avoid any chance of misbehavior. Keep the size at 1 so that API functions will always fail to copy to buf.
+	// Sizes/lengths/-1/return-values/etc. have been verified correct.
+	return aBuf ? GET_ENV_VAR_RELIABLE("comspec", aBuf) // v1.0.46.08: GET_ENV_VAR_RELIABLE() is a new function to fix this on Windows 9x.
+		: GetEnvironmentVariable("comspec", buf_temp, 0); // Avoids subtracting 1 to be conservative and to reduce code size (due to the need to otherwise check for zero and avoid subtracting 1 in that case).
+}
+
+VarSizeType BIV_ProgramFiles(char *aBuf, char *aVarName)
+{
+	char buf[MAX_PATH];
+	char *target_buf = aBuf ? aBuf : buf;
+	ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion", "ProgramFilesDir", target_buf, MAX_PATH);
+	return (VarSizeType)strlen(target_buf);
+}
+
+VarSizeType BIV_AppData(char *aBuf, char *aVarName) // Called by multiple callers.
+{
+	char buf[MAX_PATH]; // One caller relies on this being explicitly limited to MAX_PATH.
+	char *target_buf = aBuf ? aBuf : buf;
+	*target_buf = '\0'; // Set default.
+	if (aVarName[9]) // A_AppData[C]ommon
+		ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders"
+			, "Common AppData", target_buf, MAX_PATH);
+	if (!*target_buf) // Either the above failed or we were told to get the user/private dir instead.
+		ReadRegString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders"
+			, "AppData", target_buf, MAX_PATH);
+	return (VarSizeType)strlen(target_buf);
+}
+
+VarSizeType BIV_Desktop(char *aBuf, char *aVarName)
+{
+	char buf[MAX_PATH];
+	char *target_buf = aBuf ? aBuf : buf;
+	*target_buf = '\0'; // Set default.
+	if (aVarName[9]) // A_Desktop[C]ommon
+		ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Desktop", target_buf, MAX_PATH);
+	if (!*target_buf) // Either the above failed or we were told to get the user/private dir instead.
+		ReadRegString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Desktop", target_buf, MAX_PATH);
+	return (VarSizeType)strlen(target_buf);
+}
+
+VarSizeType BIV_StartMenu(char *aBuf, char *aVarName)
+{
+	char buf[MAX_PATH];
+	char *target_buf = aBuf ? aBuf : buf;
+	*target_buf = '\0'; // Set default.
+	if (aVarName[11]) // A_StartMenu[C]ommon
+		ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Start Menu", target_buf, MAX_PATH);
+	if (!*target_buf) // Either the above failed or we were told to get the user/private dir instead.
+		ReadRegString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Start Menu", target_buf, MAX_PATH);
+	return (VarSizeType)strlen(target_buf);
+}
+
+VarSizeType BIV_Programs(char *aBuf, char *aVarName)
+{
+	char buf[MAX_PATH];
+	char *target_buf = aBuf ? aBuf : buf;
+	*target_buf = '\0'; // Set default.
+	if (aVarName[10]) // A_Programs[C]ommon
+		ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Programs", target_buf, MAX_PATH);
+	if (!*target_buf) // Either the above failed or we were told to get the user/private dir instead.
+		ReadRegString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Programs", target_buf, MAX_PATH);
+	return (VarSizeType)strlen(target_buf);
+}
+
+VarSizeType BIV_Startup(char *aBuf, char *aVarName)
+{
+	char buf[MAX_PATH];
+	char *target_buf = aBuf ? aBuf : buf;
+	*target_buf = '\0'; // Set default.
+	if (aVarName[9]) // A_Startup[C]ommon
+		ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Startup", target_buf, MAX_PATH);
+	if (!*target_buf) // Either the above failed or we were told to get the user/private dir instead.
+		ReadRegString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Startup", target_buf, MAX_PATH);
+	return (VarSizeType)strlen(target_buf);
+}
+
+VarSizeType BIV_MyDocuments(char *aBuf, char *aVarName) // Called by multiple callers.
+{
+	char buf[MAX_PATH];
+	char *target_buf = aBuf ? aBuf : buf;
+	ReadRegString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders"
+		, "Personal", target_buf, MAX_PATH); // Some callers might rely on MAX_PATH being the limit, to avoid overflow.
+	// Since it is common (such as in networked environments) to have My Documents on the root of a drive
+	// (such as a mapped drive letter), remove the backslash from something like M:\ because M: is more
+	// appropriate for most uses:
+	return (VarSizeType)strip_trailing_backslash(target_buf);
+}
+
+
+
+VarSizeType BIV_Caret(char *aBuf, char *aVarName)
+{
+	if (!aBuf)
+		return MAX_NUMBER_LENGTH; // Conservative, both for performance and in case the value changes between first and second call.
+
+	// These static variables are used to keep the X and Y coordinates in sync with each other, as a snapshot
+	// of where the caret was at one precise instant in time.  This is because the X and Y vars are resolved
+	// separately by the script, and due to split second timing, they might otherwise not be accurate with
+	// respect to each other.  This method also helps performance since it avoids unnecessary calls to
+	// ATTACH_THREAD_INPUT.
+	static HWND sForeWinPrev = NULL;
+	static DWORD sTimestamp = GetTickCount();
+	static POINT sPoint;
+	static BOOL sResult;
+
+	// I believe only the foreground window can have a caret position due to relationship with focused control.
+	HWND target_window = GetForegroundWindow(); // Variable must be named target_window for ATTACH_THREAD_INPUT.
+	if (!target_window) // No window is in the foreground, report blank coordinate.
+	{
+		*aBuf = '\0';
+		return 0;
+	}
+
+	DWORD now_tick = GetTickCount();
+
+	if (target_window != sForeWinPrev || now_tick - sTimestamp > 5) // Different window or too much time has passed.
+	{
+		// Otherwise:
+		ATTACH_THREAD_INPUT
+		sResult = GetCaretPos(&sPoint);
+		HWND focused_control = GetFocus();  // Also relies on threads being attached.
+		DETACH_THREAD_INPUT
+		if (!sResult)
+		{
+			*aBuf = '\0';
+			return 0;
+		}
+		ClientToScreen(focused_control ? focused_control : target_window, &sPoint);
+		if (!(g.CoordMode & COORD_MODE_CARET))  // Using the default, which is coordinates relative to window.
+			ScreenToWindow(sPoint, target_window);
+		// Now that all failure conditions have been checked, update static variables for the next caller:
+		sForeWinPrev = target_window;
+		sTimestamp = now_tick;
+	}
+	else // Same window and recent enough, but did prior call fail?  If so, provide a blank result like the prior.
+	{
+		if (!sResult)
+		{
+			*aBuf = '\0';
+			return 0;
+		}
+	}
+	// Now the above has ensured that sPoint contains valid coordinates that are up-to-date enough to be used.
+	_itoa(toupper(aVarName[7]) == 'X' ? sPoint.x : sPoint.y, aBuf, 10);  // Always output as decimal vs. hex in this case (so that scripts can use "If var in list" with confidence).
+	return (VarSizeType)strlen(aBuf);
+}
+
+
+
+VarSizeType BIV_Cursor(char *aBuf, char *aVarName)
+{
+	if (!aBuf)
+		return SMALL_STRING_LENGTH;  // We're returning the length of the var's contents, not the size.
+
+	// Must fetch it at runtime, otherwise the program can't even be launched on Windows 95:
+	typedef BOOL (WINAPI *MyGetCursorInfoType)(PCURSORINFO);
+	static MyGetCursorInfoType MyGetCursorInfo = (MyGetCursorInfoType)GetProcAddress(GetModuleHandle("user32"), "GetCursorInfo");
+
+	HCURSOR current_cursor;
+	if (MyGetCursorInfo) // v1.0.42.02: This method is used to avoid ATTACH_THREAD_INPUT, which interferes with double-clicking if called repeatedly at a high frequency.
+	{
+		CURSORINFO ci;
+		ci.cbSize = sizeof(CURSORINFO);
+		current_cursor = MyGetCursorInfo(&ci) ? ci.hCursor : NULL;
+	}
+	else // Windows 95 and old-service-pack versions of NT4 require the old method.
+	{
+		POINT point;
+		GetCursorPos(&point);
+		HWND target_window = WindowFromPoint(point);
+
+		// MSDN docs imply that threads must be attached for GetCursor() to work.
+		// A side-effect of attaching threads or of GetCursor() itself is that mouse double-clicks
+		// are interfered with, at least if this function is called repeatedly at a high frequency.
+		ATTACH_THREAD_INPUT
+		current_cursor = GetCursor();
+		DETACH_THREAD_INPUT
+	}
+
+	if (!current_cursor)
+	{
+		#define CURSOR_UNKNOWN "Unknown"
+		strlcpy(aBuf, CURSOR_UNKNOWN, SMALL_STRING_LENGTH + 1);
+		return (VarSizeType)strlen(aBuf);
+	}
+
+	// Static so that it's initialized on first use (should help performance after the first time):
+	static HCURSOR sCursor[] = {LoadCursor(NULL, IDC_APPSTARTING), LoadCursor(NULL, IDC_ARROW)
+		, LoadCursor(NULL, IDC_CROSS), LoadCursor(NULL, IDC_HELP), LoadCursor(NULL, IDC_IBEAM)
+		, LoadCursor(NULL, IDC_ICON), LoadCursor(NULL, IDC_NO), LoadCursor(NULL, IDC_SIZE)
+		, LoadCursor(NULL, IDC_SIZEALL), LoadCursor(NULL, IDC_SIZENESW), LoadCursor(NULL, IDC_SIZENS)
+		, LoadCursor(NULL, IDC_SIZENWSE), LoadCursor(NULL, IDC_SIZEWE), LoadCursor(NULL, IDC_UPARROW)
+		, LoadCursor(NULL, IDC_WAIT)}; // If IDC_HAND were added, it would break existing scripts that rely on Unknown being synonymous with Hand.  If ever added, IDC_HAND should return NULL on Win95/NT.
+	// The order in the below array must correspond to the order in the above array:
+	static char *sCursorName[] = {"AppStarting", "Arrow"
+		, "Cross", "Help", "IBeam"
+		, "Icon", "No", "Size"
+		, "SizeAll", "SizeNESW", "SizeNS"  // NESW = NorthEast+SouthWest
+		, "SizeNWSE", "SizeWE", "UpArrow"
+		, "Wait", CURSOR_UNKNOWN};  // The last item is used to mark end-of-array.
+	static int cursor_count = sizeof(sCursor) / sizeof(HCURSOR);
+
+	int i;
+	for (i = 0; i < cursor_count; ++i)
+		if (sCursor[i] == current_cursor)
+			break;
+
+	strlcpy(aBuf, sCursorName[i], SMALL_STRING_LENGTH + 1);  // If a is out-of-bounds, "Unknown" will be used.
+	return (VarSizeType)strlen(aBuf);
+}
+
+VarSizeType BIV_ScreenWidth_Height(char *aBuf, char *aVarName)
+{
+	return aBuf
+		? (VarSizeType)strlen(ITOA(GetSystemMetrics(aVarName[13] ? SM_CYSCREEN : SM_CXSCREEN), aBuf))
+		: MAX_NUMBER_LENGTH;
+}
+
+VarSizeType BIV_ScriptName(char *aBuf, char *aVarName)
+{
+	if (aBuf)
+		strcpy(aBuf, g_script.mFileName);
+	return (VarSizeType)strlen(g_script.mFileName);
+}
+
+VarSizeType BIV_ScriptDir(char *aBuf, char *aVarName)
+{
+	// v1.0.42.06: This function has been fixed not to call the following when we're called with aBuf!=NULL:
+	// strlcpy(target_buf, g_script.mFileDir, MAX_PATH);
+	// The above could crash because strlcpy() calls strncpy(), which zero fills the tail of the destination
+	// up through the limit of its capacity.  But we might have returned an estimate less than MAX_PATH
+	// when the caller called us the first time, which usually means that aBuf is smaller than MAX_PATH.
+	if (!aBuf)
+		return (VarSizeType)strlen(g_script.mFileDir) + 1; // +1 for conservative estimate in case g_script.mIsAutoIt2 (see below).
+	// Otherwise, write the result to the buffer and return its exact length, not an estimate:
+	size_t length = strlen(strcpy(aBuf, g_script.mFileDir)); // Caller has ensured that aBuf is large enough.
+	// If it doesn't already have a final backslash, namely due to it being a root directory,
+	// provide one so that it is backward compatible with AutoIt v2:
+	if (g_script.mIsAutoIt2 && length && aBuf[length - 1] != '\\')
+	{
+		aBuf[length++] = '\\';
+		aBuf[length] = '\0';
+	}
+	return (VarSizeType)length;
+}
+
+VarSizeType BIV_ScriptFullPath(char *aBuf, char *aVarName)
+{
+	return aBuf
+		? sprintf(aBuf, "%s\\%s", g_script.mFileDir, g_script.mFileName)
+		:(VarSizeType)(strlen(g_script.mFileDir) + strlen(g_script.mFileName) + 1);
+}
+
+VarSizeType BIV_LineNumber(char *aBuf, char *aVarName)
+// Caller has ensured that g_script.mCurrLine is not NULL.
+{
+	return aBuf
+		? (VarSizeType)strlen(ITOA(g_script.mCurrLine->mLineNumber, aBuf))
+		: MAX_NUMBER_LENGTH;
+}
+
+VarSizeType BIV_LineFile(char *aBuf, char *aVarName)
+// Caller has ensured that g_script.mCurrLine is not NULL.
+{
+	if (aBuf)
+		strcpy(aBuf, Line::sSourceFile[g_script.mCurrLine->mFileNumber]);
+	return (VarSizeType)strlen(Line::sSourceFile[g_script.mCurrLine->mFileNumber]);
+}
+
+
+
+VarSizeType BIV_LoopFileName(char *aBuf, char *aVarName) // Called by multiple callers.
+{
+	char *naked_filename;
+	if (g.mLoopFile)
+	{
+		// The loop handler already prepended the script's directory in here for us:
+		if (naked_filename = strrchr(g.mLoopFile->cFileName, '\\'))
+			++naked_filename;
+		else // No backslash, so just make it the entire file name.
+			naked_filename = g.mLoopFile->cFileName;
+	}
+	else
+		naked_filename = "";
+	if (aBuf)
+		strcpy(aBuf, naked_filename);
+	return (VarSizeType)strlen(naked_filename);
+}
+
+VarSizeType BIV_LoopFileShortName(char *aBuf, char *aVarName)
+{
+	char *short_filename = "";  // Set default.
+	if (g.mLoopFile)
+	{
+		if (   !*(short_filename = g.mLoopFile->cAlternateFileName)   )
+			// Files whose long name is shorter than the 8.3 usually don't have value stored here,
+			// so use the long name whenever a short name is unavailable for any reason (could
+			// also happen if NTFS has short-name generation disabled?)
+			return BIV_LoopFileName(aBuf, "");
+	}
+	if (aBuf)
+		strcpy(aBuf, short_filename);
+	return (VarSizeType)strlen(short_filename);
+}
+
+VarSizeType BIV_LoopFileExt(char *aBuf, char *aVarName)
+{
+	char *file_ext = "";  // Set default.
+	if (g.mLoopFile)
+	{
+		// The loop handler already prepended the script's directory in here for us:
+		if (file_ext = strrchr(g.mLoopFile->cFileName, '.'))
+			++file_ext;
+		else // Reset to empty string vs. NULL.
+			file_ext = "";
+	}
+	if (aBuf)
+		strcpy(aBuf, file_ext);
+	return (VarSizeType)strlen(file_ext);
+}
+
+VarSizeType BIV_LoopFileDir(char *aBuf, char *aVarName)
+{
+	char *file_dir = "";  // Set default.
+	char *last_backslash = NULL;
+	if (g.mLoopFile)
+	{
+		// The loop handler already prepended the script's directory in here for us.
+		// But if the loop had a relative path in its FilePattern, there might be
+		// only a relative directory here, or no directory at all if the current
+		// file is in the origin/root dir of the search:
+		if (last_backslash = strrchr(g.mLoopFile->cFileName, '\\'))
+		{
+			*last_backslash = '\0'; // Temporarily terminate.
+			file_dir = g.mLoopFile->cFileName;
+		}
+		else // No backslash, so there is no directory in this case.
+			file_dir = "";
+	}
+	VarSizeType length = (VarSizeType)strlen(file_dir);
+	if (!aBuf)
+	{
+		if (last_backslash)
+			*last_backslash = '\\';  // Restore the orginal value.
+		return length;
+	}
+	strcpy(aBuf, file_dir);
+	if (last_backslash)
+		*last_backslash = '\\';  // Restore the orginal value.
+	return length;
+}
+
+VarSizeType BIV_LoopFileFullPath(char *aBuf, char *aVarName)
+{
+	// The loop handler already prepended the script's directory in cFileName for us:
+	char *full_path = g.mLoopFile ? g.mLoopFile->cFileName : "";
+	if (aBuf)
+		strcpy(aBuf, full_path);
+	return (VarSizeType)strlen(full_path);
+}
+
+VarSizeType BIV_LoopFileLongPath(char *aBuf, char *aVarName)
+{
+	char *unused, buf[MAX_PATH];
+	char *target_buf = aBuf ? aBuf : buf;
+	*target_buf = '\0';  // Set default.
+	if (g.mLoopFile)
+	{
+		// GetFullPathName() is done in addition to ConvertFilespecToCorrectCase() for the following reasons:
+		// 1) It's currrently the only easy way to get the full path of the directory in which a file resides.
+		//    For example, if a script is passed a filename via command line parameter, that file could be
+		//    either an absolute path or a relative path.  If relative, of course it's relative to A_WorkingDir.
+		//    The problem is, the script would have to manually detect this, which would probably take several
+		//    extra steps.
+		// 2) A_LoopFileLongPath is mostly intended for the following cases, and in all of them it seems
+		//    preferable to have the full/absolute path rather than the relative path:
+		//    a) Files dragged onto a .ahk script when the drag-and-drop option has been enabled via the Installer.
+		//    b) Files passed into the script via command line.
+		// The below also serves to make a copy because changing the original would yield
+		// unexpected/inconsistent results in a script that retrieves the A_LoopFileFullPath
+		// but only conditionally retrieves A_LoopFileLongPath.
+		if (!GetFullPathName(g.mLoopFile->cFileName, MAX_PATH, target_buf, &unused))
+			*target_buf = '\0'; // It might fail if NtfsDisable8dot3NameCreation is turned on in the registry, and possibly for other reasons.
+		else
+			// The below is called in case the loop is being used to convert filename specs that were passed
+			// in from the command line, which thus might not be the proper case (at least in the path
+			// portion of the filespec), as shown in the file system:
+			ConvertFilespecToCorrectCase(target_buf);
+	}
+	return (VarSizeType)strlen(target_buf); // Must explicitly calculate the length rather than using the return value from GetFullPathName(), because ConvertFilespecToCorrectCase() expands 8.3 path components.
+}
+
+VarSizeType BIV_LoopFileShortPath(char *aBuf, char *aVarName)
+// Unlike GetLoopFileShortName(), this function returns blank when there is no short path.
+// This is done so that there's a way for the script to more easily tell the difference between
+// an 8.3 name not being available (due to the being disabled in the registry) and the short
+// name simply being the same as the long name.  For example, if short name creation is disabled
+// in the registry, A_LoopFileShortName would contain the long name instead, as documented.
+// But to detect if that short name is really a long name, A_LoopFileShortPath could be checked
+// and if it's blank, there is no short name available.
+{
+	char buf[MAX_PATH];
+	char *target_buf = aBuf ? aBuf : buf;
+	*target_buf = '\0'; // Set default.
+	DWORD length = 0;   //
+	if (g.mLoopFile)
+		// The loop handler already prepended the script's directory in cFileName for us:
+		if (   !(length = GetShortPathName(g.mLoopFile->cFileName, target_buf, MAX_PATH))   )
+			*target_buf = '\0'; // It might fail if NtfsDisable8dot3NameCreation is turned on in the registry, and possibly for other reasons.
+	return (VarSizeType)length;
+}
+
+VarSizeType BIV_LoopFileTime(char *aBuf, char *aVarName)
+{
+	char buf[64];
+	char *target_buf = aBuf ? aBuf : buf;
+	*target_buf = '\0'; // Set default.
+	if (g.mLoopFile)
+	{
+		FILETIME ft;
+		switch(toupper(aVarName[14])) // A_LoopFileTime[A]ccessed
+		{
+		case 'M': ft = g.mLoopFile->ftLastWriteTime; break;
+		case 'C': ft = g.mLoopFile->ftCreationTime; break;
+		default: ft = g.mLoopFile->ftLastAccessTime;
+		}
+		FileTimeToYYYYMMDD(target_buf,ft, true);
+	}
+	return (VarSizeType)strlen(target_buf);
+}
+
+VarSizeType BIV_LoopFileAttrib(char *aBuf, char *aVarName)
+{
+	char buf[64];
+	char *target_buf = aBuf ? aBuf : buf;
+	*target_buf = '\0'; // Set default.
+	if (g.mLoopFile)
+		FileAttribToStr(target_buf, g.mLoopFile->dwFileAttributes);
+	return (VarSizeType)strlen(target_buf);
+}
+
+VarSizeType BIV_LoopFileSize(char *aBuf, char *aVarName)
+{
+	// Don't use MAX_NUMBER_LENGTH in case user has selected a very long float format via SetFormat.
+	char str[128];
+	char *target_buf = aBuf ? aBuf : str;
+	*target_buf = '\0';  // Set default.
+	if (g.mLoopFile)
+	{
+
+		// UPDATE: 64-bit ints are now standard, so the following is obsolete:
+		// It's a documented limitation that the size will show as negative if
+		// greater than 2 gig, and will be wrong if greater than 4 gig.  For files
+		// that large, scripts should use the KB version of this function instead.
+		// If a file is over 4gig, set the value to be the maximum size (-1 when
+		// expressed as a signed integer, since script variables are based entirely
+		// on 32-bit signed integers due to the use of ATOI(), etc.).
+		//sprintf(str, "%d%", g.mLoopFile->nFileSizeHigh ? -1 : (int)g.mLoopFile->nFileSizeLow);
+		ULARGE_INTEGER ul;
+		ul.HighPart = g.mLoopFile->nFileSizeHigh;
+		ul.LowPart = g.mLoopFile->nFileSizeLow;
+		int divider;
+		switch (toupper(aVarName[14])) // A_LoopFileSize[K/M]B
+		{
+		case 'K': divider = 1024; break;
+		case 'M': divider = 1024*1024; break;
+		default:  divider = 0;
+		}
+		ITOA64((__int64)(divider ? ((unsigned __int64)ul.QuadPart / divider) : ul.QuadPart), target_buf);
+	}
+	return (VarSizeType)strlen(target_buf);
+}
+
+VarSizeType BIV_LoopRegType(char *aBuf, char *aVarName)
+{
+	char buf[MAX_PATH];
+	char *target_buf = aBuf ? aBuf : buf;
+	*target_buf = '\0'; // Set default.
+	if (g.mLoopRegItem)
+		Line::RegConvertValueType(target_buf, MAX_PATH, g.mLoopRegItem->type);
+	return (VarSizeType)strlen(target_buf);
+}
+
+VarSizeType BIV_LoopRegKey(char *aBuf, char *aVarName)
+{
+	char buf[MAX_PATH];
+	char *target_buf = aBuf ? aBuf : buf;
+	*target_buf = '\0'; // Set default.
+	if (g.mLoopRegItem)
+		// Use root_key_type, not root_key (which might be a remote vs. local HKEY):
+		Line::RegConvertRootKey(target_buf, MAX_PATH, g.mLoopRegItem->root_key_type);
+	return (VarSizeType)strlen(target_buf);
+}
+
+VarSizeType BIV_LoopRegSubKey(char *aBuf, char *aVarName)
+{
+	char *str = g.mLoopRegItem ? g.mLoopRegItem->subkey : "";
+	if (aBuf)
+		strcpy(aBuf, str);
+	return (VarSizeType)strlen(str);
+}
+
+VarSizeType BIV_LoopRegName(char *aBuf, char *aVarName)
+{
+	// This can be either the name of a subkey or the name of a value.
+	char *str = g.mLoopRegItem ? g.mLoopRegItem->name : "";
+	if (aBuf)
+		strcpy(aBuf, str);
+	return (VarSizeType)strlen(str);
+}
+
+VarSizeType BIV_LoopRegTimeModified(char *aBuf, char *aVarName)
+{
+	char buf[64];
+	char *target_buf = aBuf ? aBuf : buf;
+	*target_buf = '\0'; // Set default.
+	// Only subkeys (not values) have a time.  In addition, Win9x doesn't support retrieval
+	// of the time (nor does it store it), so make the var blank in that case:
+	if (g.mLoopRegItem && g.mLoopRegItem->type == REG_SUBKEY && !g_os.IsWin9x())
+		FileTimeToYYYYMMDD(target_buf, g.mLoopRegItem->ftLastWriteTime, true);
+	return (VarSizeType)strlen(target_buf);
+}
+
+VarSizeType BIV_LoopReadLine(char *aBuf, char *aVarName)
+{
+	char *str = g.mLoopReadFile ? g.mLoopReadFile->mCurrentLine : "";
+	if (aBuf)
+		strcpy(aBuf, str);
+	return (VarSizeType)strlen(str);
+}
+
+VarSizeType BIV_LoopField(char *aBuf, char *aVarName)
+{
+	char *str = g.mLoopField ? g.mLoopField : "";
+	if (aBuf)
+		strcpy(aBuf, str);
+	return (VarSizeType)strlen(str);
+}
+
+VarSizeType BIV_LoopIndex(char *aBuf, char *aVarName)
+{
+	return aBuf
+		? (VarSizeType)strlen(ITOA64(g.mLoopIteration, aBuf)) // Must return exact length when aBuf isn't NULL.
+		: MAX_NUMBER_LENGTH; // Probably performs better to return a conservative estimate for the first pass than to call ITOA64 for both passes.
+}
+
+
+
+VarSizeType BIV_ThisFunc(char *aBuf, char *aVarName)
+{
+	char *name = g.CurrentFunc ? g.CurrentFunc->mName : "";
+	if (aBuf)
+		strcpy(aBuf, name);
+	return (VarSizeType)strlen(name);
+}
+
+VarSizeType BIV_ThisLabel(char *aBuf, char *aVarName)
+{
+	char *name = g.CurrentLabel ? g.CurrentLabel->mName : "";
+	if (aBuf)
+		strcpy(aBuf, name);
+	return (VarSizeType)strlen(name);
+}
+
+VarSizeType BIV_ThisMenuItem(char *aBuf, char *aVarName)
+{
+	if (aBuf)
+		strcpy(aBuf, g_script.mThisMenuItemName);
+	return (VarSizeType)strlen(g_script.mThisMenuItemName);
+}
+
+VarSizeType BIV_ThisMenuItemPos(char *aBuf, char *aVarName)
+{
+	if (!aBuf) // To avoid doing possibly high-overhead calls twice, merely return a conservative estimate for the first pass.
+		return MAX_NUMBER_LENGTH;
+	// The menu item's position is discovered through this process -- rather than doing
+	// something higher performance such as storing the menu handle or pointer to menu/item
+	// object in g_script -- because those things tend to be volatile.  For example, a menu
+	// or menu item object might be destroyed between the time the user selects it and the
+	// time this variable is referenced in the script.  Thus, by definition, this variable
+	// contains the CURRENT position of the most recently selected menu item within its
+	// CURRENT menu.
+	if (*g_script.mThisMenuName && *g_script.mThisMenuItemName)
+	{
+		UserMenu *menu = g_script.FindMenu(g_script.mThisMenuName);
+		if (menu)
+		{
+			// If the menu does not physically exist yet (perhaps due to being destroyed as a result
+			// of DeleteAll, Delete, or some other operation), create it so that the position of the
+			// item can be determined.  This is done for consistency in behavior.
+			if (!menu->mMenu)
+				menu->Create();
+			UINT menu_item_pos = menu->GetItemPos(g_script.mThisMenuItemName);
+			if (menu_item_pos < UINT_MAX) // Success
+				return (VarSizeType)strlen(UTOA(menu_item_pos + 1, aBuf)); // +1 to convert from zero-based to 1-based.
+		}
+	}
+	// Otherwise:
+	*aBuf = '\0';
+	return 0;
+}
+
+VarSizeType BIV_ThisMenu(char *aBuf, char *aVarName)
+{
+	if (aBuf)
+		strcpy(aBuf, g_script.mThisMenuName);
+	return (VarSizeType)strlen(g_script.mThisMenuName);
+}
+
+VarSizeType BIV_ThisHotkey(char *aBuf, char *aVarName)
+{
+	if (aBuf)
+		strcpy(aBuf, g_script.mThisHotkeyName);
+	return (VarSizeType)strlen(g_script.mThisHotkeyName);
+}
+
+VarSizeType BIV_PriorHotkey(char *aBuf, char *aVarName)
+{
+	if (aBuf)
+		strcpy(aBuf, g_script.mPriorHotkeyName);
+	return (VarSizeType)strlen(g_script.mPriorHotkeyName);
+}
+
+VarSizeType BIV_TimeSinceThisHotkey(char *aBuf, char *aVarName)
+{
+	if (!aBuf) // IMPORTANT: Conservative estimate because the time might change between 1st & 2nd calls.
+		return MAX_NUMBER_LENGTH;
+	// It must be the type of hotkey that has a label because we want the TimeSinceThisHotkey
+	// value to be "in sync" with the value of ThisHotkey itself (i.e. use the same method
+	// to determine which hotkey is the "this" hotkey):
+	if (*g_script.mThisHotkeyName)
+		// Even if GetTickCount()'s TickCount has wrapped around to zero and the timestamp hasn't,
+		// DWORD math still gives the right answer as long as the number of days between
+		// isn't greater than about 49.  See MyGetTickCount() for explanation of %d vs. %u.
+		// Update: Using 64-bit ints now, so above is obsolete:
+		//snprintf(str, sizeof(str), "%d", (DWORD)(GetTickCount() - g_script.mThisHotkeyStartTime));
+		ITOA64((__int64)(GetTickCount() - g_script.mThisHotkeyStartTime), aBuf);
+	else
+		strcpy(aBuf, "-1");
+	return (VarSizeType)strlen(aBuf);
+}
+
+VarSizeType BIV_TimeSincePriorHotkey(char *aBuf, char *aVarName)
+{
+	if (!aBuf) // IMPORTANT: Conservative estimate because the time might change between 1st & 2nd calls.
+		return MAX_NUMBER_LENGTH;
+	if (*g_script.mPriorHotkeyName)
+		// See MyGetTickCount() for explanation for explanation:
+		//snprintf(str, sizeof(str), "%d", (DWORD)(GetTickCount() - g_script.mPriorHotkeyStartTime));
+		ITOA64((__int64)(GetTickCount() - g_script.mPriorHotkeyStartTime), aBuf);
+	else
+		strcpy(aBuf, "-1");
+	return (VarSizeType)strlen(aBuf);
+}
+
+VarSizeType BIV_EndChar(char *aBuf, char *aVarName)
+{
+	if (aBuf)
+	{
+		*aBuf++ = g_script.mEndChar;
+		*aBuf = '\0';
+	}
+	return 1;
+}
+
+
+
+VarSizeType BIV_Gui(char *aBuf, char *aVarName)
+// We're returning the length of the var's contents, not the size.
+{
+	char buf[MAX_NUMBER_SIZE];
+	char *target_buf = aBuf ? aBuf : buf;
+
+	if (g.GuiWindowIndex >= MAX_GUI_WINDOWS) // The current thread was not launched as a result of GUI action.
+	{
+		*target_buf = '\0';
+		return 0;
+	}
+
+	switch (toupper(aVarName[5]))
+	{
+	case 'W':
+		// g.GuiPoint.x was overloaded to contain the size, since there are currently never any cases when
+		// A_GuiX/Y and A_GuiWidth/Height are both valid simultaneously.  It is documented that each of these
+		// variables is defined only in proper types of subroutines.
+		_itoa(LOWORD(g.GuiPoint.x), target_buf, 10);
+		// Above is always stored as decimal vs. hex, regardless of script settings.
+		break;
+	case 'H':
+		_itoa(HIWORD(g.GuiPoint.x), target_buf, 10); // See comments above.
+		break;
+	case 'X':
+		_itoa(g.GuiPoint.x, target_buf, 10);
+		break;
+	case 'Y':
+		_itoa(g.GuiPoint.y, target_buf, 10);
+		break;
+	case '\0': // A_Gui
+		_itoa(g.GuiWindowIndex + 1, target_buf, 10);  // Always stored as decimal vs. hex, regardless of script settings.
+		break;
+	}
+
+	return (VarSizeType)strlen(target_buf);
+}
+
+
+
+VarSizeType BIV_GuiControl(char *aBuf, char *aVarName)
+{
+	// Other logic ensures that g.GuiControlIndex is out-of-bounds whenever g.GuiWindowIndex is.
+	// That is why g.GuiWindowIndex is not checked to make sure it's less than MAX_GUI_WINDOWS.
+	return GuiType::ControlGetName(g.GuiWindowIndex, g.GuiControlIndex, aBuf);
+}
+
+
+
+VarSizeType BIV_GuiEvent(char *aBuf, char *aVarName)
+// We're returning the length of the var's contents, not the size.
+{
+	if (g.GuiEvent == GUI_EVENT_DROPFILES)
+	{
+		GuiType *pgui;
+		UINT u, file_count;
+		// GUI_EVENT_DROPFILES should mean that g.GuiWindowIndex < MAX_GUI_WINDOWS, but the below will double check
+		// that in case g.GuiEvent can ever be set to that value as a result of receiving a bogus message in the queue.
+		if (g.GuiWindowIndex >= MAX_GUI_WINDOWS  // The current thread was not launched as a result of GUI action or this is a bogus msg.
+			|| !(pgui = g_gui[g.GuiWindowIndex]) // Gui window no longer exists.  Relies on short-circuit boolean.
+			|| !pgui->mHdrop // No HDROP (probably impossible unless g.GuiEvent was given a bogus value somehow).
+			|| !(file_count = DragQueryFile(pgui->mHdrop, 0xFFFFFFFF, NULL, 0))) // No files in the drop (not sure if this is possible).
+			// All of the above rely on short-circuit boolean order.
+		{
+			// Make the dropped-files list blank since there is no HDROP to query (or no files in it).
+			if (aBuf)
+				*aBuf = '\0';
+			return 0;
+		}
+		// Above has ensured that file_count > 0
+		if (aBuf)
+		{
+			char *cp = aBuf;
+			for (u = 0; u < file_count; ++u)
+			{
+				cp += DragQueryFile(pgui->mHdrop, u, cp, MAX_PATH); // MAX_PATH is arbitrary since aBuf is already known to be large enough.
+				if (u < file_count - 1) // i.e omit the LF after the last file to make parsing via "Loop, Parse" easier.
+					*cp++ = '\n';
+				// Although the transcription of files on the clipboard into their text filenames is done
+				// with \r\n (so that they're in the right format to be pasted to other apps as a plain text
+				// list), it seems best to use a plain linefeed for dropped files since they won't be going
+				// onto the clipboard nearly as often, and `n is easier to parse.  Also, a script array isn't
+				// used because large file lists would then consume a lot more of memory because arrays
+				// are permanent once created, and also there would be wasted space due to the part of each
+				// variable's capacity not used by the filename.
+			}
+			// No need for final termination of string because the last item lacks a newline.
+			return (VarSizeType)(cp - aBuf); // This is the length of what's in the buffer.
+		}
+		else
+		{
+			VarSizeType total_length = 0;
+			for (u = 0; u < file_count; ++u)
+				total_length += DragQueryFile(pgui->mHdrop, u, NULL, 0);
+				// Above: MSDN: "If the lpszFile buffer address is NULL, the return value is the required size,
+				// in characters, of the buffer, not including the terminating null character."
+			return total_length + file_count - 1; // Include space for a linefeed after each filename except the last.
+		}
+		// Don't call DragFinish() because this variable might be referred to again before this thread
+		// is done.  DragFinish() is called by MsgSleep() when the current thread finishes.
+	}
+
+	// Otherwise, this event is not GUI_EVENT_DROPFILES, so use standard modes of operation.
+	static char *sNames[] = GUI_EVENT_NAMES;
+	if (!aBuf)
+		return (g.GuiEvent < GUI_EVENT_FIRST_UNNAMED) ? (VarSizeType)strlen(sNames[g.GuiEvent]) : 1;
+	// Otherwise:
+	if (g.GuiEvent < GUI_EVENT_FIRST_UNNAMED)
+	{
+		strcpy(aBuf, sNames[g.GuiEvent]);
+		return (VarSizeType)strlen(aBuf);
+	}
+	else // g.GuiEvent is assumed to be an ASCII value, such as a digit.  This supports Slider controls.
+	{
+		*aBuf++ = (char)(UCHAR)g.GuiEvent;
+		*aBuf = '\0';
+		return 1;
+	}
+}
+
+
+
+VarSizeType BIV_EventInfo(char *aBuf, char *aVarName)
+// We're returning the length of the var's contents, not the size.
+{
+	return aBuf
+		? (VarSizeType)strlen(UTOA(g.EventInfo, aBuf)) // Must return exact length when aBuf isn't NULL.
+		: MAX_NUMBER_LENGTH;
+}
+
+
+
+VarSizeType BIV_TimeIdle(char *aBuf, char *aVarName) // Called by multiple callers.
+{
+	if (!aBuf) // IMPORTANT: Conservative estimate because tick might change between 1st & 2nd calls.
+		return MAX_NUMBER_LENGTH;
+	*aBuf = '\0';  // Set default.
+	if (g_os.IsWin2000orLater()) // Checked in case the function is present but "not implemented".
+	{
+		// Must fetch it at runtime, otherwise the program can't even be launched on Win9x/NT:
+		typedef BOOL (WINAPI *MyGetLastInputInfoType)(PLASTINPUTINFO);
+		static MyGetLastInputInfoType MyGetLastInputInfo = (MyGetLastInputInfoType)
+			GetProcAddress(GetModuleHandle("user32"), "GetLastInputInfo");
+		if (MyGetLastInputInfo)
+		{
+			LASTINPUTINFO lii;
+			lii.cbSize = sizeof(lii);
+			if (MyGetLastInputInfo(&lii))
+				ITOA64(GetTickCount() - lii.dwTime, aBuf);
+		}
+	}
+	return (VarSizeType)strlen(aBuf);
+}
+
+
+
+VarSizeType BIV_TimeIdlePhysical(char *aBuf, char *aVarName)
+// This is here rather than in script.h with the others because it depends on
+// hotkey.h and globaldata.h, which can't be easily included in script.h due to
+// mutual dependency issues.
+{
+	// If neither hook is active, default this to the same as the regular idle time:
+	if (!(g_KeybdHook || g_MouseHook))
+		return BIV_TimeIdle(aBuf, "");
+	if (!aBuf)
+		return MAX_NUMBER_LENGTH; // IMPORTANT: Conservative estimate because tick might change between 1st & 2nd calls.
+	return (VarSizeType)strlen(ITOA64(GetTickCount() - g_TimeLastInputPhysical, aBuf)); // Switching keyboard layouts/languages sometimes sees to throw off the timestamps of the incoming events in the hook.
+}
 
 
 ////////////////////////
@@ -10956,9 +12337,9 @@ break_both:
 		{
 			// Since both the error code and the offset are desirable outputs, it semes best to also
 			// include descriptive error text (debatable).
-			snprintf(error_buf, sizeof(error_buf), "Compile error %d at offset %d: %s"
-				, error_code, error_offset, error_msg);
-			g_ErrorLevel->Assign(error_buf);
+			g_ErrorLevel->Assign(error_buf
+				, snprintf(error_buf, sizeof(error_buf), "Compile error %d at offset %d: %s"
+					, error_code, error_offset, error_msg));
 		}
 		goto error;
 	}
@@ -11570,7 +12951,8 @@ void BIF_RegEx(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 	// as a result of appending the array index number:
 	char var_name[MAX_VAR_NAME_LENGTH + 68]; // Allow +3 extra for "Len" and "Pos" suffixes, +1 for terminator, and +64 for largest sub-pattern name (actually it's 32, but 64 allows room for future expansion).  64 is also enough room for the largest 64-bit integer, 20 chars: 18446744073709551616
 	strcpy(var_name, output_var.mName); // This prefix is copied in only once, for performance.
-	char *var_name_suffix = var_name + strlen(var_name); // The position at which to copy the sequence number (index).
+	size_t suffix_length, prefix_length = strlen(var_name);
+	char *var_name_suffix = var_name + prefix_length; // The position at which to copy the sequence number (index).
 	int always_use = output_var.IsLocal() ? ALWAYS_USE_LOCAL : ALWAYS_USE_GLOBAL;
 	int n, p = 1, *this_offset = offset + 2; // Init for both loops below.
 	Var *array_item;
@@ -11597,11 +12979,11 @@ void BIF_RegEx(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 			{
 				if (*subpat_name[p]) // This check supports allow_dupe_subpat_names. See comments below.
 				{
-					sprintf(var_name_suffix, "Pos%s", subpat_name[p]); // Append the subpattern to the array's base name.
-					if (array_item = g_script.FindOrAddVar(var_name, 0, always_use))
+					suffix_length = sprintf(var_name_suffix, "Pos%s", subpat_name[p]); // Append the subpattern to the array's base name.
+					if (array_item = g_script.FindOrAddVar(var_name, prefix_length + suffix_length, always_use))
 						array_item->Assign(subpat_pos);
-					sprintf(var_name_suffix, "Len%s", subpat_name[p]); // Append the subpattern name to the array's base name.
-					if (array_item = g_script.FindOrAddVar(var_name, 0, always_use))
+					suffix_length = sprintf(var_name_suffix, "Len%s", subpat_name[p]); // Append the subpattern name to the array's base name.
+					if (array_item = g_script.FindOrAddVar(var_name, prefix_length + suffix_length, always_use))
 						array_item->Assign(subpat_len);
 					// Fix for v1.0.45.01: Section below added.  See similar section further below for comments.
 					if (!subpat_not_matched && allow_dupe_subpat_names) // Explicitly check subpat_not_matched not pos/len so that behavior is consistent with the default mode (non-position).
@@ -11614,12 +12996,12 @@ void BIF_RegEx(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 			else // This subpattern has no name, so write it out as its pattern number instead. For performance and memory utilization, it seems best to store only one or the other (named or number), not both.
 			{
 				// For comments about this section, see the similar for-loop later below.
-				sprintf(var_name_suffix, "Pos%d", p); // Append the element number to the array's base name.
-				if (array_item = g_script.FindOrAddVar(var_name, 0, always_use))
+				suffix_length = sprintf(var_name_suffix, "Pos%d", p); // Append the element number to the array's base name.
+				if (array_item = g_script.FindOrAddVar(var_name, prefix_length + suffix_length, always_use))
 					array_item->Assign(subpat_pos);
 				//else var couldn't be created: no error reporting currently, since it basically should never happen.
-				sprintf(var_name_suffix, "Len%d", p); // Append the element number to the array's base name.
-				if (array_item = g_script.FindOrAddVar(var_name, 0, always_use))
+				suffix_length = sprintf(var_name_suffix, "Len%d", p); // Append the element number to the array's base name.
+				if (array_item = g_script.FindOrAddVar(var_name, prefix_length + suffix_length, always_use))
 					array_item->Assign(subpat_len);
 			}
 		}
@@ -11713,6 +13095,57 @@ void BIF_Chr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCou
 	aResultToken.symbol = SYM_STRING;
 	aResultToken.marker = cp;
 }
+
+
+
+//void BIF_ExtractInteger(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+//{
+//	ExprTokenType &param1 = *aParam[0];
+//	size_t pmem = (param1.symbol == SYM_VAR) // Don't make pmem a pointer-type because the integer offset might not be a multiple of 4 (i.e. the below increments "pmem" directly by "offset").
+//		? (size_t)param1.var->Contents()
+//		: (size_t)ExprTokenToInt64(param1);
+//
+//	if (aParamCount > 1) // Parameter "offset" is present, so increment the address by that amount.  For simplicity, this is done even when parameter #1 isn't a variable.
+//		pmem += (size_t)ExprTokenToInt64(*aParam[1]);
+//
+//	if (pmem < 256) // Doesn't measurably impact performance, and helps prevent buggy scripts from crashing. This is checked only after adding the offset above in case a script ever adds a very high offset to a very low address (for some reason).
+//	{
+//		aResultToken.symbol = SYM_STRING;
+//		aResultToken.marker = "";
+//		return;
+//	}
+//
+//	size_t size = (aParamCount < 4) ? 4 : (size_t)ExprTokenToInt64(*aParam[3]);
+//
+//	#define EXTRACT_UNSIGNED 0 // To avoid breaking future scripts, the logic further below considers any 
+//	#define EXTRACT_SIGNED   1 // value other than 0 and 2 to be the same as 1.
+//	#define EXTRACT_FLOAT    2
+//	int is_signed_or_float = (aParamCount < 3) ? EXTRACT_UNSIGNED : (int)ExprTokenToInt64(*aParam[2]);
+//	if (is_signed_or_float == EXTRACT_FLOAT) // See comment above for why floats are checked prior to signed/unsigned ints.
+//	{
+//		if (aParamCount < 4)
+//			size = 8; // Defaulting to 8 vs. 4 for floats seems more friendly.
+//		aResultToken.symbol = SYM_FLOAT;
+//		aResultToken.value_double = (size == 8) ? *(double *)pmem : *(float *)pmem;
+//		return;
+//	}
+//
+//	switch(size)
+//	{
+//	case 4: // Listed first for performance.
+//		aResultToken.value_int64 = is_signed_or_float ? *(int *)pmem : *(unsigned int *)pmem; // aResultToken.symbol was set to SYM_INTEGER by our caller.
+//		break;
+//	case 8:
+//		aResultToken.value_int64 = *(__int64 *)pmem; // Unsigned 64-bit not supported because variables/expressions can't support them.
+//		break;
+//	case 2:
+//		aResultToken.value_int64 = is_signed_or_float ? *(short *)pmem : *(unsigned short *)pmem;
+//		break;
+//	case 1:
+//		aResultToken.value_int64 = is_signed_or_float ? *(char *)pmem : *(unsigned char*)pmem;
+//		break;
+//	}
+//}
 
 
 
@@ -12157,7 +13590,7 @@ void BIF_OnMessage(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 	aResultToken.symbol = SYM_STRING;
 	aResultToken.marker = "";
 
-	// Load-time validation has ensured there's at least one parameters for use here:
+	// Load-time validation has ensured there's at least one parameter for use here:
 	UINT specified_msg = (UINT)ExprTokenToInt64(*aParam[0]); // Parameter #1
 
 	Func *func = NULL;           // Set defaults.
@@ -12243,8 +13676,8 @@ void BIF_OnMessage(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 	// Regardless of whether this is an update or creation, update all the struct attributes:
 	monitor.msg = specified_msg;
 	monitor.func = func;
-	if (!item_already_exists) // Reset label_is_running only for new items since existing items might currently be running.
-		monitor.label_is_running = false;
+	if (!item_already_exists) // Reset udf_is_running only for new items since existing items might currently be running.
+		monitor.udf_is_running = false;
 }
 
 

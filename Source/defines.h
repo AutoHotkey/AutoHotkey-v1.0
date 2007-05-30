@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.46.15"
+#define NAME_VERSION "1.0.46.16"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -508,9 +508,10 @@ typedef UCHAR CoordModeAttribType;
 // Each instance of this struct generally corresponds to a quasi-thread.  The function that creates
 // a new thread typically saves the old thread's struct values on its stack so that they can later
 // be copied back into the g struct when the thread is resumed:
-class Func;  // Forward declaration.
-struct RegItemStruct;
-struct LoopReadFileStruct;
+class Func;                 // Forward declarations
+class Label;                //
+struct RegItemStruct;       //
+struct LoopReadFileStruct;  //
 struct global_struct
 {
 	// 8-byte items are listed first, which might improve alignment for 64-bit processors (dubious).
@@ -547,7 +548,8 @@ struct global_struct
 	char FormatFloat[32];
 	#define ERRORLEVEL_SAVED_SIZE 128 // The size that can be remembered (saved & restored) if a thread is interrupted.
 	char ErrorLevel[ERRORLEVEL_SAVED_SIZE]; // Big in case user put something bigger than a number in g_ErrorLevel.
-	Func *CurrentFunc; // The function whose body is currently being processed at load-time, or being run at runtime (if any).
+	Func *CurrentFunc; // v1.0.46.16: The function whose body is currently being processed at load-time, or being run at runtime (if any).
+	Label *CurrentLabel; // The label that is currently awaiting its matching "return" (if any).
 	HWND hWndLastUsed;  // In many cases, it's better to use GetValidLastUsedWindow() when referring to this.
 	//HWND hWndToRestore;
 	int MsgBoxResult;  // Which button was pressed in the most recent MsgBox.
@@ -582,6 +584,7 @@ inline void global_clear_state(global_struct &g)
 	*g.ErrorLevel = '\0'; // This isn't the actual ErrorLevel: it's used to save and restore it.
 	// But don't reset g_ErrorLevel itself because we want to handle that conditional behavior elsewhere.
 	g.CurrentFunc = NULL;
+	g.CurrentLabel = NULL;
 	g.hWndLastUsed = NULL;
 	//g.hWndToRestore = NULL;
 	g.MsgBoxResult = 0;

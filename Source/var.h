@@ -33,41 +33,16 @@ EXTERN_CLIPBOARD;
 enum AllocMethod {ALLOC_NONE, ALLOC_SIMPLE, ALLOC_MALLOC};
 enum VarTypes
 {
-  VAR_INVALID
-, VAR_ALIAS  // VAR_ALIAS must always have a non-NULL mAliasFor.  In other ways it's the same as VAR_NORMAL.  VAR_ALIAS is never seen because external users call Var::Type(), which automatically resolves ALIAS to some other type.
-, VAR_NORMAL // Most variables are this type.
+  // The following must all be LOW numbers to avoid any realistic chance of them matching the address of
+  // any function (namely a BIV_* function).
+  VAR_ALIAS  // VAR_ALIAS must always have a non-NULL mAliasFor.  In other ways it's the same as VAR_NORMAL.  VAR_ALIAS is never seen because external users call Var::Type(), which automatically resolves ALIAS to some other type.
+, VAR_NORMAL // Most variables, such as those created by the user, are this type.
 , VAR_CLIPBOARD
-, VAR_LAST_UNRESERVED = VAR_CLIPBOARD  // Keep this in sync with any changes to the set of unreserved variables.
-#define VAR_IS_RESERVED(var) ((var).Type() > VAR_LAST_UNRESERVED)
-, VAR_CLIPBOARDALL // Must be reserved because it's not designed to be writable.
-, VAR_TRUE, VAR_FALSE
-, VAR_YYYY, VAR_MM, VAR_MMMM, VAR_MMM, VAR_DD, VAR_YDAY, VAR_YWEEK, VAR_WDAY, VAR_DDDD, VAR_DDD
-, VAR_HOUR, VAR_MIN, VAR_SEC, VAR_MSEC, VAR_TICKCOUNT, VAR_NOW, VAR_NOWUTC
-, VAR_WORKINGDIR, VAR_BATCHLINES
-, VAR_TITLEMATCHMODE, VAR_TITLEMATCHMODESPEED, VAR_DETECTHIDDENWINDOWS, VAR_DETECTHIDDENTEXT
-, VAR_AUTOTRIM, VAR_STRINGCASESENSE, VAR_FORMATINTEGER, VAR_FORMATFLOAT
-, VAR_KEYDELAY, VAR_WINDELAY, VAR_CONTROLDELAY, VAR_MOUSEDELAY, VAR_DEFAULTMOUSESPEED, VAR_ISSUSPENDED
-, VAR_ICONHIDDEN, VAR_ICONTIP, VAR_ICONFILE, VAR_ICONNUMBER, VAR_EXITREASON
-, VAR_OSTYPE, VAR_OSVERSION, VAR_LANGUAGE, VAR_COMPUTERNAME, VAR_USERNAME
-, VAR_COMSPEC, VAR_WINDIR, VAR_TEMP, VAR_PROGRAMFILES, VAR_APPDATA, VAR_APPDATACOMMON, VAR_DESKTOP, VAR_DESKTOPCOMMON
-, VAR_STARTMENU, VAR_STARTMENUCOMMON
-, VAR_PROGRAMS, VAR_PROGRAMSCOMMON, VAR_STARTUP, VAR_STARTUPCOMMON, VAR_MYDOCUMENTS
-, VAR_ISADMIN, VAR_CURSOR, VAR_CARETX, VAR_CARETY
-, VAR_SCREENWIDTH, VAR_SCREENHEIGHT
-, VAR_IPADDRESS1, VAR_IPADDRESS2, VAR_IPADDRESS3, VAR_IPADDRESS4
-, VAR_SCRIPTNAME, VAR_SCRIPTDIR, VAR_SCRIPTFULLPATH, VAR_LINENUMBER, VAR_LINEFILE, VAR_ISCOMPILED
-, VAR_LOOPFILENAME, VAR_LOOPFILESHORTNAME, VAR_LOOPFILEEXT, VAR_LOOPFILEDIR
-, VAR_LOOPFILEFULLPATH, VAR_LOOPFILELONGPATH, VAR_LOOPFILESHORTPATH
-, VAR_LOOPFILETIMEMODIFIED, VAR_LOOPFILETIMECREATED, VAR_LOOPFILETIMEACCESSED
-, VAR_LOOPFILEATTRIB, VAR_LOOPFILESIZE, VAR_LOOPFILESIZEKB, VAR_LOOPFILESIZEMB
-, VAR_LOOPREGTYPE, VAR_LOOPREGKEY, VAR_LOOPREGSUBKEY, VAR_LOOPREGNAME, VAR_LOOPREGTIMEMODIFIED
-, VAR_LOOPREADLINE, VAR_LOOPFIELD, VAR_INDEX
-, VAR_THISMENUITEM, VAR_THISMENUITEMPOS, VAR_THISMENU, VAR_THISHOTKEY, VAR_PRIORHOTKEY
-, VAR_TIMESINCETHISHOTKEY, VAR_TIMESINCEPRIORHOTKEY
-, VAR_ENDCHAR, VAR_LASTERROR, VAR_GUI, VAR_GUICONTROL, VAR_GUICONTROLEVENT, VAR_EVENTINFO
-, VAR_GUIWIDTH, VAR_GUIHEIGHT, VAR_GUIX, VAR_GUIY
-, VAR_TIMEIDLE, VAR_TIMEIDLEPHYSICAL
-, VAR_SPACE, VAR_TAB, VAR_AHKVERSION, VAR_AHKPATH
+, VAR_LAST_WRITABLE = VAR_CLIPBOARD  // Keep this in sync with any changes to the set of writable variables.
+#define VAR_IS_READONLY(var) ((var).Type() > VAR_LAST_WRITABLE)
+, VAR_CLIPBOARDALL // Must be read-only because it's not designed to be writable.
+, VAR_BUILTIN
+, VAR_LAST_TYPE = VAR_BUILTIN
 };
 
 typedef UCHAR VarTypeType;     // UCHAR vs. VarTypes to save memory.
@@ -98,6 +73,7 @@ struct VarBkp // This should be kept in sync with any changes to the Var class. 
 	//char *mName;
 };
 
+typedef VarSizeType (* BuiltInVarType)(char *aBuf, char *aVarName);
 class Var
 {
 private:
@@ -108,14 +84,22 @@ private:
 		VarSizeType mLength;  // How much is actually stored in it currently, excluding the zero terminator.
 		Var *mAliasFor;       // The variable for which this variable is an alias.
 	};
-	VarSizeType mCapacity; // In bytes.  Includes the space for the zero terminator.
+	union
+	{
+		VarSizeType mCapacity; // In bytes.  Includes the space for the zero terminator.
+		BuiltInVarType mBIV;
+	};
 	AllocMethodType mHowAllocated; // Keep adjacent/contiguous with the below to save memory.
 	#define VAR_ATTRIB_BINARY_CLIP  0x01
 	#define VAR_ATTRIB_PARAM        0x02 // Currently unused.
 	#define VAR_ATTRIB_STATIC       0x04 // Next in series would be 0x08, 0x10, etc.
 	VarAttribType mAttrib;  // Bitwise combination of the above flags.
 	bool mIsLocal;
-	VarTypeType mType;  // Keep adjacent/contiguous with the above due to struct alignment, to save memory.
+	VarTypeType mType; // Keep adjacent/contiguous with the above due to struct alignment, to save memory.
+	// Performance: Rearranging mType and the other byte-sized members with respect to each other didn't seem
+	// to help performance.  However, changing VarTypeType from UCHAR to int did boost performance a few percent,
+	// but even if it's not a fluke, it doesn't seem worth the increase in memory for scripts with many
+	// thousands of variables.
 
 public:
 	// Testing shows that due to data alignment, keeping mType adjacent to the other less-than-4-size member
@@ -347,14 +331,25 @@ public:
 	}
 
 	// Constructor:
-	Var(char *aVarName, VarTypeType aType, bool aIsLocal)
+	Var(char *aVarName, void *aType, bool aIsLocal)
 		// The caller must ensure that aVarName is non-null.
-		: mCapacity(0), mContents(sEmptyString) // Invariant: Anyone setting mCapacity to 0 must also set mContents to the empty string.
+		: mContents(sEmptyString) // Invariant: Anyone setting mCapacity to 0 must also set mContents to the empty string.
 		, mLength(0) // This also initializes mAliasFor within the same union.
 		, mHowAllocated(ALLOC_NONE)
-		, mAttrib(0), mIsLocal(aIsLocal), mType(aType)
+		, mAttrib(0), mIsLocal(aIsLocal)
 		, mName(aVarName) // Caller gave us a pointer to dynamic memory for this (or static in the case of ResolveVarOfArg()).
-	{}
+	{
+		if (aType > (void *)VAR_LAST_TYPE) // Relies on the fact that numbers less than VAR_LAST_TYPE can never realistically match the address of any function.
+		{
+			mType = VAR_BUILTIN;
+			mBIV = (BuiltInVarType)aType; // This also initializes mCapacity within the same union.
+		}
+		else
+		{
+			mType = (VarTypeType)aType;
+			mCapacity = 0; // This also initializes mBIV within the same union.
+		}
+	}
 	void *operator new(size_t aBytes) {return SimpleHeap::Malloc(aBytes);}
 	void *operator new[](size_t aBytes) {return SimpleHeap::Malloc(aBytes);}
 	void operator delete(void *aPtr) {}
