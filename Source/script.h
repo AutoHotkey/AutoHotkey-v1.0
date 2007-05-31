@@ -2494,7 +2494,7 @@ VarSizeType BIV_Now(char *aBuf, char *aVarName);
 VarSizeType BIV_OSType(char *aBuf, char *aVarName);
 VarSizeType BIV_OSVersion(char *aBuf, char *aVarName);
 VarSizeType BIV_Language(char *aBuf, char *aVarName);
-VarSizeType BIV_User_Computer(char *aBuf, char *aVarName);
+VarSizeType BIV_UserName_ComputerName(char *aBuf, char *aVarName);
 VarSizeType BIV_WorkingDir(char *aBuf, char *aVarName);
 VarSizeType BIV_WinDir(char *aBuf, char *aVarName);
 VarSizeType BIV_Temp(char *aBuf, char *aVarName);

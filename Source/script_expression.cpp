@@ -1944,6 +1944,19 @@ end_of_infix_to_postfix:
 				this_token.symbol = right_is_number; // Set the symbol type to match the double or int64 that was already stored higher above.
 			break;
 
+		case SYM_ADDRESS: // Take the address of a variable.
+			if (right.symbol == SYM_VAR) // At this stage, SYM_VAR is always a normal variable, never a built-in one, so taking its address should be safe.
+			{
+				this_token.symbol = SYM_INTEGER;
+				this_token.value_int64 = (__int64)right_contents;
+			}
+			else // Invalid, so make it a localized blank value.
+			{
+				this_token.marker = "";
+				this_token.symbol = SYM_STRING;
+			}
+			break;
+
 		case SYM_DEREF:   // Dereference an address to retrieve a single byte.
 		case SYM_BITNOT:           // The tilde (~) operator.
 			if (right_is_number == PURE_INTEGER) // But in this case, it can be hex, so use ATOI64().
@@ -1992,19 +2005,6 @@ end_of_infix_to_postfix:
 					? 0 : this_token.value_int64 = *(UCHAR *)right_int64; // Dereference to extract one unsigned character, just like Asc().
 			}
 			this_token.symbol = SYM_INTEGER; // Must be done only after its old value was used above. v1.0.36.07: Fixed to be SYM_INTEGER vs. right_is_number for SYM_BITNOT.
-			break;
-
-		case SYM_ADDRESS: // Take the address of a variable.
-			if (right.symbol == SYM_VAR) // At this stage, SYM_VAR is always a normal variable, never a built-in one, so taking its address should be safe.
-			{
-				this_token.symbol = SYM_INTEGER;
-				this_token.value_int64 = (__int64)right_contents;
-			}
-			else // Invalid, so make it a localized blank value.
-			{
-				this_token.marker = "";
-				this_token.symbol = SYM_STRING;
-			}
 			break;
 
 		default: // Non-unary operator.

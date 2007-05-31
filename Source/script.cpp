@@ -7558,7 +7558,7 @@ void *Script::GetVarType(char *aVarName)
 	if (!strcmp(lower, "osversion")) return BIV_OSVersion;
 	if (!strcmp(lower, "language")) return BIV_Language;
 	if (   !strcmp(lower, "computername")
-		|| !strcmp(lower, "username")) return BIV_User_Computer;
+		|| !strcmp(lower, "username")) return BIV_UserName_ComputerName;
 
 	if (!strcmp(lower, "windir")) return BIV_WinDir;
 	if (!strcmp(lower, "temp")) return BIV_Temp; // Debatably should be A_TempDir, but brevity seemed more popular with users, perhaps for heavy uses of the temp folder.

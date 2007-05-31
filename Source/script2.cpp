@@ -10262,12 +10262,12 @@ VarSizeType BIV_Language(char *aBuf, char *aVarName)
 	return (VarSizeType)strlen(target_buf);
 }
 
-VarSizeType BIV_User_Computer(char *aBuf, char *aVarName)
+VarSizeType BIV_UserName_ComputerName(char *aBuf, char *aVarName)
 {
 	char buf[MAX_PATH];  // Doesn't use MAX_COMPUTERNAME_LENGTH + 1 in case longer names are allowed in the future.
 	char *target_buf = aBuf ? aBuf : buf;
-	DWORD buf_size = MAX_PATH;
-	if (   !(aVarName[6] ? GetComputerName(target_buf, &buf_size) : GetUserName(target_buf, &buf_size))   )
+	DWORD buf_size = MAX_PATH; // Below: A_Computer[N]ame (N is the 11th char, index 10, which if present at all distinguishes between the two).
+	if (   !(aVarName[10] ? GetComputerName(target_buf, &buf_size) : GetUserName(target_buf, &buf_size))   )
 		*target_buf = '\0';
 	return (VarSizeType)strlen(target_buf);
 }

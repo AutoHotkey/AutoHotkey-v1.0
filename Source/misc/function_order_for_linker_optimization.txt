@@ -407,7 +407,7 @@ _vsnprintf  ; Sandwiching this function between the other two seems likely to yi
 ?BIV_TimeSinceThisHotkey@@YAKPAD0@Z
 ?BIV_TitleMatchMode@@YAKPAD0@Z
 ?BIV_TitleMatchModeSpeed@@YAKPAD0@Z
-?BIV_User_Computer@@YAKPAD0@Z
+?BIV_UserName_ComputerName@@YAKPAD0@Z
 ?BIV_WinDelay@@YAKPAD0@Z
 ?BIV_WinDir@@YAKPAD0@Z
 ?BIV_WorkingDir@@YAKPAD0@Z
