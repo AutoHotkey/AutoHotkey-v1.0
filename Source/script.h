@@ -147,6 +147,7 @@ enum CommandIDs {CONTROL_ID_FIRST = IDCANCEL + 1
 #define ERR_UNRECOGNIZED_ACTION "This line does not contain a recognized action."
 #define ERR_NONEXISTENT_HOTKEY "Nonexistent hotkey."
 #define ERR_NONEXISTENT_VARIANT "Nonexistent hotkey variant (IfWin)."
+#define ERR_NONEXISTENT_FUNCTION "Call to nonexistent function."
 #define ERR_EXE_CORRUPTED "EXE corrupted"
 #define ERR_PARAM1_INVALID "Parameter #1 invalid"
 #define ERR_PARAM2_INVALID "Parameter #2 invalid"
@@ -215,7 +216,7 @@ void Util_WinKill(HWND hWnd);
 enum MainWindowModes {MAIN_MODE_NO_CHANGE, MAIN_MODE_LINES, MAIN_MODE_VARS
 	, MAIN_MODE_HOTKEYS, MAIN_MODE_KEYHISTORY, MAIN_MODE_REFRESH};
 ResultType ShowMainWindow(MainWindowModes aMode = MAIN_MODE_NO_CHANGE, bool aRestricted = true);
-ResultType GetAHKInstallDir(char *aBuf);
+DWORD GetAHKInstallDir(char *aBuf);
 
 
 struct InputBoxType
@@ -288,6 +289,9 @@ bool HandleMenuItem(HWND aHwnd, WORD aMenuItemID, WPARAM aGuiIndex);
 
 
 typedef UINT LineNumberType;
+typedef WORD FileIndexType; // Use WORD to conserve memory due to its use in the Line class (adjacency to other members and due to 4-byte struct alignment).
+#define ABSOLUTE_MAX_SOURCE_FILES 0xFFFF // Keep this in sync with the capacity of the type above.  Actually it could hold 0xFFFF+1, but avoid the final item for maintainability (otherwise max-index won't be able to fit inside a variable of that type).
+
 #define LOADING_FAILED UINT_MAX
 
 // -2 for the beginning and ending g_DerefChars:
@@ -671,8 +675,8 @@ public:
 	// Keep any fields that aren't an even multiple of 4 adjacent to each other.  This conserves memory
 	// due to byte-alignment:
 	ActionTypeType mActionType; // What type of line this is.
-	UCHAR mFileNumber;  // Which file the line came from.  0 is the first, and it's the main script file.
 	ArgCountType mArgc; // How many arguments exist in mArg[].
+	FileIndexType mFileIndex; // Which file the line came from.  0 is the first, and it's the main script file.
 
 	ArgStruct *mArg; // Will be used to hold a dynamic array of dynamic Args.
 	LineNumberType mLineNumber;  // The line number in the file from which the script was loaded, for debugging.
@@ -782,9 +786,13 @@ public:
 	static DWORD sLogTick[LINE_LOG_SIZE];
 	static int sLogNext;
 
-	#define MAX_SCRIPT_FILES (UCHAR_MAX + 1)
-	static char *sSourceFile[MAX_SCRIPT_FILES];
-	static int nSourceFiles; // An int vs. UCHAR so that it can be exactly 256 without overflowing.
+#ifdef AUTOHOTKEYSC  // Reduces code size to omit things that are unused, and helps catch bugs at compile-time.
+	static char *sSourceFile[1]; // Only need to be able to hold the main script since compiled scripts don't support dynamic including.
+#else
+	static char **sSourceFile;   // Will hold an array of strings.
+	static int sMaxSourceFiles;  // Maximum number of items it can currently hold.
+#endif
+	static int sSourceFileCount; // Number of items in the above array.
 
 	static void FreeDerefBufIfLarge();
 
@@ -1725,9 +1733,9 @@ public:
 	// Call this LineError to avoid confusion with Script's error-displaying functions:
 	ResultType LineError(char *aErrorText, ResultType aErrorType = FAIL, char *aExtraInfo = "");
 
-	Line(UCHAR aFileNumber, LineNumberType aFileLineNumber, ActionTypeType aActionType
+	Line(FileIndexType aFileIndex, LineNumberType aFileLineNumber, ActionTypeType aActionType
 		, ArgStruct aArg[], ArgCountType aArgc) // Constructor
-		: mFileNumber(aFileNumber), mLineNumber(aFileLineNumber), mActionType(aActionType)
+		: mFileIndex(aFileIndex), mLineNumber(aFileLineNumber), mActionType(aActionType)
 		, mAttribute(ATTR_NONE), mArgc(aArgc), mArg(aArg)
 		, mPrevLine(NULL), mNextLine(NULL), mRelatedLine(NULL), mParentLine(NULL)
 		{}
@@ -1825,6 +1833,47 @@ public:
 	// override in the script.  So mIsBuiltIn should always be used to determine whether the function
 	// is truly built-in, not its name.
 
+	ResultType Call(char *&aReturnValue) // Making this a function vs. inline doesn't measurable impact performance.
+	{
+		aReturnValue = ""; // Init to default in case function doesn't return a value or it EXITs or fails.
+		// Launch the function similar to Gosub (i.e. not as a new quasi-thread):
+		// The performance gain of conditionally passing NULL in place of result (when this is the
+		// outermost function call of a line consisting only of function calls, namely ACT_EXPRESSION)
+		// would not be significant because the Return command's expression (arg1) must still be evaluated
+		// in case it calls any functions that have side-effects, e.g. "return LogThisError()".
+		Func *prev_func = g.CurrentFunc; // This will be non-NULL when a function is called from inside another function.
+		g.CurrentFunc = this;
+		// Although a GOTO that jumps to a position outside of the function's body could be supported,
+		// it seems best not to for these reasons:
+		// 1) The extreme rarity of a legitimate desire to intentionally do so.
+		// 2) The fact that any return encountered after the Goto cannot provide a return value for
+		//    the function because load-time validation checks for this (it's preferable not to
+		//    give up this check, since it is an informative error message and might also help catch
+		//    bugs in the script).  Gosub does not suffer from this because the return that brings it
+		//    back into the function body belongs to the Gosub and not the function itself.
+		// 3) More difficult to maintain because we have handle jump_to_line the same way ExecUntil() does,
+		//    checking aResult the same way it does, then checking jump_to_line the same way it does, etc.
+		// Fix for v1.0.31.05: g.mLoopFile and the other g_script members that follow it are
+		// now passed to ExecUntil() for two reasons (update for v1.0.44.14: now they're implicitly "passed"
+		// because they're done via parameter anymore):
+		// 1) To fix the fact that any function call in one parameter of a command would reset
+		// A_Index and related variables so that if those variables are referenced in another
+		// parameter of the same command, they would be wrong.
+		// 2) So that the caller's value of A_Index and such will always be valid even inside
+		// of called functions (unless overridden/eclipsed by a loop in the body of the function),
+		// which seems to add flexibility without giving up anything.  This fix is necessary at least
+		// for a command that references A_Index in two of its args such as the following:
+		// ToolTip, O, ((cos(A_Index) * 500) + 500), A_Index
+		++mInstances;
+		ResultType result = mJumpToLine->ExecUntil(UNTIL_BLOCK_END, &aReturnValue);
+		--mInstances;
+		// Restore the original value in case this function is called from inside another function.
+		// Due to the synchronous nature of recursion and recursion-collapse, this should keep
+		// g.CurrentFunc accurate, even amidst the asynchronous saving and restoring of "g" itself:
+		g.CurrentFunc = prev_func;
+		return result;
+	}
+
 	Func(char *aFuncName, bool aIsBuiltIn) // Constructor.
 		: mName(aFuncName) // Caller gave us a pointer to dynamic memory for this.
 		, mBIF(NULL)
@@ -1873,7 +1922,8 @@ struct MsgMonitorStruct
 	UINT msg;
 	Func *func;
 	// Keep any members smaller than 4 bytes adjacent to save memory:
-	bool udf_is_running;  // Distinct from func.mInstances because the script might have called the function explicitly.
+	short instance_count;  // Distinct from func.mInstances because the script might have called the function explicitly.
+	short max_instances; // v1.0.47: Support more than one thread.
 };
 
 
@@ -2283,15 +2333,11 @@ private:
 	Var **mFuncExceptionVar;   // A list of variables declared explicitly local or global.
 	int mFuncExceptionVarCount; // The number of items in the array.
 
-#ifdef AUTOHOTKEYSC
-	bool mCompiledHasCustomIcon; // Whether the compiled script uses a custom icon.
-#endif;
-
 	// These two track the file number and line number in that file of the line currently being loaded,
 	// which simplifies calls to ScriptError() and LineError() (reduces the number of params that must be passed).
 	// These are used ONLY while loading the script into memory.  After that (while the script is running),
 	// only mCurrLine is kept up-to-date:
-	UCHAR mCurrFileNumber;
+	int mCurrFileIndex;
 	LineNumberType mCombinedLineNumber; // In the case of a continuation section/line(s), this is always the top line.
 
 	bool mNoHotkeyLabels;
@@ -2360,6 +2406,11 @@ public:
 	bool mIsRestart; // The app is restarting rather than starting from scratch.
 	bool mIsAutoIt2; // Whether this script is considered to be an AutoIt2 script.
 	bool mErrorStdOut; // true if load-time syntax errors should be sent to stdout vs. a MsgBox.
+#ifdef AUTOHOTKEYSC
+	bool mCompiledHasCustomIcon; // Whether the compiled script uses a custom icon.
+#else
+	FILE *mIncludeLibraryFunctionsThenExit;
+#endif
 	__int64 mLinesExecutedThisCycle; // Use 64-bit to match the type of g.LinesPerCycle
 	int mUninterruptedLineCountMax; // 32-bit for performance (since huge values seem unnecessary here).
 	int mUninterruptibleTime;
@@ -2396,6 +2447,9 @@ public:
 		, bool aUpdatePriorityOnly);
 
 	ResultType DefineFunc(char *aBuf, Var *aFuncExceptionVar[]);
+#ifndef AUTOHOTKEYSC
+	Func *FindFuncInLibrary(char *aFuncName, size_t aFuncNameLength, bool &aErrorWasShown);
+#endif
 	Func *FindFunc(char *aFuncName, size_t aFuncNameLength = 0);
 	Func *AddFunc(char *aFuncName, size_t aFuncNameLength, bool aIsBuiltIn);
 
@@ -2570,7 +2624,8 @@ void BIF_InStr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 void BIF_RegEx(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_Asc(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_Chr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
-//void BIF_ExtractInteger(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_NumGet(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_NumPut(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_IsLabel(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_GetKeyState(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_VarSetCapacity(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
@@ -2589,6 +2644,7 @@ void BIF_Exp(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCou
 void BIF_SqrtLogLn(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 
 void BIF_OnMessage(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_RegisterCallback(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 
 void BIF_StatusBar(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 

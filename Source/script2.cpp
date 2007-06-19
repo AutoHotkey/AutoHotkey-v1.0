@@ -5511,10 +5511,16 @@ ResultType ShowMainWindow(MainWindowModes aMode, bool aRestricted)
 
 
 
-ResultType GetAHKInstallDir(char *aBuf)
-// Caller must ensure that aBuf is at least MAX_PATH in capacity.
+DWORD GetAHKInstallDir(char *aBuf)
+// Caller must ensure that aBuf is large enough (either by having called this function a previous time
+// to get the length, or by making it MAX_PATH in capacity).
+// Returns the length of the string (0 if empty).
 {
-	return ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\AutoHotkey", "InstallDir", aBuf, MAX_PATH);
+	char buf[MAX_PATH];
+	VarSizeType length = ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\AutoHotkey", "InstallDir", buf, MAX_PATH);
+	if (aBuf)
+		strcpy(aBuf, buf); // v1.0.47: Must be done as a separate copy because passing a size of MAX_PATH for aBuf can crash when aBuf is actually smaller than that (even though it's large enough to hold the string).
+	return length;
 }
 
 
@@ -6963,11 +6969,11 @@ int SortByNakedFilename(const void *a1, const void *a2)
 struct sort_rand_type
 {
 	char *cp; // This must be the first member of the struct, otherwise the array trickery in PerformSort will fail.
-	// Below must be the same size in bytes as the above, which is why it's maintained as a union with
-	// a char* rather than a plain int (though currently they would be the same size anyway).
 	union
 	{
-		char *noname;
+		// This must be the same size in bytes as the above, which is why it's maintained as a union with
+		// a char* rather than a plain int (though currently they would be the same size anyway).
+		char *unused;
 		int rand;
 	};
 };
@@ -6976,6 +6982,58 @@ int SortRandom(const void *a1, const void *a2)
 // See comments in prior functions for details.
 {
 	return ((sort_rand_type *)a1)->rand - ((sort_rand_type *)a2)->rand;
+}
+
+int SortUDF(const void *a1, const void *a2)
+// See comments in prior function for details.
+{
+	// Need to check if backup of function's variables is needed in case:
+	// 1) The UDF is assigned to more than one callback, in which case the UDF could be running more than one
+	//    simultantously.
+	// 2) The callback is intended to be reentrant (e.g. a subclass/WindowProc that doesn't Critical).
+	// 3) Script explicitly calls the UDF in addition to using it as a callback.
+	//
+	// See ExpandExpression() for detailed comments about the following section.
+	VarBkp *var_backup = NULL;  // If needed, it will hold an array of VarBkp objects.
+	int var_backup_count; // The number of items in the above array.
+	if (g_SortFunc->mInstances > 0) // Backup is needed.
+		if (!Var::BackupFunctionVars(*g_SortFunc, var_backup, var_backup_count)) // Out of memory.
+			return 0; // Since out-of-memory is so rare, it seems justifiable not to have any error reporting and instead just say "these items are equal".
+
+	// The following isn't necessary because by definition, the current thread isn't paused because it's the
+	// thing that called the sort in the first place.
+	//g_script.UpdateTrayIcon();
+
+	char *return_value;
+	g_SortFunc->mParam[0].var->Assign(*(char **)a1); // For simplicity and due to extreme rarity, parameters beyond
+	g_SortFunc->mParam[1].var->Assign(*(char **)a2); // the first 2 aren't populated even if they have default values.
+	if (g_SortFunc->mParamCount > 2)
+		g_SortFunc->mParam[2].var->Assign((__int64)(*(char **)a2 - *(char **)a1)); // __int64 to allow for a list greater than 2 GB, though that is currently impossible.
+	g_SortFunc->Call(return_value); // Call the UDF.
+
+	// MUST handle return_value BEFORE calling FreeAndRestoreFunctionVars() because return_value might be
+	// the contents of one of the function's local variables (which are about to be free'd).
+	int returned_int;
+	if (*return_value) // No need to check the following because they're implied for *return_value!=0: result != EARLY_EXIT && result != FAIL;
+	{
+		// Using float vs. int makes sort up to 46% slower, so decided to use int. Must use ATOI64 vs. ATOI
+		// because otherwise a negative might overflow/wrap into a positive (at least with the MSVC++
+		// implementation of ATOI).
+		// ATOI64()'s implementation (and probably any/all others?) truncates any decimal portion;
+		// e.g. 0.8 and 0.3 both yield 0.
+		__int64 i64 = ATOI64(return_value);
+		if (i64 > 0)  // Maybe there's a faster/better way to do these checks. Can't simply typecast to an int because some large positives wrap into negative, maybe vice versa.
+			returned_int = 1;
+		else if (i64 < 0)
+			returned_int = -1;
+		else
+			returned_int = 0;
+	}
+	else
+		returned_int = 0;
+
+	Var::FreeAndRestoreFunctionVars(*g_SortFunc, var_backup, var_backup_count);
+	return returned_int;
 }
 
 
@@ -6994,16 +7052,14 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 // already (or will soon be) in the deref buffer as a result of commands before
 // or after the Sort command in the script.
 {
-	if (!*aContents) // Variable is empty, nothing to sort.
-		return OK;
+	// Set defaults in case of early goto:
+	char *mem_to_free = NULL;
+	Func *sort_func_orig = g_SortFunc; // Because UDFs can be interrupted by other threads -- and because UDFs can themselves call Sort with some other UDF (unlikely to be sure) -- backup & restore original g_SortFunc so that the "collapsing in reverse order" behavior will automatically ensure proper operation.
+	g_SortFunc = NULL; // Now that original has been saved above, reset to detect whether THIS sort uses a UDF.
+	ResultType result_to_return = OK;
+	DWORD ErrorLevel = -1; // Use -1 to mean "don't change/set ErrorLevel".
 
-	Var &output_var = *OUTPUT_VAR; // The input var (ARG1) is also the output var in this case.
-	// Do nothing for reserved variables, since most of them are read-only and besides, none
-	// of them (realistically) should ever need sorting:
-	if (VAR_IS_READONLY(output_var)) // output_var can be a reserved variable because it's not marked as an output-var by ArgIsVar() [since it has a dual purpose as an input-var].
-		return OK;
-
-	// Resolve options.  Set defaults first:
+	// Resolve options.  First set defaults for options:
 	char delimiter = '\n';
 	g_SortCaseSensitive = SCS_INSENSITIVE;
 	g_SortNumeric = false;
@@ -7013,7 +7069,7 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 	bool sort_by_naked_filename = false;
 	bool sort_random = false;
 	bool omit_dupes = false;
-	char *cp;
+	char *cp, *end;
 
 	for (cp = aOptions; *cp; ++cp)
 	{
@@ -7034,6 +7090,25 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 			++cp;
 			if (*cp)
 				delimiter = *cp;
+			break;
+		case 'F': // v1.0.47: Support a callback function to extend flexibility.
+			// Decided not to set ErrorLevel here because omit-dupes already uses it, and the code/docs
+			// complexity of having one take precedence over the other didn't seem worth it given rarity
+			// of errors and rarity of UDF use.
+			cp = omit_leading_whitespace(cp + 1); // Point it to the function's name.
+			if (   !(end = StrChrAny(cp, " \t"))   ) // Find space or tab, if any.
+				end = cp + strlen(cp); // Point it to the terminator instead.
+			if (   !(g_SortFunc = g_script.FindFunc(cp, end - cp))   )
+				goto end; // For simplicity, just abort the sort.
+			// To improve callback performance, ensure there are no ByRef parameters (for simplicity:
+			// not even ones that have default values) among the first two parameters.  This avoids the
+			// need to ensure formal parameters are non-aliases each time the callback is called.
+			if (g_SortFunc->mIsBuiltIn || g_SortFunc->mParamCount < 2 // This validation is relied upon at a later stage.
+				|| g_SortFunc->mParamCount > 3  // Reserve 4-or-more parameters for possible future use (to avoid breaking existing scripts if such features are ever added).
+				|| g_SortFunc->mParam[0].is_byref || g_SortFunc->mParam[1].is_byref) // Relies on short-circuit boolean order.
+				goto end; // For simplicity, just abort the sort.
+			// Otherwise, the function meets the minimum contraints (though for simplicity, optional parameters / default values, if any, aren't populated).
+			cp = end; // In the next interation (which also does a ++cp), resume looking for options after the function's name.
 			break;
 		case 'N':
 			g_SortNumeric = true;
@@ -7057,6 +7132,7 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 			break;
 		case 'U':  // Unique.
 			omit_dupes = true;
+			ErrorLevel = 0; // Set default dupe-count to 0 in case of early return.
 			break;
 		case 'Z':
 			// By setting this to true, the final item in the list, if it ends in a delimiter,
@@ -7067,6 +7143,15 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 			sort_by_naked_filename = true;
 		}
 	}
+
+	// Check for early return only after parsing options in case an option that sets ErrorLevel is present:
+	if (!*aContents) // Variable is empty, nothing to sort.
+		goto end;
+	Var &output_var = *OUTPUT_VAR; // The input var (ARG1) is also the output var in this case.
+	// Do nothing for reserved variables, since most of them are read-only and besides, none
+	// of them (realistically) should ever need sorting:
+	if (VAR_IS_READONLY(output_var)) // output_var can be a reserved variable because it's not marked as an output-var by ArgIsVar() [since it has a dual purpose as an input-var].
+		goto end;
 
 	// size_t helps performance and should be plenty of capacity for many years of advancement.
 	// In addition, things like realloc() can't accept anything larger than size_t anyway,
@@ -7090,7 +7175,8 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 		--item_count;
 	}
 
-	if (item_count == 1) // 1 item is already sorted
+	if (item_count == 1) // 1 item is already sorted, and no dupes are possible.
+	{
 		// Put the exact contents back into the output_var, which is necessary in case
 		// the variable was an environment variable or the clipboard-containing-files,
 		// since in those cases we want the behavior to be consistent regardless of
@@ -7099,7 +7185,21 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 		// text equivalent.  Var was an environment variable: the corresponding script
 		// variable should be assigned the contents, so it will basically "take over"
 		// for the environment variable.
-		return output_var.Assign(aContents);
+		result_to_return = output_var.Assign(aContents);
+		goto end;
+	}
+
+	if (g_SortFunc) // Do this here rather than earlier with the options parsing in case the function-option is present twice (unlikely, but it would be a memory leak due to strdup below).  Doing it here also avoids allocating if it isn't necessary.
+	{
+		// Make a copy because an earlier stage has ensured that aContents is in the deref buffer,
+		// but that deref buffer is about to be overwritten by the execution of the script's UDF body.
+		if (   !(mem_to_free = _strdup(aContents))   ) // _strdup() is very tiny and basically just calls strlen+malloc+strcpy.
+		{
+			result_to_return = LineError(ERR_OUTOFMEM);  // Short msg. since so rare.
+			goto end;
+		}
+		aContents = mem_to_free;
+	}
 
 	// Create the array of pointers that points into aContents to each delimited item.
 	// Use item_count + 1 to allow space for the last (blank) item in case
@@ -7108,7 +7208,10 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 	size_t item_size = unit_size * sizeof(char *);
 	char **item = (char **)malloc((item_count + 1) * item_size);
 	if (!item)
-		return LineError(ERR_OUTOFMEM);  // Short msg. since so rare.
+	{
+		result_to_return = LineError(ERR_OUTOFMEM);  // Short msg. since so rare.
+		goto end;
+	}
 
 	// If sort_random is in effect, the above has created an array twice the normal size.
 	// This allows the random numbers to be interleaved inside the array as though it
@@ -7168,7 +7271,9 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 
 	// Now aContents has been divided up based on delimiter.  Sort the array of pointers
 	// so that they indicate the correct ordering to copy aContents into output_var:
-	if (sort_random) // Takes precedence over all other options.
+	if (g_SortFunc) // Takes precedence other sorting methods.
+		qsort((void *)item, item_count, item_size, SortUDF);
+	else if (sort_random) // Takes precedence over all remaining options.
 		qsort((void *)item, item_count, item_size, SortRandom);
 	else
 		qsort((void *)item, item_count, item_size, sort_by_naked_filename ? SortByNakedFilename : SortWithOptions);
@@ -7177,7 +7282,10 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 	// if it's the clipboard or it was an environment variable when it came in as the input.
 	// If output_var is the clipboard, this call will set up the clipboard for writing:
 	if (output_var.Assign(NULL, (VarSizeType)aContents_length) != OK) // Might fail due to clipboard problem.
-		return FAIL;
+	{
+		result_to_return = FAIL;
+		goto end;
+	}
 
 	// Set default in case original last item is still the last item, or if last item was omitted due to being a dupe:
 	char *pos_of_original_last_item_in_dest = NULL;
@@ -7287,12 +7395,23 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 	if (omit_dupes)
 	{
 		if (omit_dupe_count) // Update the length to actual whenever at least one dupe was omitted.
+		{
 			output_var.Length() = (VarSizeType)strlen(output_var.Contents());
-		g_ErrorLevel->Assign(omit_dupe_count); // ErrorLevel is set only when dupe-mode is in effect.
+			ErrorLevel = omit_dupe_count; // Override the 0 set earlier.
+		}
 	}
 	//else it is not necessary to set output_var.Length() here because its length hasn't changed
 	// since it was originally set by the above call "output_var.Assign(NULL..."
-	return output_var.Close();  // Close in case it's the clipboard.
+
+	result_to_return = output_var.Close();  // Close in case it's the clipboard.
+
+end:
+	if (ErrorLevel != -1) // A change to ErrorLevel is desired.  Compare directly to -1 due to unsigned.
+		g_ErrorLevel->Assign(ErrorLevel); // ErrorLevel is set only when dupe-mode is in effect.
+	if (mem_to_free)
+		free(mem_to_free);
+	g_SortFunc = sort_func_orig;
+	return result_to_return;
 }
 
 
@@ -10140,13 +10259,10 @@ VarSizeType BIV_AhkPath(char *aBuf, char *aVarName) // v1.0.41.
 #ifdef AUTOHOTKEYSC
 	if (aBuf)
 	{
-		GetAHKInstallDir(aBuf);
-		if (*aBuf)
-		{
-			char *cp = aBuf + strlen(aBuf); // Position of terminator.
+		size_t length;
+		if (length = GetAHKInstallDir(aBuf))
 			// Name "AutoHotkey.exe" is assumed for code size reduction and because it's not stored in the registry:
-			strlcpy(cp, "\\AutoHotkey.exe", MAX_PATH - (cp - aBuf)); // strlcpy() in case registry has a path that is too close to MAX_PATH to fit AutoHotkey.exe
-		}
+			strlcpy(aBuf + length, "\\AutoHotkey.exe", MAX_PATH - length); // strlcpy() in case registry has a path that is too close to MAX_PATH to fit AutoHotkey.exe
 		//else leave it blank as documented.
 		return (VarSizeType)strlen(aBuf);
 	}
@@ -10156,7 +10272,10 @@ VarSizeType BIV_AhkPath(char *aBuf, char *aVarName) // v1.0.41.
 	return MAX_PATH;
 #else
 	char buf[MAX_PATH];
-	return (VarSizeType)GetModuleFileName(NULL, aBuf ? aBuf : buf, MAX_PATH);
+	VarSizeType length = (VarSizeType)GetModuleFileName(NULL, buf, MAX_PATH);
+	if (aBuf)
+		strcpy(aBuf, buf); // v1.0.47: Must be done as a separate copy because passing a size of MAX_PATH for aBuf can crash when aBuf is actually smaller than that (even though it's large enough to hold the string). This is true for ReadRegString()'s API call and may be true for other API calls like this one.
+	return length;
 #endif
 }
 
@@ -10246,35 +10365,39 @@ VarSizeType BIV_Language(char *aBuf, char *aVarName)
 // Registry locations from J-Paul Mesnage.
 {
 	char buf[MAX_PATH];
-	char *target_buf = aBuf ? aBuf : buf;
+	VarSizeType length;
 	if (g_os.IsWinNT())  // NT/2k/XP+
-	{
-		if (g_os.IsWin2000orLater())
-			ReadRegString(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Nls\\Language", "InstallLanguage", target_buf, MAX_PATH);
-		else // NT4
-			ReadRegString(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Nls\\Language", "Default", target_buf, MAX_PATH);
-	}
+		length = g_os.IsWin2000orLater()
+			? ReadRegString(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Nls\\Language", "InstallLanguage", buf, MAX_PATH)
+			: ReadRegString(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Nls\\Language", "Default", buf, MAX_PATH); // NT4
 	else // Win9x
 	{
-		ReadRegString(HKEY_USERS, ".DEFAULT\\Control Panel\\Desktop\\ResourceLocale", "", target_buf, MAX_PATH);
-		memmove(target_buf, target_buf + 4, strlen(target_buf + 4) + 1); // +1 to include the zero terminator.
+		length = ReadRegString(HKEY_USERS, ".DEFAULT\\Control Panel\\Desktop\\ResourceLocale", "", buf, MAX_PATH);
+		if (length > 3)
+		{
+			length -= 4;
+			memmove(buf, buf + 4, length + 1); // +1 to include the zero terminator.
+		}
 	}
-	return (VarSizeType)strlen(target_buf);
+	if (aBuf)
+		strcpy(aBuf, buf); // v1.0.47: Must be done as a separate copy because passing a size of MAX_PATH for aBuf can crash when aBuf is actually smaller than that (even though it's large enough to hold the string).
+	return length;
 }
 
 VarSizeType BIV_UserName_ComputerName(char *aBuf, char *aVarName)
 {
 	char buf[MAX_PATH];  // Doesn't use MAX_COMPUTERNAME_LENGTH + 1 in case longer names are allowed in the future.
-	char *target_buf = aBuf ? aBuf : buf;
 	DWORD buf_size = MAX_PATH; // Below: A_Computer[N]ame (N is the 11th char, index 10, which if present at all distinguishes between the two).
-	if (   !(aVarName[10] ? GetComputerName(target_buf, &buf_size) : GetUserName(target_buf, &buf_size))   )
-		*target_buf = '\0';
-	return (VarSizeType)strlen(target_buf);
+	if (   !(aVarName[10] ? GetComputerName(buf, &buf_size) : GetUserName(buf, &buf_size))   )
+		*buf = '\0';
+	if (aBuf)
+		strcpy(aBuf, buf); // v1.0.47: Must be done as a separate copy because passing a size of MAX_PATH for aBuf can crash when aBuf is actually smaller than that (even though it's large enough to hold the string). This is true for ReadRegString()'s API call and may be true for other API calls like the ones here.
+	return (VarSizeType)strlen(buf); // I seem to remember that the lengths returned from the above API calls aren't consistent in these cases.
 }
 
 VarSizeType BIV_WorkingDir(char *aBuf, char *aVarName)
 {
-	// Use GetCurrentDirectory() vs. g_WorkingDir because any in-progrses FileSelectFile()
+	// Use GetCurrentDirectory() vs. g_WorkingDir because any in-progress FileSelectFile()
 	// dialog is able to keep functioning even when it's quasi-thread is suspended.  The
 	// dialog can thus change the current directory as seen by the active quasi-thread even
 	// though g_WorkingDir hasn't been updated.  It might also be possible for the working
@@ -10286,37 +10409,49 @@ VarSizeType BIV_WorkingDir(char *aBuf, char *aVarName)
 	// the actual buffer size or use a temp buffer).  So there's something else going on to explain why the
 	// problem only occurs in longer scripts on Win98se, not in trivial ones such as Var=%A_WorkingDir%.
 	// Nor did the problem affect expression assignments such as Var:=A_WorkingDir.
-	return aBuf
-		? GetCurrentDirectory(MAX_PATH, aBuf)
-		: GetCurrentDirectory(0, NULL); // MSDN says that this is a valid way to call it on all OSes, and testing shows that it works on WinXP and 98se.
+	char buf[MAX_PATH];
+	VarSizeType length = GetCurrentDirectory(MAX_PATH, buf);
+	if (aBuf)
+		strcpy(aBuf, buf); // v1.0.47: Must be done as a separate copy because passing a size of MAX_PATH for aBuf can crash when aBuf is actually smaller than that (even though it's large enough to hold the string). This is true for ReadRegString()'s API call and may be true for other API calls like the one here.
+	return length;
+	// Formerly the following, but I don't think it's as reliable/future-proof given the 1.0.47 comment above:
+	//return aBuf
+	//	? GetCurrentDirectory(MAX_PATH, aBuf)
+	//	: GetCurrentDirectory(0, NULL); // MSDN says that this is a valid way to call it on all OSes, and testing shows that it works on WinXP and 98se.
 		// Above avoids subtracting 1 to be conservative and to reduce code size (due to the need to otherwise check for zero and avoid subtracting 1 in that case).
 }
 
 VarSizeType BIV_WinDir(char *aBuf, char *aVarName)
 {
-	char buf_temp[1]; // Just a fake buffer to pass to some API functions in lieu of a NULL, to avoid any chance of misbehavior. Keep the size at 1 so that API functions will always fail to copy to buf.
-	// Sizes/lengths/-1/return-values/etc. have been verified correct.
-	return aBuf
-		? GetWindowsDirectory(aBuf, MAX_PATH) // MAX_PATH is kept in case it's needed on Win9x for reasons similar to those in GetEnvironmentVarWin9x().
-		: GetWindowsDirectory(buf_temp, 0);
+	char buf[MAX_PATH];
+	VarSizeType length = GetWindowsDirectory(buf, MAX_PATH);
+	if (aBuf)
+		strcpy(aBuf, buf); // v1.0.47: Must be done as a separate copy because passing a size of MAX_PATH for aBuf can crash when aBuf is actually smaller than that (even though it's large enough to hold the string). This is true for ReadRegString()'s API call and may be true for other API calls like the one here.
+	return length;
+	// Formerly the following, but I don't think it's as reliable/future-proof given the 1.0.47 comment above:
+	//char buf_temp[1]; // Just a fake buffer to pass to some API functions in lieu of a NULL, to avoid any chance of misbehavior. Keep the size at 1 so that API functions will always fail to copy to buf.
+	//// Sizes/lengths/-1/return-values/etc. have been verified correct.
+	//return aBuf
+	//	? GetWindowsDirectory(aBuf, MAX_PATH) // MAX_PATH is kept in case it's needed on Win9x for reasons similar to those in GetEnvironmentVarWin9x().
+	//	: GetWindowsDirectory(buf_temp, 0);
 		// Above avoids subtracting 1 to be conservative and to reduce code size (due to the need to otherwise check for zero and avoid subtracting 1 in that case).
 }
 
 VarSizeType BIV_Temp(char *aBuf, char *aVarName)
 {
-	char buf_temp[1]; // Just a fake buffer to pass to some API functions in lieu of a NULL, to avoid any chance of misbehavior. Keep the size at 1 so that API functions will always fail to copy to buf.
-	// Sizes/lengths/-1/return-values/etc. have been verified correct.
-	if (!aBuf) // Avoids subtracting 1 to be conservative and to reduce code size (due to the need to otherwise check for zero and avoid subtracting 1 in that case).
-		return GetTempPath(0, buf_temp);
-	// Otherwise:
-	VarSizeType length;
-	if (length = GetTempPath(MAX_PATH, aBuf)) // aBuf[-1] below relies on this check having been done.
+	char buf[MAX_PATH];
+	VarSizeType length = GetTempPath(MAX_PATH, buf);
+	if (aBuf)
 	{
-		aBuf += length - 1;
-		if (*aBuf == '\\') // For some reason, it typically yields a trailing backslash, so omit it to improve friendliness/consistency.
+		strcpy(aBuf, buf); // v1.0.47: Must be done as a separate copy because passing a size of MAX_PATH for aBuf can crash when aBuf is actually smaller than that (even though it's large enough to hold the string). This is true for ReadRegString()'s API call and may be true for other API calls like the one here.
+		if (length)
 		{
-			*aBuf = '\0';
-			--length;
+			aBuf += length - 1;
+			if (*aBuf == '\\') // For some reason, it typically yields a trailing backslash, so omit it to improve friendliness/consistency.
+			{
+				*aBuf = '\0';
+				--length;
+			}
 		}
 	}
 	return length;
@@ -10326,90 +10461,98 @@ VarSizeType BIV_ComSpec(char *aBuf, char *aVarName)
 {
 	char buf_temp[1]; // Just a fake buffer to pass to some API functions in lieu of a NULL, to avoid any chance of misbehavior. Keep the size at 1 so that API functions will always fail to copy to buf.
 	// Sizes/lengths/-1/return-values/etc. have been verified correct.
-	return aBuf ? GET_ENV_VAR_RELIABLE("comspec", aBuf) // v1.0.46.08: GET_ENV_VAR_RELIABLE() is a new function to fix this on Windows 9x.
+	return aBuf ? GetEnvVarReliable("comspec", aBuf) // v1.0.46.08: GetEnvVarReliable() fixes %Comspec% on Windows 9x.
 		: GetEnvironmentVariable("comspec", buf_temp, 0); // Avoids subtracting 1 to be conservative and to reduce code size (due to the need to otherwise check for zero and avoid subtracting 1 in that case).
 }
 
 VarSizeType BIV_ProgramFiles(char *aBuf, char *aVarName)
 {
 	char buf[MAX_PATH];
-	char *target_buf = aBuf ? aBuf : buf;
-	ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion", "ProgramFilesDir", target_buf, MAX_PATH);
-	return (VarSizeType)strlen(target_buf);
+	VarSizeType length = ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion", "ProgramFilesDir", buf, MAX_PATH);
+	if (aBuf)
+		strcpy(aBuf, buf); // v1.0.47: Must be done as a separate copy because passing a size of MAX_PATH for aBuf can crash when aBuf is actually smaller than that (even though it's large enough to hold the string).
+	return length;
 }
 
 VarSizeType BIV_AppData(char *aBuf, char *aVarName) // Called by multiple callers.
 {
 	char buf[MAX_PATH]; // One caller relies on this being explicitly limited to MAX_PATH.
-	char *target_buf = aBuf ? aBuf : buf;
-	*target_buf = '\0'; // Set default.
-	if (aVarName[9]) // A_AppData[C]ommon
-		ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders"
-			, "Common AppData", target_buf, MAX_PATH);
-	if (!*target_buf) // Either the above failed or we were told to get the user/private dir instead.
-		ReadRegString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders"
-			, "AppData", target_buf, MAX_PATH);
-	return (VarSizeType)strlen(target_buf);
+	VarSizeType length = aVarName[9] // A_AppData[C]ommon
+		? ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders"
+			, "Common AppData", buf, MAX_PATH)
+		: 0;
+	if (!length) // Either the above failed or we were told to get the user/private dir instead.
+		length = ReadRegString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders"
+			, "AppData", buf, MAX_PATH);
+	if (aBuf)
+		strcpy(aBuf, buf); // v1.0.47: Must be done as a separate copy because passing a size of MAX_PATH for aBuf can crash when aBuf is actually smaller than that (even though it's large enough to hold the string).
+	return length;
 }
 
 VarSizeType BIV_Desktop(char *aBuf, char *aVarName)
 {
 	char buf[MAX_PATH];
-	char *target_buf = aBuf ? aBuf : buf;
-	*target_buf = '\0'; // Set default.
-	if (aVarName[9]) // A_Desktop[C]ommon
-		ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Desktop", target_buf, MAX_PATH);
-	if (!*target_buf) // Either the above failed or we were told to get the user/private dir instead.
-		ReadRegString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Desktop", target_buf, MAX_PATH);
-	return (VarSizeType)strlen(target_buf);
+	VarSizeType length = aVarName[9] // A_Desktop[C]ommon
+		? ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Desktop", buf, MAX_PATH)
+		: 0;
+	if (!length) // Either the above failed or we were told to get the user/private dir instead.
+		length = ReadRegString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Desktop", buf, MAX_PATH);
+	if (aBuf)
+		strcpy(aBuf, buf); // v1.0.47: Must be done as a separate copy because passing a size of MAX_PATH for aBuf can crash when aBuf is actually smaller than that (even though it's large enough to hold the string).
+	return length;
 }
 
 VarSizeType BIV_StartMenu(char *aBuf, char *aVarName)
 {
 	char buf[MAX_PATH];
-	char *target_buf = aBuf ? aBuf : buf;
-	*target_buf = '\0'; // Set default.
-	if (aVarName[11]) // A_StartMenu[C]ommon
-		ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Start Menu", target_buf, MAX_PATH);
-	if (!*target_buf) // Either the above failed or we were told to get the user/private dir instead.
-		ReadRegString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Start Menu", target_buf, MAX_PATH);
-	return (VarSizeType)strlen(target_buf);
+	VarSizeType length = aVarName[11] // A_StartMenu[C]ommon
+		? ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Start Menu", buf, MAX_PATH)
+		: 0;
+	if (!length) // Either the above failed or we were told to get the user/private dir instead.
+		length = ReadRegString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Start Menu", buf, MAX_PATH);
+	if (aBuf)
+		strcpy(aBuf, buf); // v1.0.47: Must be done as a separate copy because passing a size of MAX_PATH for aBuf can crash when aBuf is actually smaller than that (even though it's large enough to hold the string).
+	return length;
 }
 
 VarSizeType BIV_Programs(char *aBuf, char *aVarName)
 {
 	char buf[MAX_PATH];
-	char *target_buf = aBuf ? aBuf : buf;
-	*target_buf = '\0'; // Set default.
-	if (aVarName[10]) // A_Programs[C]ommon
-		ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Programs", target_buf, MAX_PATH);
-	if (!*target_buf) // Either the above failed or we were told to get the user/private dir instead.
-		ReadRegString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Programs", target_buf, MAX_PATH);
-	return (VarSizeType)strlen(target_buf);
+	VarSizeType length = aVarName[10] // A_Programs[C]ommon
+		? ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Programs", buf, MAX_PATH)
+		: 0;
+	if (!length) // Either the above failed or we were told to get the user/private dir instead.
+		length = ReadRegString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Programs", buf, MAX_PATH);
+	if (aBuf)
+		strcpy(aBuf, buf); // v1.0.47: Must be done as a separate copy because passing a size of MAX_PATH for aBuf can crash when aBuf is actually smaller than that (even though it's large enough to hold the string).
+	return length;
 }
 
 VarSizeType BIV_Startup(char *aBuf, char *aVarName)
 {
 	char buf[MAX_PATH];
-	char *target_buf = aBuf ? aBuf : buf;
-	*target_buf = '\0'; // Set default.
-	if (aVarName[9]) // A_Startup[C]ommon
-		ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Startup", target_buf, MAX_PATH);
-	if (!*target_buf) // Either the above failed or we were told to get the user/private dir instead.
-		ReadRegString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Startup", target_buf, MAX_PATH);
-	return (VarSizeType)strlen(target_buf);
+	VarSizeType length = aVarName[9] // A_Startup[C]ommon
+		? ReadRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Startup", buf, MAX_PATH)
+		: 0;
+	if (!length) // Either the above failed or we were told to get the user/private dir instead.
+		length = ReadRegString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Startup", buf, MAX_PATH);
+	if (aBuf)
+		strcpy(aBuf, buf); // v1.0.47: Must be done as a separate copy because passing a size of MAX_PATH for aBuf can crash when aBuf is actually smaller than that (even though it's large enough to hold the string).
+	return length;
 }
 
 VarSizeType BIV_MyDocuments(char *aBuf, char *aVarName) // Called by multiple callers.
 {
 	char buf[MAX_PATH];
-	char *target_buf = aBuf ? aBuf : buf;
 	ReadRegString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders"
-		, "Personal", target_buf, MAX_PATH); // Some callers might rely on MAX_PATH being the limit, to avoid overflow.
+		, "Personal", buf, MAX_PATH); // Some callers might rely on MAX_PATH being the limit, to avoid overflow.
 	// Since it is common (such as in networked environments) to have My Documents on the root of a drive
 	// (such as a mapped drive letter), remove the backslash from something like M:\ because M: is more
 	// appropriate for most uses:
-	return (VarSizeType)strip_trailing_backslash(target_buf);
+	VarSizeType length = (VarSizeType)strip_trailing_backslash(buf);
+	if (aBuf)
+		strcpy(aBuf, buf); // v1.0.47: Must be done as a separate copy because passing a size of MAX_PATH for aBuf can crash when aBuf is actually smaller than that (even though it's large enough to hold the string).
+	return length;
 }
 
 
@@ -10589,8 +10732,8 @@ VarSizeType BIV_LineFile(char *aBuf, char *aVarName)
 // Caller has ensured that g_script.mCurrLine is not NULL.
 {
 	if (aBuf)
-		strcpy(aBuf, Line::sSourceFile[g_script.mCurrLine->mFileNumber]);
-	return (VarSizeType)strlen(Line::sSourceFile[g_script.mCurrLine->mFileNumber]);
+		strcpy(aBuf, Line::sSourceFile[g_script.mCurrLine->mFileIndex]);
+	return (VarSizeType)strlen(Line::sSourceFile[g_script.mCurrLine->mFileIndex]);
 }
 
 
@@ -10687,9 +10830,7 @@ VarSizeType BIV_LoopFileFullPath(char *aBuf, char *aVarName)
 
 VarSizeType BIV_LoopFileLongPath(char *aBuf, char *aVarName)
 {
-	char *unused, buf[MAX_PATH];
-	char *target_buf = aBuf ? aBuf : buf;
-	*target_buf = '\0';  // Set default.
+	char *unused, buf[MAX_PATH] = ""; // Set default.
 	if (g.mLoopFile)
 	{
 		// GetFullPathName() is done in addition to ConvertFilespecToCorrectCase() for the following reasons:
@@ -10705,15 +10846,17 @@ VarSizeType BIV_LoopFileLongPath(char *aBuf, char *aVarName)
 		// The below also serves to make a copy because changing the original would yield
 		// unexpected/inconsistent results in a script that retrieves the A_LoopFileFullPath
 		// but only conditionally retrieves A_LoopFileLongPath.
-		if (!GetFullPathName(g.mLoopFile->cFileName, MAX_PATH, target_buf, &unused))
-			*target_buf = '\0'; // It might fail if NtfsDisable8dot3NameCreation is turned on in the registry, and possibly for other reasons.
+		if (!GetFullPathName(g.mLoopFile->cFileName, MAX_PATH, buf, &unused))
+			*buf = '\0'; // It might fail if NtfsDisable8dot3NameCreation is turned on in the registry, and possibly for other reasons.
 		else
 			// The below is called in case the loop is being used to convert filename specs that were passed
 			// in from the command line, which thus might not be the proper case (at least in the path
 			// portion of the filespec), as shown in the file system:
-			ConvertFilespecToCorrectCase(target_buf);
+			ConvertFilespecToCorrectCase(buf);
 	}
-	return (VarSizeType)strlen(target_buf); // Must explicitly calculate the length rather than using the return value from GetFullPathName(), because ConvertFilespecToCorrectCase() expands 8.3 path components.
+	if (aBuf)
+		strcpy(aBuf, buf); // v1.0.47: Must be done as a separate copy because passing a size of MAX_PATH for aBuf can crash when aBuf is actually smaller than that (even though it's large enough to hold the string). This is true for ReadRegString()'s API call and may be true for other API calls like the one here.
+	return (VarSizeType)strlen(buf); // Must explicitly calculate the length rather than using the return value from GetFullPathName(), because ConvertFilespecToCorrectCase() expands 8.3 path components.
 }
 
 VarSizeType BIV_LoopFileShortPath(char *aBuf, char *aVarName)
@@ -10725,14 +10868,14 @@ VarSizeType BIV_LoopFileShortPath(char *aBuf, char *aVarName)
 // But to detect if that short name is really a long name, A_LoopFileShortPath could be checked
 // and if it's blank, there is no short name available.
 {
-	char buf[MAX_PATH];
-	char *target_buf = aBuf ? aBuf : buf;
-	*target_buf = '\0'; // Set default.
-	DWORD length = 0;   //
+	char buf[MAX_PATH] = ""; // Set default.
+	DWORD length = 0;        //
 	if (g.mLoopFile)
 		// The loop handler already prepended the script's directory in cFileName for us:
-		if (   !(length = GetShortPathName(g.mLoopFile->cFileName, target_buf, MAX_PATH))   )
-			*target_buf = '\0'; // It might fail if NtfsDisable8dot3NameCreation is turned on in the registry, and possibly for other reasons.
+		if (   !(length = GetShortPathName(g.mLoopFile->cFileName, buf, MAX_PATH))   )
+			*buf = '\0'; // It might fail if NtfsDisable8dot3NameCreation is turned on in the registry, and possibly for other reasons.
+	if (aBuf)
+		strcpy(aBuf, buf); // v1.0.47: Must be done as a separate copy because passing a size of MAX_PATH for aBuf can crash when aBuf is actually smaller than that (even though it's large enough to hold the string). This is true for ReadRegString()'s API call and may be true for other API calls like the one here.
 	return (VarSizeType)length;
 }
 
@@ -10750,7 +10893,7 @@ VarSizeType BIV_LoopFileTime(char *aBuf, char *aVarName)
 		case 'C': ft = g.mLoopFile->ftCreationTime; break;
 		default: ft = g.mLoopFile->ftLastAccessTime;
 		}
-		FileTimeToYYYYMMDD(target_buf,ft, true);
+		FileTimeToYYYYMMDD(target_buf, ft, true);
 	}
 	return (VarSizeType)strlen(target_buf);
 }
@@ -10799,23 +10942,23 @@ VarSizeType BIV_LoopFileSize(char *aBuf, char *aVarName)
 
 VarSizeType BIV_LoopRegType(char *aBuf, char *aVarName)
 {
-	char buf[MAX_PATH];
-	char *target_buf = aBuf ? aBuf : buf;
-	*target_buf = '\0'; // Set default.
+	char buf[MAX_PATH] = ""; // Set default.
 	if (g.mLoopRegItem)
-		Line::RegConvertValueType(target_buf, MAX_PATH, g.mLoopRegItem->type);
-	return (VarSizeType)strlen(target_buf);
+		Line::RegConvertValueType(buf, MAX_PATH, g.mLoopRegItem->type);
+	if (aBuf)
+		strcpy(aBuf, buf); // v1.0.47: Must be done as a separate copy because passing a size of MAX_PATH for aBuf can crash when aBuf is actually smaller than that due to the zero-the-unused-part behavior of strlcpy/strncpy.
+	return (VarSizeType)strlen(buf);
 }
 
 VarSizeType BIV_LoopRegKey(char *aBuf, char *aVarName)
 {
-	char buf[MAX_PATH];
-	char *target_buf = aBuf ? aBuf : buf;
-	*target_buf = '\0'; // Set default.
+	char buf[MAX_PATH] = ""; // Set default.
 	if (g.mLoopRegItem)
 		// Use root_key_type, not root_key (which might be a remote vs. local HKEY):
-		Line::RegConvertRootKey(target_buf, MAX_PATH, g.mLoopRegItem->root_key_type);
-	return (VarSizeType)strlen(target_buf);
+		Line::RegConvertRootKey(buf, MAX_PATH, g.mLoopRegItem->root_key_type);
+	if (aBuf)
+		strcpy(aBuf, buf); // v1.0.47: Must be done as a separate copy because passing a size of MAX_PATH for aBuf can crash when aBuf is actually smaller than that due to the zero-the-unused-part behavior of strlcpy/strncpy.
+	return (VarSizeType)strlen(buf);
 }
 
 VarSizeType BIV_LoopRegSubKey(char *aBuf, char *aVarName)
@@ -11063,10 +11206,13 @@ VarSizeType BIV_GuiEvent(char *aBuf, char *aVarName)
 		// Above has ensured that file_count > 0
 		if (aBuf)
 		{
-			char *cp = aBuf;
+			char buf[MAX_PATH], *cp = aBuf;
+			UINT length;
 			for (u = 0; u < file_count; ++u)
 			{
-				cp += DragQueryFile(pgui->mHdrop, u, cp, MAX_PATH); // MAX_PATH is arbitrary since aBuf is already known to be large enough.
+				length = DragQueryFile(pgui->mHdrop, u, buf, MAX_PATH); // MAX_PATH is arbitrary since aBuf is already known to be large enough.
+				strcpy(cp, buf); // v1.0.47: Must be done as a separate copy because passing a size of MAX_PATH for something that isn't actually that large (though clearly large enoug) due to previous size-estimation phase) can crash because the API may read/write data beyond what it actually needs.
+				cp += length;
 				if (u < file_count - 1) // i.e omit the LF after the last file to make parsing via "Loop, Parse" easier.
 					*cp++ = '\n';
 				// Although the transcription of files on the clipboard into their text filenames is done
@@ -11099,10 +11245,7 @@ VarSizeType BIV_GuiEvent(char *aBuf, char *aVarName)
 		return (g.GuiEvent < GUI_EVENT_FIRST_UNNAMED) ? (VarSizeType)strlen(sNames[g.GuiEvent]) : 1;
 	// Otherwise:
 	if (g.GuiEvent < GUI_EVENT_FIRST_UNNAMED)
-	{
-		strcpy(aBuf, sNames[g.GuiEvent]);
-		return (VarSizeType)strlen(aBuf);
-	}
+		return (VarSizeType)strlen(strcpy(aBuf, sNames[g.GuiEvent]));
 	else // g.GuiEvent is assumed to be an ASCII value, such as a digit.  This supports Slider controls.
 	{
 		*aBuf++ = (char)(UCHAR)g.GuiEvent;
@@ -11273,7 +11416,7 @@ DYNARESULT DynaCall(int aFlags, void *aFunction, DYNAPARM aParam[], int aParamCo
 	}
 
 	// Call the function.
-	__try // Checked code bloat of __try{} and it doesn't appear to add any size.
+	__try // Each try/except section adds at most 240 bytes of uncompressed code, and typically doesn't measurably affect performance.
 	{
 		_asm
 		{
@@ -11705,7 +11848,7 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 				// Support for unsigned values that are 32 bits wide or less is done via ATOI64() since
 				// it should be able to handle both signed and unsigned values.  However, unsigned 64-bit
 				// values probably require ATOU64(), which will prevent something like -1 from being seen
-				// as the largest unsigned 64-bit int, but more importantly there are some other issues
+				// as the largest unsigned 64-bit int; but more importantly there are some other issues
 				// with unsigned 64-bit numbers: The script internals use 64-bit signed values everywhere,
 				// so unsigned values can only be partially supported for incoming parameters, but probably
 				// not for outgoing parameters (values the function changed) or the return value.  Those
@@ -13098,54 +13241,188 @@ void BIF_Chr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCou
 
 
 
-//void BIF_ExtractInteger(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
-//{
-//	ExprTokenType &param1 = *aParam[0];
-//	size_t pmem = (param1.symbol == SYM_VAR) // Don't make pmem a pointer-type because the integer offset might not be a multiple of 4 (i.e. the below increments "pmem" directly by "offset").
-//		? (size_t)param1.var->Contents()
-//		: (size_t)ExprTokenToInt64(param1);
-//
-//	if (aParamCount > 1) // Parameter "offset" is present, so increment the address by that amount.  For simplicity, this is done even when parameter #1 isn't a variable.
-//		pmem += (size_t)ExprTokenToInt64(*aParam[1]);
-//
-//	if (pmem < 256) // Doesn't measurably impact performance, and helps prevent buggy scripts from crashing. This is checked only after adding the offset above in case a script ever adds a very high offset to a very low address (for some reason).
-//	{
-//		aResultToken.symbol = SYM_STRING;
-//		aResultToken.marker = "";
-//		return;
-//	}
-//
-//	size_t size = (aParamCount < 4) ? 4 : (size_t)ExprTokenToInt64(*aParam[3]);
-//
-//	#define EXTRACT_UNSIGNED 0 // To avoid breaking future scripts, the logic further below considers any 
-//	#define EXTRACT_SIGNED   1 // value other than 0 and 2 to be the same as 1.
-//	#define EXTRACT_FLOAT    2
-//	int is_signed_or_float = (aParamCount < 3) ? EXTRACT_UNSIGNED : (int)ExprTokenToInt64(*aParam[2]);
-//	if (is_signed_or_float == EXTRACT_FLOAT) // See comment above for why floats are checked prior to signed/unsigned ints.
-//	{
-//		if (aParamCount < 4)
-//			size = 8; // Defaulting to 8 vs. 4 for floats seems more friendly.
-//		aResultToken.symbol = SYM_FLOAT;
-//		aResultToken.value_double = (size == 8) ? *(double *)pmem : *(float *)pmem;
-//		return;
-//	}
-//
-//	switch(size)
-//	{
-//	case 4: // Listed first for performance.
-//		aResultToken.value_int64 = is_signed_or_float ? *(int *)pmem : *(unsigned int *)pmem; // aResultToken.symbol was set to SYM_INTEGER by our caller.
-//		break;
-//	case 8:
-//		aResultToken.value_int64 = *(__int64 *)pmem; // Unsigned 64-bit not supported because variables/expressions can't support them.
-//		break;
-//	case 2:
-//		aResultToken.value_int64 = is_signed_or_float ? *(short *)pmem : *(unsigned short *)pmem;
-//		break;
-//	case 1:
-//		aResultToken.value_int64 = is_signed_or_float ? *(char *)pmem : *(unsigned char*)pmem;
-//		break;
-//	}
-//}
+void BIF_NumGet(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+{
+	size_t right_side_bound, target; // Don't make target a pointer-type because the integer offset might not be a multiple of 4 (i.e. the below increments "target" directly by "offset" and we don't want that to use pointer math).
+	ExprTokenType &target_token = *aParam[0];
+	if (target_token.symbol == SYM_VAR) // SYM_VAR's Type() is always VAR_NORMAL.
+	{
+		target = (size_t)target_token.var->Contents();
+		right_side_bound = target + target_token.var->Capacity(); // This is first illegal address to the right of target.
+	}
+	else
+		target = (size_t)ExprTokenToInt64(target_token);
+
+	if (aParamCount > 1) // Parameter "offset" is present, so increment the address by that amount.  For flexibility, this is done even when the target isn't a variable.
+		target += (int)ExprTokenToInt64(*aParam[1]); // Cast to int vs. size_t to support negative offsets.
+
+	BOOL is_signed;
+	size_t size = 4; // Set default.
+
+	if (aParamCount < 3) // The "type" parameter is absent (which is most often the case), so use defaults.
+		is_signed = FALSE;
+		// And keep "size" at its default set earlier.
+	else // An explicit "type" is present.
+	{
+		char *type = ExprTokenToString(*aParam[2], aResultToken.buf);
+		if (toupper(*type) == 'U') // Unsigned.
+		{
+			++type; // Remove the first character from further consideration.
+			is_signed = FALSE;
+		}
+		else
+			is_signed = TRUE;
+
+		switch(toupper(*type)) // Override "size" and aResultToken.symbol if type warrants it. Note that the above has omitted the leading "U", if present, leaving type as "Int" vs. "Uint", etc.
+		{
+		case 'I':
+			if (strchr(type, '6')) // Int64. It's checked this way for performance, and to avoid access violation if string is bogus and too short such as "i64".
+				size = 8;
+			//else keep "size" at its default set earlier.
+			break;
+		case 'S': size = 2; break; // Short.
+		case 'C': size = 1; break; // Char.
+
+		case 'D': size = 8; // Double.  NO "BREAK": fall through to below.
+		case 'F': // OR FELL THROUGH FROM ABOVE.
+			aResultToken.symbol = SYM_FLOAT; // Override the default of SYM_INTEGER set by our caller.
+			// In the case of 'F', leave "size" at its default set earlier.
+			break;
+		// default: For any unrecognized values, keep "size" and aResultToken.symbol at their defaults set earlier
+		// (for simplicity).
+		}
+	}
+
+	// If the target is a variable, the following check ensures that the memory to be read lies within its capacity.
+	// This seems superior to an exception handler because exception handlers only catch illegal addresses,
+	// not ones that are technically legal but unintentionally bugs due to being beyond a variable's capacity.
+	// Moreover, __try/except is larger in code size. Another possible alternative is IsBadReadPtr()/IsBadWritePtr(),
+	// but those are discouraged by MSDN.
+	// The following aren't covered by the check below:
+	// - Due to rarity of negative offsets, only the right-side boundary is checked, not the left.
+	// - Due to rarity and to simplify things, Float/Double (which "return" higher above) aren't checked.
+	if (target < 1024 // Basic sanity check to catch incoming raw addresses that are zero or blank.
+		|| target_token.symbol == SYM_VAR && target+size > right_side_bound) // i.e. it's ok if target+size==right_side_bound because the last byte to be read is actually at target+size-1. In other words, the position of the last possible terminator within the variable's capacity is considered an allowable address.
+	{
+		aResultToken.symbol = SYM_STRING;
+		aResultToken.marker = "";
+		return;
+	}
+
+	switch(size)
+	{
+	case 4: // Listed first for performance.
+		if (aResultToken.symbol == SYM_FLOAT)
+			aResultToken.value_double = *(float *)target;
+		else if (is_signed)
+			aResultToken.value_int64 = *(int *)target; // aResultToken.symbol was set to SYM_FLOAT or SYM_INTEGER higher above.
+		else
+			aResultToken.value_int64 = *(unsigned int *)target;
+		break;
+	case 8:
+		// The below correctly copies both DOUBLE and INT64 into the union.
+		// Unsigned 64-bit integers aren't supported because variables/expressions can't support them.
+		aResultToken.value_int64 = *(__int64 *)target;
+		break;
+	case 2:
+		if (is_signed) // Don't use ternary because that messes up type-casting.
+			aResultToken.value_int64 = *(short *)target;
+		else
+			aResultToken.value_int64 = *(unsigned short *)target;
+		break;
+	default: // size 1
+		if (is_signed) // Don't use ternary because that messes up type-casting.
+			aResultToken.value_int64 = *(char *)target;
+		else
+			aResultToken.value_int64 = *(unsigned char *)target;
+	}
+}
+
+
+
+void BIF_NumPut(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+{
+	// Load-time validation has ensured that at least the first two parameters are present.
+	ExprTokenType &token_to_write = *aParam[0];
+
+	size_t right_side_bound, target; // Don't make target a pointer-type because the integer offset might not be a multiple of 4 (i.e. the below increments "target" directly by "offset" and we don't want that to use pointer math).
+	ExprTokenType &target_token = *aParam[1];
+	if (target_token.symbol == SYM_VAR) // SYM_VAR's Type() is always VAR_NORMAL.
+	{
+		target = (size_t)target_token.var->Contents();
+		right_side_bound = target + target_token.var->Capacity(); // This is first illegal address to the right of target.
+	}
+	else
+		target = (size_t)ExprTokenToInt64(target_token);
+
+	if (aParamCount > 2) // Parameter "offset" is present, so increment the address by that amount.  For flexibility, this is done even when the target isn't a variable.
+		target += (int)ExprTokenToInt64(*aParam[2]); // Cast to int vs. size_t to support negative offsets.
+
+	size_t size = 4;        // Set defaults.
+	BOOL is_integer = TRUE; //
+
+	if (aParamCount > 3) // The "type" parameter is present (which is somewhat unusual).
+	{
+		char *type = ExprTokenToString(*aParam[3], aResultToken.buf);
+		if (toupper(*type) == 'U') // Unsigned; but in the case of NumPut, it doesn't matter so ignore it.
+			++type; // Remove the first character from further consideration.
+
+		switch(toupper(*type)) // Override "size" and is_integer if type warrants it. Note that the above has omitted the leading "U", if present, leaving type as "Int" vs. "Uint", etc.
+		{
+		case 'I':
+			if (strchr(type, '6')) // Int64. It's checked this way for performance, and to avoid access violation if string is bogus and too short such as "i64".
+				size = 8;
+			//else keep "size" at its default set earlier.
+			break;
+		case 'S': size = 2; break; // Short.
+		case 'C': size = 1; break; // Char.
+
+		case 'D': size = 8; // Double.  NO "BREAK": fall through to below.
+		case 'F': // OR FELL THROUGH FROM ABOVE.
+			is_integer = FALSE; // Override the default set earlier.
+			// In the case of 'F', leave "size" at its default set earlier.
+			break;
+		// default: For any unrecognized values, keep "size" and is_integer at their defaults set earlier
+		// (for simplicity).
+		}
+	}
+
+	aResultToken.value_int64 = target + size; // This is used below and also as NumPut's return value. It's the address to the right of the item to be written.  aResultToken.symbol was set to SYM_INTEGER by our caller.
+
+	// See comments in NumGet about the following section:
+	if (target < 1024 // Basic sanity check to catch incoming raw addresses that are zero or blank.
+		|| target_token.symbol == SYM_VAR && aResultToken.value_int64 > right_side_bound) // i.e. it's ok if target+size==right_side_bound because the last byte to be read is actually at target+size-1. In other words, the position of the last possible terminator within the variable's capacity is considered an allowable address.
+	{
+		aResultToken.symbol = SYM_STRING;
+		aResultToken.marker = "";
+		return;
+	}
+
+	__int64 int64_to_write;
+	if (is_integer)
+		int64_to_write = ExprTokenToInt64(token_to_write);
+
+	switch(size)
+	{
+	case 4: // Listed first for performance.
+		if (is_integer)
+			*(unsigned int *)target = (unsigned int)int64_to_write;
+		else // Float (32-bit).
+			*(float *)target = (float)ExprTokenToDouble(token_to_write);
+		break;
+	case 8:
+		if (is_integer)
+			*(__int64 *)target = int64_to_write; // Unsigned 64-bit not supported because variables/expressions can't support them.
+		else // Double (64-bit).
+			*(double *)target = ExprTokenToDouble(token_to_write);
+		break;
+	case 2:
+		*(unsigned short *)target = (unsigned short)int64_to_write;
+		break;
+	default: // size 1
+		*(unsigned char *)target = (unsigned char)int64_to_write;
+	}
+}
 
 
 
@@ -13600,7 +13877,7 @@ void BIF_OnMessage(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 		char *func_name = ExprTokenToString(*aParam[1], buf); // Resolve parameter #2.
 		if (*func_name)
 		{
-			if (   !(func = g_script.FindFunc(func_name))   )
+			if (   !(func = g_script.FindFunc(func_name))   ) // Nonexistent function.
 				return; // Yield the default return value set earlier.
 			// If too many formal parameters or any are ByRef/optional, indicate failure.
 			// This helps catch bugs in scripts that are assigning the wrong function to a monitor.
@@ -13668,16 +13945,231 @@ void BIF_OnMessage(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 		++g_MsgMonitorCount;
 		strcpy(buf, func->mName); // Yield the NEW name as an indicator of success. Caller has ensured that buf large enough to support max function name.
 		aResultToken.marker = buf;
+		monitor.instance_count = 0; // Reset instance_count only for new items since existing items might currently be running.
 		// Continue on to the update-or-create logic below.
 	}
 
 	// Since above didn't return, above has ensured that msg_index is the index of the existing or new
 	// MsgMonitorStruct in the array.  In addition, it has set the proper return value for us.
-	// Regardless of whether this is an update or creation, update all the struct attributes:
+	// Update those struct attributes that get the same treatment regardless of whether this is an update or creation.
 	monitor.msg = specified_msg;
 	monitor.func = func;
-	if (!item_already_exists) // Reset udf_is_running only for new items since existing items might currently be running.
-		monitor.udf_is_running = false;
+	if (aParamCount > 2)
+		monitor.max_instances = (short)ExprTokenToInt64(*aParam[2]); // No validation because it seems harmless if it's negative or some huge number.
+	else // Unspecified, so if this item is being newly created fall back to the default.
+		if (!item_already_exists)
+			monitor.max_instances = 1;
+}
+
+
+
+struct RCCallbackFunc // Used by BIF_RegisterCallback() and related.
+{
+	ULONG data1;	//E8 00 00 00
+	ULONG data2;	//00 8D 44 24
+	ULONG data3;	//08 50 FF 15
+	UINT (__stdcall **callfuncptr)(UINT*,char*);
+	ULONG data4;	//59 84 C4 nn
+	USHORT data5;	//FF E1
+	//code ends
+	UCHAR actual_param_count; // This is the actual (not formal) number of parameters passed from the caller to the callback. Kept adjacent with the USHORT above to conserve memory due to 4-byte struct alignment.
+	bool create_new_thread; // Kept adjacent with above to conserve memory due to 4-byte struct alignment.
+	DWORD event_info; // A_EventInfo
+	Func *func; // The UDF to be called whenever the callback's caller calls callfuncptr.
+};
+
+
+
+UINT __stdcall RegisterCallbackCStub(UINT *params, char *address) // Used by BIF_RegisterCallback().
+// JGR: On Win32 parameters are always 4 bytes wide. The exceptions are functions which work on the FPU stack
+// (not many of those). Win32 is quite picky about the stack always being 4 byte-aligned, (I have seen only one
+// application which defied that and it was a patched ported DOS mixed mode application). The Win32 calling
+// convention assumes that the parameter size equals the pointer size. 64 integers on Win32 are passed on
+// pointers, or as two 32 bit halves for some functions…
+{
+	#define DEFAULT_CB_RETURN_VALUE 0  // The value returned to the callback's caller if script doesn't provide one.
+
+	RCCallbackFunc &cb = *((RCCallbackFunc*)(address-5)); //second instruction is 5 bytes after start (return address pushed by call)
+	Func &func = *cb.func; // For performance and convenience.
+
+	// NOTES ABOUT INTERRUPTIONS / CRITICAL:
+	// An incoming call to a callback is considered an "emergency" for the purpose of determining whether
+	// critical/high-priority threads should be interrupted because there's no way easy way to buffer or
+	// postpone the call.  Therefore, NO check of the following is done here:
+	// - Current thread's priority (that's something of a deprecated feature anyway).
+	// - Current thread's status of Critical (however, Critical would prevent us from ever being called in
+	//   cases where the callback is triggered indirectly via message/dispatch due to message filtering
+	//   and/or Critical's ability to pump messes less often).
+	// - INTERRUPTIBLE_IN_EMERGENCY (which includes g_MenuIsVisible and g_AllowInterruption), which primarily
+	//   affects SLEEP_WITHOUT_INTERRUPTION): It's debatable, but to maximize flexibility it seems best to allow
+	//   callbacks during the display of a menu and during SLEEP_WITHOUT_INTERRUPTION.  For most callers of
+	//   SLEEP_WITHOUT_INTERRUPTION, interruptions seem harmless.  For some it could be a problem, but when you
+	//   consider how rare such callbacks are (mostly just subclassing of windows/controls) and what those
+	//   callbacks tend to do, conflicts seem very rare.
+	// Of course, a callback can also be triggered through explicit script action such as a DllCall of
+	// EnumWindows, in which case the script would want to be interrupted unconditionally to make the call.
+	// However, in those cases it's hard to imagine that INTERRUPTIBLE_IN_EMERGENCY wouldn't be true anyway.
+	if (cb.create_new_thread && g_nThreads >= g_MaxThreadsTotal) // Since this is a callback, it seems too rare to make an exemption for functions whose first command is ExitApp.
+		return DEFAULT_CB_RETURN_VALUE;
+
+	// Need to check if backup of function's variables is needed in case:
+	// 1) The UDF is assigned to more than one callback, in which case the UDF could be running more than one
+	//    simultantously.
+	// 2) The callback is intended to be reentrant (e.g. a subclass/WindowProc that doesn't Critical).
+	// 3) Script explicitly calls the UDF in addition to using it as a callback.
+	//
+	// See ExpandExpression() for detailed comments about the following section.
+	VarBkp *var_backup = NULL;  // If needed, it will hold an array of VarBkp objects.
+	int var_backup_count; // The number of items in the above array.
+	if (func.mInstances > 0) // Backup is needed.
+		if (!Var::BackupFunctionVars(func, var_backup, var_backup_count)) // Out of memory.
+			return DEFAULT_CB_RETURN_VALUE; // Since out-of-memory is so rare, it seems justifiable not to have any error reporting and instead just avoid calling the function.
+
+	global_struct global_saved;
+	char ErrorLevel_saved[ERRORLEVEL_SAVED_SIZE];
+	DWORD EventInfo_saved;
+	if (cb.create_new_thread)
+	{
+		// See MsgSleep() for comments about the following section.
+		strlcpy(ErrorLevel_saved, g_ErrorLevel->Contents(), sizeof(ErrorLevel_saved));
+		CopyMemory(&global_saved, &g, sizeof(global_struct));
+		if (g_nFileDialogs) // If a FileSelectFile dialog is present, ensure the new thread starts at the right working-dir.
+			SetCurrentDirectory(g_WorkingDir); // See MsgSleep() for details.
+		InitNewThread(0, false, true, func.mJumpToLine->mActionType);
+
+	}
+	else // Backup/restore only A_EventInfo. This avoids callbacks changing A_EventInfo for the current thread/context (that would be counterintuitive and a source of script bugs).
+		EventInfo_saved = g.EventInfo;
+
+	g.EventInfo = cb.event_info; // This is the means to identify which caller called the callback (if the script assigned more than one caller to this callback).
+	g_script.UpdateTrayIcon(); // Doesn't measurably impact performance (unless icon needs to be changed, which it generally won't in the case of fast-mode because by definition the current thread isn't paused). This is necessary because it's possible the tray icon shows "paused" if this callback was called via message (e.g. when subclassing a control).
+
+	// The following section is similar to the one in ExpandExpression().  See it for detailed comments.
+	int i;
+	for (i = 0; i < cb.actual_param_count; ++i)  // For each formal parameter that has a matching actual (an earlier stage already verified that there are enough formals to cover the actuals).
+		func.mParam[i].var->Assign((DWORD)params[i]); // All parameters are passed "by value" because an earlier stage ensured there are no ByRef parameters.
+	for (; i < func.mParamCount; ++i) // For each remaining formal (i.e. those that lack actuals), apply a default value (an earlier stage verified that all such parameters have a default-value available).
+	{
+		FuncParam &this_formal_param = func.mParam[i]; // For performance and convenience.
+		// The following isn't necessary because an earlier stage has already ensured that there
+		// are no ByRef paramaters in a callback:
+		//if (this_formal_param.is_byref)
+		//	this_formal_param.var->ConvertToNonAliasIfNecessary();
+		switch(this_formal_param.default_type)
+		{
+		case PARAM_DEFAULT_STR:   this_formal_param.var->Assign(this_formal_param.default_str);    break;
+		case PARAM_DEFAULT_INT:   this_formal_param.var->Assign(this_formal_param.default_int64);  break;
+		case PARAM_DEFAULT_FLOAT: this_formal_param.var->Assign(this_formal_param.default_double); break;
+		//case PARAM_DEFAULT_NONE: Not possible due to validation at an earlier stage.
+		}
+	}
+
+	g_script.mLastScriptRest = g_script.mLastPeekTime = GetTickCount(); // Somewhat debatable, but might help minimize interruptions when the callback is called via message (e.g. subclassing a control; overriding a WindowProc).
+
+	char *return_value;
+	func.Call(return_value); // Call the UDF.
+
+	// MUST handle return_value BEFORE calling FreeAndRestoreFunctionVars() because return_value might be
+	// the contents of one of the function's local variables (which are about to be free'd).
+	UINT number_to_return = *return_value ? ATOU(return_value) : DEFAULT_CB_RETURN_VALUE; // No need to check the following because they're implied for *return_value!=0: result != EARLY_EXIT && result != FAIL;
+	Var::FreeAndRestoreFunctionVars(func, var_backup, var_backup_count);
+
+	if (cb.create_new_thread)
+		ResumeUnderlyingThread(&global_saved, ErrorLevel_saved, true);
+	else
+		g.EventInfo = EventInfo_saved;
+
+	return number_to_return; //return integer value to callback stub
+}
+
+
+
+void BIF_RegisterCallback(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+// Returns: Address of callback procedure, or empty string on failure.
+// Parameters:
+// 1: Name of the function to be called when the callback routine is executed.
+// 2: Options.
+// 3: Number of parameters of callback.
+// 4: EventInfo: a DWORD set for use by UDF to identify the caller (in case more than one caller).
+//
+// Author: RegisterCallback() was created by Jonathan Rennison (JGR).
+{
+	// Set default result in case of early return; a blank value:
+	aResultToken.symbol = SYM_STRING;
+	aResultToken.marker = "";
+
+	// Loadtime validation has ensured that at least 1 parameter is present.
+	char func_buf[MAX_FORMATTED_NUMBER_LENGTH + 1], *func_name;
+	Func *func;
+	if (   !*(func_name = ExprTokenToString(*aParam[0], func_buf))  // Blank function name or...
+		|| !(func = g_script.FindFunc(func_name))  // ...the function doesn't exist or...
+		|| func->mIsBuiltIn   )  // ...the function is built-in.
+		return; // Indicate failure by yielding the default result set earlier.
+
+	char options_buf[MAX_FORMATTED_NUMBER_LENGTH + 1];
+	char *options = (aParamCount < 2) ? "" : ExprTokenToString(*aParam[1], options_buf);
+
+	int actual_param_count;
+	if (aParamCount > 2) // A parameter count was specified.
+	{
+		actual_param_count = (int)ExprTokenToInt64(*aParam[2]);
+		if (   actual_param_count > func->mParamCount    // The function doesn't have enough formals to cover the specified number of actuals.
+			|| actual_param_count < func->mMinParams   ) // ...or the function has too many mandatory formals (caller specified insufficient actuals to cover them all).
+			return; // Indicate failure by yielding the default result set earlier.
+	}
+	else // Default to the number of mandatory formal parameters in the function's definition.
+		actual_param_count = func->mMinParams;
+
+	if (actual_param_count > 31) // The ASM instruction currently used limits parameters to 31 (which should be plenty for any realistic use).
+		return; // Indicate failure by yielding the default result set earlier.
+
+	// To improve callback performance, ensure there are no ByRef parameters (for simplicity: not even ones that
+	// have default values).  This avoids the need to ensure formal parameters are non-aliases each time the
+	// callback is called.
+	for (int i = 0; i < func->mParamCount; ++i)
+		if (func->mParam[i].is_byref)
+			return; // Yield the default return value set earlier.
+
+	// GlobalAlloc() and dynamically-built code is the means by which a script can have an unlimited number of
+	// distinct callbacks. On Win32, GlobalAlloc is the same function as LocalAlloc: they both point to
+	// RtlAllocateHeap on the process heap. For large chunks of code you would reserve a 64K section with
+	// VirtualAlloc and fill that, but for the 32 bytes we use here that would be overkill; GlobalAlloc is
+	// much more efficient. MSDN says about GlobalAlloc: "All memory is created with execute access; no
+	// special function is required to execute dynamically generated code. Memory allocated with this function
+	// is guaranteed to be aligned on an 8-byte boundary." 
+	RCCallbackFunc *callbackfunc=(RCCallbackFunc*) GlobalAlloc(GMEM_FIXED,sizeof(RCCallbackFunc));	//allocate structure off process heap, automatically RWE and fixed.
+	if(!callbackfunc) return;
+	RCCallbackFunc &cb = *callbackfunc; // For convenience and possible code-size reduction.
+
+	cb.data1=0xE8;       // call +0 -- E8 00 00 00 00 ;get eip, stays on stack as parameter 2 for C function (char *address).
+	cb.data2=0x24448D00; // lea eax, [esp+8] -- 8D 44 24 08 ;eax points to params
+	cb.data3=0x15FF5008; // push eax -- 50 ;eax pushed on stack as parameter 1 for C stub (UINT *params)
+                         // call [xxxx] (in the lines below) -- FF 15 xx xx xx xx ;call C stub __stdcall, so stack cleaned up for us.
+
+	// Comments about the static variable below: The reason for using the address of a pointer to a function,
+	// is that the address is passed as a fixed address, whereas a direct call is passed as a 32-bit offset
+	// relative to the beginning of the next instruction, which is more fiddly than it's worth to calculate
+	// for dynamic code, as a relative call is designed to allow position independent calls to within the
+	// same memory block without requiring dynamic fixups, or other such inconveniences.  In essence:
+	//    call xxx ; is relative
+	//    call [ptr_xxx] ; is position independent
+	// Typically the latter is used when calling imported functions, etc., as only the pointers (import table),
+	// need to be adjusted, not the calls themselves...
+	static UINT (__stdcall *funcaddrptr)(UINT*,char*)=RegisterCallbackCStub; // Use fixed absolute address of pointer to function, instead of varying relative offset to function.
+	cb.callfuncptr=&funcaddrptr; // xxxx: Address of C stub.
+
+	cb.data4=0xC48359 // pop ecx -- 59 ;return address... add esp, xx -- 83 C4 xx ;stack correct (add argument to add esp, nn for stack correction).
+		+ (StrChrAny(options, "Cc") ? 0 : actual_param_count<<26);
+
+	cb.data5=0xE1FF; // jmp ecx -- FF E1 ;return
+
+	cb.event_info = (aParamCount < 4) ? (DWORD)(size_t)callbackfunc : (DWORD)ExprTokenToInt64(*aParam[3]);
+	cb.func = func;
+	cb.actual_param_count = actual_param_count;
+	cb.create_new_thread = !StrChrAny(options, "Ff");
+
+	aResultToken.symbol = SYM_INTEGER; // Override the default set earlier.
+	aResultToken.value_int64 = (__int64)callbackfunc; // Yield the callable address as the result.
 }
 
 

@@ -41,7 +41,7 @@ ResultType Line::IniRead(char *aFilespec, char *aSection, char *aKey, char *aDef
 	GetPrivateProfileString(aSection, aKey, aDefault, szBuffer, sizeof(szBuffer), szFileTemp);
 	// The above function is supposed to set szBuffer to be aDefault if it can't find the
 	// file, section, or key.  In other words, it always changes the contents of szBuffer.
-	return OUTPUT_VAR->Assign(szBuffer);
+	return OUTPUT_VAR->Assign(szBuffer); // Avoid using the length the API reported because it might be inaccurate if the data contains any binary zeroes, or if the data is double-terminated, etc.
 	// Note: ErrorLevel is not changed by this command since the aDefault value is returned
 	// whenever there's an error.
 }
@@ -83,6 +83,7 @@ ResultType Line::RegRead(HKEY aRootKey, char *aRegSubkey, char *aValueName)
 
 	HKEY	hRegKey;
 	DWORD	dwRes, dwBuf, dwType;
+	LONG    result;
 	// My: Seems safest to keep the limit just below 64K in case Win95 has problems with larger values.
 	char	szRegBuffer[65535]; // Only allow reading of 64Kb from a key
 
@@ -90,17 +91,17 @@ ResultType Line::RegRead(HKEY aRootKey, char *aRegSubkey, char *aValueName)
 		return OK;  // Let ErrorLevel tell the story.
 
 	// Open the registry key
-	if ( RegOpenKeyEx(aRootKey, aRegSubkey, 0, KEY_READ, &hRegKey) != ERROR_SUCCESS )
+	if (RegOpenKeyEx(aRootKey, aRegSubkey, 0, KEY_READ, &hRegKey) != ERROR_SUCCESS)
 		return OK;  // Let ErrorLevel tell the story.
 
 	// Read the value and determine the type.  If aValueName is the empty string, the key's default value is used.
-	if ( RegQueryValueEx(hRegKey, aValueName, NULL, &dwType, NULL, NULL) != ERROR_SUCCESS )
+	if (RegQueryValueEx(hRegKey, aValueName, NULL, &dwType, NULL, NULL) != ERROR_SUCCESS)
 	{
 		RegCloseKey(hRegKey);
 		return OK;  // Let ErrorLevel tell the story.
 	}
 
-	char *buf;
+	char *contents, *cp;
 
 	// The way we read is different depending on the type of the key
 	switch (dwType)
@@ -110,84 +111,87 @@ ResultType Line::RegRead(HKEY aRootKey, char *aRegSubkey, char *aValueName)
 			RegQueryValueEx(hRegKey, aValueName, NULL, NULL, (LPBYTE)&dwBuf, &dwRes);
 			RegCloseKey(hRegKey);
 			g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-			return output_var.Assign((__int64)dwBuf);
+			return output_var.Assign((DWORD)dwBuf);
 
 		// Note: The contents of any of these types can be >64K on NT/2k/XP+ (though that is probably rare):
 		case REG_SZ:
 		case REG_EXPAND_SZ:
 		case REG_MULTI_SZ:
-		{
-			// Ask it how large the value is.  Specify a relatively low value for dwRes, even though
-			// it's probably ignored in this case, because values >64K may cause it to fail on Win95.
-			// 0 might be best:
-			dwRes = 0;
-			RegQueryValueEx(hRegKey, aValueName, NULL, NULL, (LPBYTE)NULL, &dwRes);
-			if (dwRes <= 1) // According to MSDN, the size will be exactly 1 in the case of an empty string.
+			dwRes = 0; // Retained for backward compatibility because values >64K may cause it to fail on Win95 (unverified, and MSDN implies its value should be ignored for the following call).
+			// MSDN: If lpData is NULL, and lpcbData is non-NULL, the function returns ERROR_SUCCESS and stores
+			// the size of the data, in bytes, in the variable pointed to by lpcbData.
+			if (RegQueryValueEx(hRegKey, aValueName, NULL, NULL, NULL, &dwRes) != ERROR_SUCCESS // Find how large the value is.
+				|| !dwRes) // Can't find size (realistically might never happen), or size is zero.
 			{
 				RegCloseKey(hRegKey);
-				return g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
+				return g_ErrorLevel->Assign(ERRORLEVEL_NONE); // For backward compatibility, indicate success (these conditions should be very rare anyway).
 			}
 			// Set up the variable to receive the contents, enlarging it if necessary:
 			// Since dwRes includes the space for the zero terminator (if the MSDN docs
 			// are accurate), this will enlarge it to be 1 byte larger than we need,
 			// which leaves room for the final newline character to be inserted after
-			// the last item.  Even so, it feels safer to add 2 to the requested capacity
-			// to avoid any chance of a buffer overrun:
+			// the last item.  But add 2 to the requested capacity in case the data isn't
+			// terminated in the registry, which allows double-NULL to be put in for REG_MULTI_SZ later.
 			if (output_var.Assign(NULL, (VarSizeType)(dwRes + 2)) != OK)
 			{
 				RegCloseKey(hRegKey);
 				return FAIL; // FAIL is only returned when the error is a critical one such as this one.
 			}
 
-			buf = output_var.Contents(); // This target buf should now be large enough for the result.
+			contents = output_var.Contents(); // This target buf should now be large enough for the result.
 
-			RegQueryValueEx(hRegKey, aValueName, NULL, NULL, (LPBYTE)buf, &dwRes);
+			result = RegQueryValueEx(hRegKey, aValueName, NULL, NULL, (LPBYTE)contents, &dwRes);
 			RegCloseKey(hRegKey);
 
-			// The MSDN docs state that we should ensure that the buffer is NULL-terminated ourselves:
-			// "If the data has the REG_SZ, REG_MULTI_SZ or REG_EXPAND_SZ type, then lpcbData will also
-			// include the size of the terminating null character or characters ... If the data has the
-			// REG_SZ, REG_MULTI_SZ or REG_EXPAND_SZ type, the string may not have been stored with the
-			// proper null-terminating characters. Applications should ensure that the string is properly
-			// terminated before using it, otherwise, the application may fail by overwriting a buffer."
-
-			// Double-terminate so that the loop can find out the true end of the buffer.
-			// The MSDN docs cited above are a little unclear.  The most likely interpretation is that
-			// dwRes contains the true size retrieved.  For example, if dwRes is 1, the first char
-			// in the buffer is either a NULL or an actual non-NULL character that was originally
-			// stored in the registry incorrectly (i.e. without a terminator).  In either case, do
-			// not change the first character, just leave it as is and add a NULL at the 2nd and
-			// 3rd character positions to ensure that it is double terminated in every case:
-			buf[dwRes] = buf[dwRes + 1] = '\0';
-
-			if (dwType == REG_MULTI_SZ) // Convert NULL-delimiters into newline delimiters.
+			if (result != ERROR_SUCCESS || !dwRes) // Relies on short-circuit boolean order.
+				*contents = '\0'; // MSDN says the contents of the buffer is undefined after the call in some cases, so reset it.
+				// Above realistically probably never happens; for backward compatibility (and simplicity),
+				// consider it a success.
+			else
 			{
-				for (;; ++buf)
+				// See ReadRegString() for more comments about the following:
+				// The MSDN docs state that we should ensure that the buffer is NULL-terminated ourselves:
+				// "If the data has the REG_SZ, REG_MULTI_SZ or REG_EXPAND_SZ type, then lpcbData will also
+				// include the size of the terminating null character or characters ... If the data has the
+				// REG_SZ, REG_MULTI_SZ or REG_EXPAND_SZ type, the string may not have been stored with the
+				// proper null-terminating characters. Applications should ensure that the string is properly
+				// terminated before using it, otherwise, the application may fail by overwriting a buffer."
+				//
+				// Double-terminate so that the loop can find out the true end of the buffer.
+				// The MSDN docs cited above are a little unclear.  The most likely interpretation is that
+				// dwRes contains the true size retrieved.  For example, if dwRes is 1, the first char
+				// in the buffer is either a NULL or an actual non-NULL character that was originally
+				// stored in the registry incorrectly (i.e. without a terminator).  In either case, do
+				// not change the first character, just leave it as is and add a NULL at the 2nd and
+				// 3rd character positions to ensure that it is double terminated in every case:
+				contents[dwRes] = contents[dwRes + 1] = '\0';
+
+				if (dwType == REG_MULTI_SZ) // Convert NULL-delimiters into newline delimiters.
 				{
-					if (!*buf)
+					for (cp = contents;; ++cp)
 					{
-						// Unlike AutoIt3, it seems best to have a newline character after the
-						// last item in the list also.  It usually makes parsing easier:
-						*buf = '\n';	// Convert to \n for later storage in the user's variable.
-						if (!*(buf + 1)) // Buffer is double terminated, so this is safe.
-							// Double null terminator marks the end of the used portion of the buffer.
-							break;
+						if (!*cp)
+						{
+							// Unlike AutoIt3, it seems best to have a newline character after the
+							// last item in the list also.  It usually makes parsing easier:
+							*cp = '\n';	// Convert to \n for later storage in the user's variable.
+							if (!*(cp + 1)) // Buffer is double terminated, so this is safe.
+								// Double null terminator marks the end of the used portion of the buffer.
+								break;
+						}
 					}
+					// else the buffer is empty (see above notes for explanation).  So don't put any newlines
+					// into it at all, since each newline should correspond to an item in the buffer.
 				}
-				// else the buffer is empty (see above notes for explanation).  So don't put any newlines
-				// into it at all, since each newline should correspond to an item in the buffer.
 			}
 			g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-			// Due to conservative buffer sizes above, length is probably too large by 3.
-			// So update to reflect the true length:
-			output_var.Length() = (VarSizeType)strlen(output_var.Contents());
+			output_var.Length() = (VarSizeType)strlen(contents); // Due to conservative buffer sizes above, length is probably too large by 3. So update to reflect the true length.
 			return output_var.Close();  // In case it's the clipboard.
-		}
 
 		case REG_BINARY:
 		{
 			dwRes = sizeof(szRegBuffer);
-			LONG result = RegQueryValueEx(hRegKey, aValueName, NULL, NULL, (LPBYTE)szRegBuffer, &dwRes);
+			result = RegQueryValueEx(hRegKey, aValueName, NULL, NULL, (LPBYTE)szRegBuffer, &dwRes);
 			RegCloseKey(hRegKey);
 
 			if (result == ERROR_MORE_DATA)
@@ -199,8 +203,8 @@ ResultType Line::RegRead(HKEY aRootKey, char *aRegSubkey, char *aValueName)
 			// AutoIt3: Each byte will turned into 2 digits, plus a final null:
 			if (output_var.Assign(NULL, (VarSizeType)(dwRes * 2)) != OK)
 				return FAIL;
-			buf = output_var.Contents();
-			*buf = '\0';
+			contents = output_var.Contents();
+			*contents = '\0';
 
 			int j = 0;
 			DWORD i, n; // i and n must be unsigned to work
@@ -208,14 +212,14 @@ ResultType Line::RegRead(HKEY aRootKey, char *aRegSubkey, char *aValueName)
 			for (i = 0; i < dwRes; ++i)
 			{
 				n = szRegBuffer[i];				// Get the value and convert to 2 digit hex
-				buf[j + 1] = szHexData[n % 16];
+				contents[j + 1] = szHexData[n % 16];
 				n /= 16;
-				buf[j] = szHexData[n % 16];
+				contents[j] = szHexData[n % 16];
 				j += 2;
 			}
-			buf[j] = '\0'; // Terminate
+			contents[j] = '\0'; // Terminate
 			g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-			return output_var.Close();  // In case it's the clipboard.
+			return output_var.Close();  // In case it's the clipboard.  Length() was already set by the earlier call to Assign().
 		}
 	}
 
@@ -377,7 +381,7 @@ bool Line::RegRemoveSubkeys(HKEY hRegKey)
 		dwNameSize=255;
 		if (RegEnumKeyEx(hRegKey, 0, Name, &dwNameSize, NULL, NULL, NULL, &ftLastWrite) == ERROR_NO_MORE_ITEMS)
 			break;
-		if ( RegOpenKeyEx(hRegKey, Name, 0, KEY_READ, &hSubKey) != ERROR_SUCCESS )
+		if (RegOpenKeyEx(hRegKey, Name, 0, KEY_READ, &hSubKey) != ERROR_SUCCESS)
 			return false;
 		
 		Success=RegRemoveSubkeys(hSubKey);
@@ -402,7 +406,7 @@ ResultType Line::RegDelete(HKEY aRootKey, char *aRegSubkey, char *aValueName)
 		return OK;  // Let ErrorLevel tell the story.
 
 	// Open the key we want
-	if ( RegOpenKeyEx(aRootKey, aRegSubkey, 0, KEY_READ | KEY_WRITE, &hRegKey) != ERROR_SUCCESS )
+	if (RegOpenKeyEx(aRootKey, aRegSubkey, 0, KEY_READ | KEY_WRITE, &hRegKey) != ERROR_SUCCESS)
 		return OK;  // Let ErrorLevel tell the story.
 
 	if (!aValueName || !*aValueName)

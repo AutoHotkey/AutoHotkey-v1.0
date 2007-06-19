@@ -100,6 +100,17 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 			g_ForceLaunch = true;
 		else if (!stricmp(param, "/ErrorStdOut"))
 			g_script.mErrorStdOut = true;
+#ifndef AUTOHOTKEYSC // i.e. the following switch is recognized only by AutoHotkey.exe (especially since recognizing new switches in compiled scripts can break them, unlike AutoHotkey.exe).
+		else if (!stricmp(param, "/iLib")) // v1.0.47: Build an include-file so that ahk2exe can include library functions called by the script.
+		{
+			++i; // Consume the next parameter too, because it's associated with this one.
+			if (i >= __argc) // Missing the expected filename parameter.
+				return CRITICAL_ERROR;
+			// For performance and simplicity, open/crease the file unconditionally and keep it open until exit.
+			if (   !(g_script.mIncludeLibraryFunctionsThenExit = fopen(__argv[i], "w"))   ) // Can't open the temp file.
+				return CRITICAL_ERROR;
+		}
+#endif
 		else // since this is not a recognized switch, the end of the [Switches] section has been reached (by design).
 		{
 			switch_processing_is_complete = true;  // No more switches allowed after this point.

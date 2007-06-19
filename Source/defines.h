@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.46.17"
+#define NAME_VERSION "1.0.47.00"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -528,7 +528,7 @@ struct global_struct
 	int IntervalBeforeRest;
 	int UninterruptedLineCount; // Stored as a g-struct attribute in case OnExit sub interrupts it while uninterruptible.
 	int Priority;  // This thread's priority relative to others.
-	DWORD LastError; // The result of GetLastError() after the most recent DllCall.
+	DWORD LastError; // The result of GetLastError() after the most recent DllCall or Run.
 	GuiEventType GuiEvent; // This thread's triggering event, e.g. DblClk vs. normal click.
 	DWORD EventInfo; // Not named "GuiEventInfo" because it applies to non-GUI events such as clipboard.
 	POINT GuiPoint; // The position of GuiEvent. Stored as a thread vs. window attribute so that underlying threads see their original values when resumed.
@@ -546,8 +546,6 @@ struct global_struct
 	int MouseDelay;     // negative values may be used as special flags.
 	int MouseDelayPlay; //
 	char FormatFloat[32];
-	#define ERRORLEVEL_SAVED_SIZE 128 // The size that can be remembered (saved & restored) if a thread is interrupted.
-	char ErrorLevel[ERRORLEVEL_SAVED_SIZE]; // Big in case user put something bigger than a number in g_ErrorLevel.
 	Func *CurrentFunc; // v1.0.46.16: The function whose body is currently being processed at load-time, or being run at runtime (if any).
 	Label *CurrentLabel; // The label that is currently awaiting its matching "return" (if any).
 	HWND hWndLastUsed;  // In many cases, it's better to use GetValidLastUsedWindow() when referring to this.
@@ -581,8 +579,6 @@ inline void global_clear_state(global_struct &g)
 // but that shouldn't be retained for future threads (e.g. SetTitleMatchMode should be retained for
 // future threads if it occurs in the auto-execute section, but ErrorLevel shouldn't).
 {
-	*g.ErrorLevel = '\0'; // This isn't the actual ErrorLevel: it's used to save and restore it.
-	// But don't reset g_ErrorLevel itself because we want to handle that conditional behavior elsewhere.
 	g.CurrentFunc = NULL;
 	g.CurrentLabel = NULL;
 	g.hWndLastUsed = NULL;
@@ -667,5 +663,7 @@ inline void global_init(global_struct &g)
 	// in case other/future compilers have a different default (for backward compatibility, we want
 	// 6 to always be in effect as the default for future releases).
 }
+
+#define ERRORLEVEL_SAVED_SIZE 128 // The size that can be remembered (saved & restored) if a thread is interrupted. Big in case user put something bigger than a number in g_ErrorLevel.
 
 #endif

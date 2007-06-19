@@ -100,6 +100,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 	// a hotkey that has already been interrupted) and each recursion layer should
 	// have it's own value for this:
 	global_struct global_saved;
+	char ErrorLevel_saved[ERRORLEVEL_SAVED_SIZE];
 
 	// Decided to support a true Sleep(0) for aSleepDuration == 0, as well
 	// as no delay at all if aSleepDuration < 0.  This is needed to implement
@@ -981,34 +982,11 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				g_script.mThisHotkeyStartTime = GetTickCount(); // Fixed for v1.0.35.10 to not happen for GUI threads.
 			}
 
-			if (aMode == RETURN_AFTER_MESSAGES)
-			{
-				// Assert: g_nThreads should be greater than 0 in this mode, which means
-				// that there must be another thread besides the one we're about to create.
-				// That thread will be interrupted and suspended to allow this new one to run.
-				//was_interrupted = true;
-				// Save the current foreground window in case the subroutine that's about
-				// to be suspended is working with it.  Then, when the subroutine is
-				// resumed, we can ensure this window is the foreground one.  UPDATE:
-				// this has been disabled because it often is the incorrect thing to do
-				// (e.g. if the suspended hotkey wasn't working with the window, but is
-				// a long-running subroutine, hotkeys that activate windows will have
-				// those windows deactivated instantly when their subroutine is over,
-				// since the suspended subroutine resumes and would reassert its foreground
-				// window:
-				//g.hWndToRestore = aRestoreActiveWindow ? GetForegroundWindow() : NULL;
-
-				// Also save the ErrorLevel of the subroutine that's about to be suspended.
-				// Current limitation: If the user put something big in ErrorLevel (very unlikely
-				// given its nature, but allowed) it will be truncated by this, if too large.
-				// Also: Don't use var->Get() because need better control over the size:
-				strlcpy(g.ErrorLevel, g_ErrorLevel->Contents(), sizeof(g.ErrorLevel));
-				// Could also use copy constructor but that would probably incur more overhead?:
-				// Next, change the value of globals to reflect the fact that we're about
-				// to launch a new subroutine.
-			}
-
-			// Saving of old g_ErrorLevel above should be done immediately prior to below for maintainability.
+			// Also save the ErrorLevel of the subroutine that's about to be suspended.
+			// Current limitation: If the user put something big in ErrorLevel (very unlikely
+			// given its nature, but allowed) it will be truncated by this, if too large.
+			// Also: Don't use var->Get() because need better control over the size:
+			strlcpy(ErrorLevel_saved, g_ErrorLevel->Contents(), sizeof(ErrorLevel_saved));
 			// v1.0.37.06: The following must be done regardless of aMode because the idle thread is now
 			// resumed via ResumeUnderlyingThread():
 			CopyMemory(&global_saved, &g, sizeof(global_struct));
@@ -1308,7 +1286,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 
 			// v1.0.37.06: Call ResumeUnderlyingThread() even if aMode==WAIT_FOR_MESSAGES; this is for
 			// maintainability and also in case the pause command has been used to unpause the idle thread.
-			ResumeUnderlyingThread(&global_saved, true);
+			ResumeUnderlyingThread(&global_saved, ErrorLevel_saved, true);
 
 			if (aMode == WAIT_FOR_MESSAGES) // This is the "idle thread", meaning that the end of the thread above has returned the script to an idle state.
 			{
@@ -1591,6 +1569,7 @@ bool CheckScriptTimers()
 	UINT launched_threads;
 	DWORD tick_start;
 	global_struct global_saved;
+	char ErrorLevel_saved[ERRORLEVEL_SAVED_SIZE];
 
 	// Note: It seems inconsequential if a subroutine that the below loop executes causes a
 	// new timer to be added to the linked list while the loop is still enumerating the timers.
@@ -1621,7 +1600,7 @@ bool CheckScriptTimers()
 				++g_nThreads;
 				// Next, save the current state of the globals so that they can be restored just prior
 				// to returning to our caller:
-				strlcpy(g.ErrorLevel, g_ErrorLevel->Contents(), sizeof(g.ErrorLevel)); // Save caller's errorlevel.
+				strlcpy(ErrorLevel_saved, g_ErrorLevel->Contents(), sizeof(ErrorLevel_saved)); // Save caller's errorlevel.
 				CopyMemory(&global_saved, &g, sizeof(global_struct));
 				// But never kill the main timer, since the mere fact that we're here means that
 				// there's at least one enabled timed subroutine.  Though later, performance can
@@ -1665,7 +1644,7 @@ bool CheckScriptTimers()
 			// to completion rather than being interrupted by the press of a hotkey, and thus potentially
 			// buried in the stack.  However, mLastScriptRest is not set to GetTickCount() here because
 			// unlike other events -- which are typically in response to an explicit action by the user
-			// such as pressing a button or hotkey -- times are lower priority and more relaxed.
+			// such as pressing a button or hotkey -- timers are lower priority and more relaxed.
 			// Also, mLastScriptRest really should only be set when a call to Get/PeekMsg has just
 			// occurred, so it should be left as the responsibilty of the section in MsgSleep that
 			// launches new threads.
@@ -1680,7 +1659,7 @@ bool CheckScriptTimers()
 
 	if (launched_threads) // Since at least one subroutine was run above, restore various values for our caller.
 	{
-		ResumeUnderlyingThread(&global_saved, false); // Last param "false" because KILL_UNINTERRUPTIBLE_TIMER was already done above.
+		ResumeUnderlyingThread(&global_saved, ErrorLevel_saved, false); // Last param "false" because KILL_UNINTERRUPTIBLE_TIMER was already done above.
 		return true;
 	}
 	return false;
@@ -1786,11 +1765,11 @@ bool MsgMonitor(HWND aWnd, UINT aMsg, WPARAM awParam, LPARAM alParam, MSG *apMsg
 		if (g_nThreads > MAX_THREADS_LIMIT
 			|| func.mJumpToLine->mActionType != ACT_EXITAPP && func.mJumpToLine->mActionType != ACT_RELOAD)
 			return false;
-	if (monitor.udf_is_running || g.Priority > 0) // Monitor is already running its function or existing thread's priority is too high to be interrupted.
+	if (monitor.instance_count >= monitor.max_instances || g.Priority > 0) // Monitor is already running more than the max number of instances, or existing thread's priority is too high to be interrupted.
 		return false;
 
 	// Need to check if backup is needed in case script explicitly called the function rather than using
-	// it solely as a callback.
+	// it solely as a callback.  UPDATE: And now that max_instances is supported, also need it for that.
 	// See ExpandExpression() for detailed comments about the following section.
 	VarBkp *var_backup = NULL;   // If needed, it will hold an array of VarBkp objects.
 	int var_backup_count; // The number of items in the above array.
@@ -1804,13 +1783,12 @@ bool MsgMonitor(HWND aWnd, UINT aMsg, WPARAM awParam, LPARAM alParam, MSG *apMsg
 	// Since above didn't return, the launch of the new thread is now considered unavoidable.
 
 	// See MsgSleep() for comments about the following section.
-	strlcpy(g.ErrorLevel, g_ErrorLevel->Contents(), sizeof(g.ErrorLevel));
+	char ErrorLevel_saved[ERRORLEVEL_SAVED_SIZE];
+	strlcpy(ErrorLevel_saved, g_ErrorLevel->Contents(), sizeof(ErrorLevel_saved));
 	global_struct global_saved;
 	CopyMemory(&global_saved, &g, sizeof(global_struct));
 	if (g_nFileDialogs)
 		SetCurrentDirectory(g_WorkingDir);
-
-	monitor.udf_is_running = true;
 	InitNewThread(0, false, true, func.mJumpToLine->mActionType);
 	g_script.UpdateTrayIcon();
 
@@ -1862,59 +1840,60 @@ bool MsgMonitor(HWND aWnd, UINT aMsg, WPARAM awParam, LPARAM alParam, MSG *apMsg
 	// is similar to why the same thing is done in MsgSleep() prior to its launch of a thread, so see
 	// MsgSleep for more comments:
 	g_script.mLastScriptRest = g_script.mLastPeekTime = GetTickCount();
-	char *return_value = ""; // Init to default in case function doesn't return a value or it EXITs or fails.
+	++monitor.instance_count;
 
-	// See ExpandExpression() for detailed comments about the following section.
-	Func *prev_func = g.CurrentFunc; // This will be non-NULL when a function is called from inside another function.
-	g.CurrentFunc = &func;
-	++func.mInstances;
-	ResultType result = func.mJumpToLine->ExecUntil(UNTIL_BLOCK_END, &return_value);
-	--func.mInstances;
-	g.CurrentFunc = prev_func;
+	char *return_value;
+	func.Call(return_value); // Call the UDF.
 
+	// Fix for v1.0.47: Must handle return_value BEFORE calling FreeAndRestoreFunctionVars() because return_value
+	// might be the contents of one of the function's local variables (which are about to be free'd).
+	bool block_further_processing = *return_value; // No need to check the following because they're implied for *return_value!=0: result != EARLY_EXIT && result != FAIL;
+	if (block_further_processing)
+		aMsgReply = (LPARAM)ATOI64(return_value); // Use 64-bit in case it's an unsigned number greater than 0x7FFFFFFF, in which case this allows it to wrap around to a negative.
+	//else leave aMsgReply uninitialized because we'll be returning false later below, which tells our caller
+	// to ignore aMsgReply.
 	Var::FreeAndRestoreFunctionVars(func, var_backup, var_backup_count);
-	ResumeUnderlyingThread(&global_saved, true);
+	ResumeUnderlyingThread(&global_saved, ErrorLevel_saved, true);
 	// Check that the msg_index item still exists (it may have been deleted during the thread that just finished,
 	// either by the thread itself or some other thread that interrupted it).  BIF_OnMessage has been sure to
 	// reset deleted array elements to have a NULL func.  Even so, the following scenario could happen:
 	// 1) The message element is deleted.
 	// 2) It is recreated to be the same as before, but now it has a different array index.
-	// 3) It's udf_is_running member would have been set to false upon creation, and the thread for the same
+	// 3) It's instance_count member would have been set to 0 upon creation, and the thread for the same
 	//    message might have launched the same function we did above, or some other.
 	// 4) Everything seems okay in this case, especially given its rarity.
 	//
-	// But what if step 2 above created the same msg+func in the same position as before?  It's udf_is_running
-	// member would have been wrongly set to false, which would have allowed this msg-monitor thread to launch
-	// while it was techically still running above.  This scenario seems too rare and the consequences too small
-	// to justify the extra code size, so it is documented here as a known limitation.
+	// But what if step 2 above created the same msg+func in the same position as before?  It's instance_count
+	// member would have been wrongly decremented, which would have allowed this msg-monitor thread to launch
+	// a thread beyond max-threads while it was techically still running above.  This scenario seems too rare
+	// and the consequences too small to justify the extra code size, so it is documented here as a known limitation.
 	//
-	// Thus, if "monitor" is defunct due to deletion, setting its udf_is_running to false is harmless.
+	// Thus, if "monitor" is defunct due to deletion, decrementing its instance_count is harmless.
 	// However, "monitor" might have been reused by BIF_OnMessage() to create a new msg-monitor, so the
-	// thing that must be checked is the message number to avoid wrongly setting some other msg-monitor's
-	// udf_is_running to false.  Update: Check g_MsgMonitorCount in case it has shrunk (which could leave
+	// thing that must be checked is the message number to avoid wrongly decrementing some other msg-monitor's
+	// instance_count.  Update: Check g_MsgMonitorCount in case it has shrunk (which could leave
 	// "monitor" pointing to an element in the array that is now unused/obsolete).
 	if (g_MsgMonitorCount >= msg_count_orig && monitor.msg == aMsg)
-		monitor.udf_is_running = false;
+	{
+		if (monitor.instance_count) // Avoid going negative, which might otherwise be possible in weird circumstances described in other comments.
+			--monitor.instance_count;
+	}
 	else // "monitor" is now some other msg-monitor (or an obsolete item in array), so do don't change it (see above comments).
 	{
 		// Fix for v1.0.44.10: If OnMessage is called from *inside* some other monitor function in a way that
-		// deletes a message monitor, monitor.udf_is_running would get stuck at true (but only if the
+		// deletes a message monitor, monitor.instance_count wouldn't get decremented (but only if the
 		// message(s) that were deleted lay to the left of it in the array).  So check if the monitor is
 		// somewhere else in the array and if found (i.e. it didn't delete itself), update it.
 		for (msg_index = 0; msg_index < g_MsgMonitorCount; ++msg_index)
 			if (g_MsgMonitor[msg_index].msg == aMsg)
 			{
-				g_MsgMonitor[msg_index].udf_is_running = false;
+				if (g_MsgMonitor[msg_index].instance_count) // Avoid going negative, which might otherwise be possible in weird circumstances described in other comments.
+					--g_MsgMonitor[msg_index].instance_count;
 				break;
 			}
 	}
 
-	if (!*return_value || result == EARLY_EXIT || result == FAIL) // Tell the caller to process this message normally.
-		return false; // The caller should ignore the value of aMsgReply in this case.
-	// Otherwise true will be returned, in which case the aMsgReply contains the reply to be sent for
-	// this message.
-	aMsgReply = (LPARAM)ATOI64(return_value); // Use 64-bit in case it's an unsigned number greater than 0x7FFFFFFF, in which case this allows it to wrap around to a negative.
-	return true;
+	return block_further_processing; // If false, the caller will ignore aMsgReply and process this message normally. If true, aMsgReply contains the reply the caller should immediately send for this message.
 }
 
 
@@ -1958,11 +1937,17 @@ void InitNewThread(int aPriority, bool aSkipUninterruptible, bool aIncrementThre
 	// the uinterruptible timer will not be activated. Thus, the thread cannot be interrupted by
 	// anything short of OnExit/OnMessage, in which case g.ThreadIsCritical's value doesn't matter,
 	// and it will be set later when "Critical [On]" is actually encountered by the resumed thread.
-	// Update: But there might be a tiny window of opportunity for a critical thread to get interrupted
+	// UPDATE: But there might be a tiny window of opportunity for a critical thread to get interrupted
 	// by a non-emergency thread after it was previously interrupted by an emergency thread, therefore
 	// the following line is here for maintainability and reliability:
 	if (!g.ThreadIsCritical) // If the thread default isn't "critical", make this thread critical only if it's explicitly marked that way.
-		g.ThreadIsCritical = (aTypeOfFirstLine == ACT_CRITICAL);
+	{
+		if (g.ThreadIsCritical = (aTypeOfFirstLine == ACT_CRITICAL))
+		{
+			g.LinesPerCycle = -1;      // v1.0.47: It seems best to ensure SetBatchLines -1 is in effect because
+			g.IntervalBeforeRest = -1; // otherwise it may check messages during the interval that it isn't supposed to.
+		}
+	}
 	//else it's already critical, so leave it that way until "Critical Off" (which may be the very first line) is encountered at runtime.
 
 	if (g_script.mUninterruptibleTime && g_script.mUninterruptedLineCountMax // Both components must be non-zero to start off uninterruptible.
@@ -1993,7 +1978,7 @@ void InitNewThread(int aPriority, bool aSkipUninterruptible, bool aIncrementThre
 
 
 
-void ResumeUnderlyingThread(global_struct *pSavedStruct, bool aKillInterruptibleTimer)
+void ResumeUnderlyingThread(global_struct *pSavedStruct, char *aSavedErrorLevel, bool aKillInterruptibleTimer)
 {
 	--g_nThreads; // Below relies on this having been done early.
 
@@ -2002,7 +1987,7 @@ void ResumeUnderlyingThread(global_struct *pSavedStruct, bool aKillInterruptible
 
 	bool underlying_thread_is_paused = g.UnderlyingThreadIsPaused; // Done this way for performance (to avoid multiple indirections).
 	CopyMemory(&g, pSavedStruct, sizeof(global_struct));
-	g_ErrorLevel->Assign(g.ErrorLevel);
+	g_ErrorLevel->Assign(aSavedErrorLevel);
 
 	// The below relies on the above having restored "g":
 	if (g.IsPaused != underlying_thread_is_paused) // The thread to be resumed has been marked with a new state by the thread above.

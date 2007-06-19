@@ -127,6 +127,7 @@ UCHAR g_SortCaseSensitive;
 bool g_SortNumeric;
 bool g_SortReverse;
 int g_SortColumnOffset;
+Func *g_SortFunc;
 
 char g_delimiter = ',';
 char g_DerefChar = '%';

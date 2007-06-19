@@ -129,7 +129,7 @@ void PollJoysticks();
 bool MsgMonitor(HWND aWnd, UINT aMsg, WPARAM awParam, LPARAM alParam, MSG *apMsg, LRESULT &aMsgReply);
 
 void InitNewThread(int aPriority, bool aSkipUninterruptible, bool aIncrementThreadCount, ActionTypeType aTypeOfFirstLine);
-void ResumeUnderlyingThread(global_struct *pSavedStruct, bool aKillInterruptibleTimer);
+void ResumeUnderlyingThread(global_struct *pSavedStruct, char *aSavedErrorLevel, bool aKillInterruptibleTimer);
 
 VOID CALLBACK MsgBoxTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);
 VOID CALLBACK AutoExecSectionTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);

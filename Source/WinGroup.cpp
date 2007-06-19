@@ -68,13 +68,11 @@ ResultType WinGroup::AddWindow(char *aTitle, char *aText, Label *aJumpToLabel, c
 	if (the_new_win == NULL)
 		return g_script.ScriptError(ERR_OUTOFMEM);
 	if (mFirstWindow == NULL)
-		mFirstWindow = mLastWindow = the_new_win;
+		mFirstWindow = the_new_win;
 	else
-	{
 		mLastWindow->mNextWindow = the_new_win; // Formerly it pointed to First, so nothing is lost here.
-		// This must be done after the above:
-		mLastWindow = the_new_win;
-	}
+	// This must be done after the above:
+	mLastWindow = the_new_win;
 	// Make it circular: Last always points to First.  It's okay if it points to itself:
 	mLastWindow->mNextWindow = mFirstWindow;
 	++mWindowCount;

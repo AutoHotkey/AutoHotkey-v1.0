@@ -109,6 +109,8 @@ _atoi64
 
 ; CENTRAL/PIVOT, but sometimes performs better below most of the primaries rather than in the middle of functions it calls (perhaps because it's so large).
 ?ExpandExpression@Line@@QAEPADHAAW4ResultType@@AAPAD1AAIQAPADI@Z
+?Call@Func@@QAE?AW4ResultType@@AAPAD@Z
+
 
 ;;;;;;;;;;;;;;;;;;
 ; BELOW THIS POINT are things not very central to performance.  They're individual clusters of related commands:
@@ -134,6 +136,10 @@ _atoi64
 ?snprintf@@YAHPADHPBDZZ
 _vsnprintf  ; Sandwiching this function between the other two seems likely to yield best results.
 ?snprintfcat@@YAHPADHPBDZZ
+_scprintf
+sprintf
+fprintf
+printf
 
 ?global_clear_state@@YAXAAUglobal_struct@@@Z
 ?global_init@@YAXAAUglobal_struct@@@Z
@@ -152,12 +158,16 @@ _vsnprintf  ; Sandwiching this function between the other two seems likely to yi
 ?MsgBoxTimeout@@YGXPAUHWND__@@IIK@Z
 ?UninterruptibleTimeout@@YGXPAUHWND__@@IIK@Z
 
-?ResumeUnderlyingThread@@YAXPAUglobal_struct@@_N@Z
-?InitNewThread@@YAXH_N0E@Z
-?IsCycleComplete@@YA?AW4ResultType@@HK_N@Z
-?MsgSleep@@YA_NHW4MessageMode@@@Z
+?Disable@ScriptTimer@@QAEXXZ
 ?CheckScriptTimers@@YA_NXZ
 ?MsgMonitor@@YA_NPAUHWND__@@IIJPAUtagMSG@@AAJ@Z
+
+?ResumeUnderlyingThread@@YAXPAUglobal_struct@@PAD_N@Z
+?UpdateTrayIcon@Script@@QAEX_N@Z  ; Called by or in conjunction with above/below.
+?InitNewThread@@YAXH_N0E@Z
+
+?MsgSleep@@YA_NHW4MessageMode@@@Z
+?IsCycleComplete@@YA?AW4ResultType@@HK_N@Z
 ?PollJoysticks@@YAXXZ
 
 ?ActionExec@Script@@QAE?AW4ResultType@@PAD00_N0PAPAX11PAVVar@@@Z
@@ -317,7 +327,6 @@ _vsnprintf  ; Sandwiching this function between the other two seems likely to yi
 ?SoundConvertControlType@Line@@SAKPAD@Z
 
 ?CreateTrayIcon@Script@@QAEXXZ
-?UpdateTrayIcon@Script@@QAEX_N@Z
 ?Edit@Script@@QAE?AW4ResultType@@XZ
 
 ?AllDestructAndExit@Hotkey@@SAXH@Z
@@ -542,7 +551,8 @@ EnterCriticalSection@4
 
 ?BIF_Asc@@YAXAAUExprTokenType@@QAPAU1@H@Z
 ?BIF_Chr@@YAXAAUExprTokenType@@QAPAU1@H@Z
-;?BIF_ExtractInteger@@YAXAAUExprTokenType@@QAPAU1@H@Z
+?BIF_NumGet@@YAXAAUExprTokenType@@QAPAU1@H@Z
+?BIF_NumPut@@YAXAAUExprTokenType@@QAPAU1@H@Z
 ?BIF_FileExist@@YAXAAUExprTokenType@@QAPAU1@H@Z
 
 ?ScriptGetJoyState@@YANW4JoyControls@@HAAUExprTokenType@@_N@Z
@@ -551,6 +561,10 @@ EnterCriticalSection@4
 
 ?BIF_IsLabel@@YAXAAUExprTokenType@@QAPAU1@H@Z
 ?BIF_OnMessage@@YAXAAUExprTokenType@@QAPAU1@H@Z
+
+?RegisterCallbackCStub@@YGIPAIPAD@Z
+?BIF_RegisterCallback@@YAXAAUExprTokenType@@QAPAU1@H@Z
+
 ?BIF_WinExistActive@@YAXAAUExprTokenType@@QAPAU1@H@Z
 
 ?BIF_Abs@@YAXAAUExprTokenType@@QAPAU1@H@Z
@@ -630,7 +644,7 @@ qmathTan@8
 ?FileSetTime@Line@@AAEHPAD0DW4FileLoopModeType@@_N2@Z
 
 ?FormatTime@Line@@AAE?AW4ResultType@@PAD0@Z
-?GetAHKInstallDir@@YA?AW4ResultType@@PAD@Z
+?GetAHKInstallDir@@YAKPAD@Z
 ?GetJumpTarget@Line@@QAEPAVLabel@@_N@Z  ; script2.obj
 ?GetKeyJoyState@Line@@AAE?AW4ResultType@@PAD0@Z
 ?GetNextTreeItem@@YAPAU_TREEITEM@@PAUHWND__@@PAU1@@Z
@@ -660,7 +674,8 @@ qmathTan@8
 ?SortByNakedFilename@@YAHPBX0@Z
 ?SortRandom@@YAHPBX0@Z
 ?SortWithOptions@@YAHPBX0@Z
-?PerformSort@Line@@AAE?AW4ResultType@@PAD0@Z
+?PerformSort@Line@@AAE?AW4ResultType@@PAD0@Z  ; Sandwiched in between its sort methods.
+?SortUDF@@YAHPBX0@Z
 
 ?SoundGetWaveVolume@Line@@AAE?AW4ResultType@@PAUHWAVEOUT__@@@Z
 ?SoundPlay@Line@@AAE?AW4ResultType@@PAD_N@Z
@@ -826,8 +841,8 @@ qmathTan@8
 ??0GdiplusStartupInput@Gdiplus@@QAE@P6GXW4DebugEventLevel@1@PAD@ZHH@Z
 
 ?MySetWindowTheme@@YAJPAUHWND__@@PBG1@Z
-?ReadRegString@@YA?AW4ResultType@@PAUHKEY__@@PAD11I@Z  ; util.obj
-?GetEnvironmentVarWin9x@@YAKPAD0@Z  ; util.obj
+?ReadRegString@@YAKPAUHKEY__@@PAD11I@Z  ; util.obj
+?GetEnvVarReliable@@YAKPAD0@Z
 ?ScreenToWindow@@YAXAAUtagPOINT@@PAUHWND__@@@Z
 
 ?lstrcasestr@@YAPADPBD0@Z
@@ -1257,7 +1272,6 @@ _get_osfhandle
 _open_osfhandle
 _set_osfhnd
 _output
-printf
 qsort
 _read
 realloc
@@ -1282,8 +1296,6 @@ __set_buffer_overrun_handler
 _set_security_error_handler
 _setmode
 _splitpath
-_scprintf
-sprintf
 _setargv
 _setenvp
 _getstream
@@ -1623,6 +1635,7 @@ WSAStartup@8
 ?Malloc@SimpleHeap@@SAPADPADI@Z
 ?Delete@SimpleHeap@@SAXPAX@Z
 
+?FindFuncInLibrary@Script@@QAEPAVFunc@@PADIAA_N@Z  ; script.obj
 ?FindFunc@Script@@QAEPAVFunc@@PADI@Z
 ?AddFunc@Script@@QAEPAVFunc@@PADI_N@Z
 ?DefineFunc@Script@@QAE?AW4ResultType@@PADQAPAVVar@@@Z
@@ -1636,7 +1649,7 @@ WinMain@16
 
 ??0Script@@QAE@XZ  ; Constructor (always ?0)
 ??1Script@@QAE@XZ  ; Destructor (always ?1)
-??0Line@@QAE@EIEQAUArgStruct@@E@Z  ; Constructor
+??0Line@@QAE@GIEQAUArgStruct@@E@Z  ; Constructor
 ??2Line@@SAPAXI@Z  ; Operator-New (always ?2)
 
 ?FindLabel@Script@@QAEPAVLabel@@PAD@Z

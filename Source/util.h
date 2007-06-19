@@ -564,12 +564,8 @@ void GetVirtualDesktopRect(RECT &aRect);
 LPVOID AllocInterProcMem(HANDLE &aHandle, DWORD aSize, HWND aHwnd);
 void FreeInterProcMem(HANDLE aHandle, LPVOID aMem);
 
-// The following is done as a macro to conserve stack space and avoid the overhead of a function-call on NT/2k/XP+.
-#define GET_ENV_VAR_RELIABLE(env_var_name, buf)\
-	(g_os.IsWin9x() ? GetEnvironmentVarWin9x(env_var_name, buf)\
-	: GetEnvironmentVariable(env_var_name, buf, 32767)) // NT/2k/XP+: Do it the direct way, which is known to work.  32767 is used mostly for backward compatibilty (a larger value would probably also work on all NT based OSes).
-DWORD GetEnvironmentVarWin9x(char *aEnvVarName, char *aBuf);
-ResultType ReadRegString(HKEY aRootKey, char *aSubkey, char *aValueName, char *aBuf, size_t aBufSize);
+DWORD GetEnvVarReliable(char *aEnvVarName, char *aBuf);
+DWORD ReadRegString(HKEY aRootKey, char *aSubkey, char *aValueName, char *aBuf, size_t aBufSize);
 
 HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, int aIconNumber
 	, bool aUseGDIPlusIfAvailable);

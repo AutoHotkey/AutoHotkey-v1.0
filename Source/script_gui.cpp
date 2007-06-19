@@ -3250,9 +3250,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			mCurrentTabIndex = 0;
 			++mTabControlCount;
 			// Override the tab's window-proc so that custom background color becomes possible:
-			if (!g_TabClassProc)
-				g_TabClassProc = (WNDPROC)(size_t)GetClassLong(control.hwnd, GCL_WNDPROC);
-			SetWindowLong(control.hwnd, GWL_WNDPROC, (LONG)(size_t)TabWindowProc);
+			g_TabClassProc = (WNDPROC)(size_t)SetWindowLong(control.hwnd, GWL_WNDPROC, (LONG)(size_t)TabWindowProc);
 			// Doesn't work to remove theme background from tab:
 			//MyEnableThemeDialogTexture(control.hwnd, ETDT_DISABLE);
 			// This attempt to apply theme to the entire dialog window also has no effect, probably

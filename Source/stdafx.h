@@ -21,7 +21,7 @@ GNU General Public License for more details.
 
 #pragma once
 
-#define _CRT_SECURE_NO_DEPRECATE // Avoid compiler warnings in VC++ 8.1/2005 that urge the use of lower-performing C library functions that protect against buffer overruns.
+#define _CRT_SECURE_NO_DEPRECATE // Avoid compiler warnings in VC++ 8.x/2005 that urge the use of lower-performing C library functions that protect against buffer overruns.
 #define WIN32_LEAN_AND_MEAN		 // Exclude rarely-used stuff from Windows headers
 
 // Windows Header Files:

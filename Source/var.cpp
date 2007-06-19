@@ -632,8 +632,8 @@ VarSizeType Var::Get(char *aBuf)
 				// This env. var exists.
 				cached_empty_var = NULL; // i.e. one use only to avoid cache from hiding the fact that an environment variable has newly come into existence since the previous call.
 				return aBuf
-					? GET_ENV_VAR_RELIABLE(mName, aBuf) // The caller has ensured, probably via previous call to this function with aBuf == NULL, that aBuf is large enough to hold the result.
-					: result - 1;  // since GetEnvironmentVariable() returns total size needed in this case.
+					? GetEnvVarReliable(mName, aBuf) // The caller has ensured, probably via previous call to this function with aBuf == NULL, that aBuf is large enough to hold the result.
+					: result - 1;  // -1 because GetEnvironmentVariable() returns total size needed when called that way.
 			}
 			else // No matching env. var. or the cache indicates that GetEnvironmentVariable() need not be called.
 			{
@@ -658,25 +658,25 @@ VarSizeType Var::Get(char *aBuf)
 				return 0;
 			}
 			//else continue on below.
-		// Copy the var contents into aBuf.  Although a little bit slower than CopyMemory() for large
-		// variables (say, over 100K), this loop seems much faster for small ones, which is the typical
-		// case.  Also of note is that this code section is the main bottleneck for scripts that manipulate
-		// large variables, such as this:
-		//start_time = %A_TICKCOUNT%
-		//my = 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789
-		//tempvar =
-		//loop, 2000
-		//	tempvar = %tempvar%%My%
-		//elapsed_time = %A_TICKCOUNT%
-		//elapsed_time -= %start_time%
-		//msgbox, elapsed_time = %elapsed_time%
-		//return
 		if (aBuf == mContents)
 			// When we're called from ExpandArg() that was called from PerformAssign(), PerformAssign()
 			// relies on this check to avoid the overhead of copying a variables contents onto itself.
 			return mLength;
 		else if (mLength < 100000)
 		{
+			// Copy the var contents into aBuf.  Although a little bit slower than CopyMemory() for large
+			// variables (say, over 100K), this loop seems much faster for small ones, which is the typical
+			// case.  Also of note is that this code section is the main bottleneck for scripts that manipulate
+			// large variables, such as this:
+			//start_time = %A_TICKCOUNT%
+			//my = 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789
+			//tempvar =
+			//loop, 2000
+			//	tempvar = %tempvar%%My%
+			//elapsed_time = %A_TICKCOUNT%
+			//elapsed_time -= %start_time%
+			//msgbox, elapsed_time = %elapsed_time%
+			//return
 			for (char *cp = mContents; *cp; *aBuf++ = *cp++);
 			*aBuf = '\0';
 		}

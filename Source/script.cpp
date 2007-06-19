@@ -49,13 +49,15 @@ Script::Script()
 	, mVar(NULL), mVarCount(0), mVarCountMax(0), mLazyVar(NULL), mLazyVarCount(0)
 	, mOpenBlockCount(0), mNextLineIsFunctionBody(false)
 	, mFuncExceptionVar(NULL), mFuncExceptionVarCount(0)
-#ifdef AUTOHOTKEYSC
-	, mCompiledHasCustomIcon(false)
-#endif;
-	, mCurrFileNumber(0), mCombinedLineNumber(0), mNoHotkeyLabels(true), mMenuUseErrorLevel(false)
+	, mCurrFileIndex(0), mCombinedLineNumber(0), mNoHotkeyLabels(true), mMenuUseErrorLevel(false)
 	, mFileSpec(""), mFileDir(""), mFileName(""), mOurEXE(""), mOurEXEDir(""), mMainWindowTitle("")
 	, mIsReadyToExecute(false), AutoExecSectionIsRunning(false)
 	, mIsRestart(false), mIsAutoIt2(false), mErrorStdOut(false)
+#ifdef AUTOHOTKEYSC
+	, mCompiledHasCustomIcon(false)
+#else
+	, mIncludeLibraryFunctionsThenExit(NULL)
+#endif
 	, mLinesExecutedThisCycle(0), mUninterruptedLineCountMax(1000), mUninterruptibleTime(15)
 	, mRunAsUser(NULL), mRunAsPass(NULL), mRunAsDomain(NULL)
 	, mCustomIcon(NULL) // Normally NULL unless there's a custom tray icon loaded dynamically.
@@ -245,7 +247,7 @@ ResultType Script::Init(char *aScriptFilename, bool aIsRestart)
 	}
 	// In case the script is a relative filespec (relative to current working dir):
 	char *unused;
-	if (!GetFullPathName(aScriptFilename, sizeof(buf), buf, &unused)) // Succeeds even on nonexistent files.
+	if (!GetFullPathName(aScriptFilename, sizeof(buf), buf, &unused)) // This is also relied upon by mIncludeLibraryFunctionsThenExit.  Succeeds even on nonexistent files.
 		return FAIL; // Due to rarity, no error msg, just abort.
 #endif
 	// Using the correct case not only makes it look better in title bar & tray tool tip,
@@ -258,7 +260,7 @@ ResultType Script::Init(char *aScriptFilename, bool aIsRestart)
 		filename_marker = buf;
 	else
 		++filename_marker;
-	if (   !(mFileSpec = SimpleHeap::Malloc(buf))   )  // The full spec is stored for convenience.
+	if (   !(mFileSpec = SimpleHeap::Malloc(buf))   )  // The full spec is stored for convenience, and it's relied upon by mIncludeLibraryFunctionsThenExit.
 		return FAIL;  // It already displayed the error for us.
 	filename_marker[-1] = '\0'; // Terminate buf in this position to divide the string.
 	size_t filename_length = strlen(filename_marker);
@@ -726,7 +728,8 @@ ResultType Script::ExitApp(ExitReasons aExitReason, char *aBuf, int aExitCode)
 
 	// Next, save the current state of the globals so that they can be restored just prior
 	// to returning to our caller:
-	strlcpy(g.ErrorLevel, g_ErrorLevel->Contents(), sizeof(g.ErrorLevel)); // Save caller's errorlevel.
+	char ErrorLevel_saved[ERRORLEVEL_SAVED_SIZE];
+	strlcpy(ErrorLevel_saved, g_ErrorLevel->Contents(), sizeof(ErrorLevel_saved)); // Save caller's errorlevel.
 	global_struct global_saved;
 	CopyMemory(&global_saved, &g, sizeof(global_struct));
 	InitNewThread(0, true, true, ACT_INVALID); // Since this special thread should always run, no checking of g_MaxThreadsTotal is done before calling this.
@@ -776,7 +779,7 @@ ResultType Script::ExitApp(ExitReasons aExitReason, char *aBuf, int aExitCode)
 		TerminateApp(aExitCode);
 
 	// Otherwise:
-	ResumeUnderlyingThread(&global_saved, false);
+	ResumeUnderlyingThread(&global_saved, ErrorLevel_saved, false);
 	g_AllowInterruption = g_AllowInterruption_prev;  // Restore original setting.
 	if (uninterruptible_timer_was_pending)
 		// Update: An alternative to the below would be to make the current thread interruptible
@@ -912,9 +915,22 @@ LineNumberType Script::LoadFromFile(bool aScriptWasNotspecified)
 	if (LoadIncludedFile(mFileSpec, false, false) != OK)
 		return LOADING_FAILED;
 
-	// v1.0.35.11: Restore original working directory so that changes made to it by the above
-	// (via "#Include C:\Scripts" or "#Include %A_ScriptDir%") do not affect the script's
-	// runtime working directory.  This preserves the flexibility of having a startup-determined
+	if (!PreparseBlocks(mFirstLine)) // Must preparse the blocks before preparsing the If/Else's further below because If/Else may rely on blocks.
+		return LOADING_FAILED; // Error was already displayed by the above calls.
+	// ABOVE: In v1.0.47, the above may have auto-included additional files from the userlib/stdlib.
+	// That's why the above is done prior to adding the EXIT lines and other things below.
+
+#ifndef AUTOHOTKEYSC
+	if (mIncludeLibraryFunctionsThenExit)
+	{
+		fclose(mIncludeLibraryFunctionsThenExit);
+		return 0; // Tell our caller to do a normal exit.
+	}
+#endif
+
+	// v1.0.35.11: Restore original working directory so that changes made to it by the above (via
+	// "#Include C:\Scripts" or "#Include %A_ScriptDir%" or even stdlib/userlib) do not affect the
+	// script's runtime working directory.  This preserves the flexibility of having a startup-determined
 	// working directory for the script's runtime (i.e. it seems best that the mere presence of
 	// "#Include NewDir" should not entirely eliminate this flexibility).
 	SetCurrentDirectory(g_WorkingDirOrig); // g_WorkingDirOrig previously set by WinMain().
@@ -940,32 +956,29 @@ LineNumberType Script::LoadFromFile(bool aScriptWasNotspecified)
 		return LOADING_FAILED;
 	mPlaceholderLabel->mJumpToLine = mLastLine; // To follow the rule "all labels should have a non-NULL line before the script starts running".
 
-	// Always preparse the blocks before the If/Else's because If/Else may rely on blocks:
-	if (PreparseBlocks(mFirstLine) && PreparseIfElse(mFirstLine))
-	{
-		// Use FindOrAdd, not Add, because the user may already have added it simply by
-		// referring to it in the script:
-		if (   !(g_ErrorLevel = FindOrAddVar("ErrorLevel"))   )
-			return LOADING_FAILED; // Error.  Above already displayed it for us.
-		// Initialize the var state to zero right before running anything in the script:
-		g_ErrorLevel->Assign(ERRORLEVEL_NONE);
-
-		// Initialize the random number generator:
-		// Note: On 32-bit hardware, the generator module uses only 2506 bytes of static
-		// data, so it doesn't seem worthwhile to put it in a class (so that the mem is
-		// only allocated on first use of the generator).  For v1.0.24, _ftime() is not
-		// used since it could be as large as 0.5 KB of non-compressed code.  A simple call to
-		// GetSystemTimeAsFileTime() seems just as good or better, since it produces
-		// a FILETIME, which is "the number of 100-nanosecond intervals since January 1, 1601."
-		// Use the low-order DWORD since the high-order one rarely changes.  If my calculations are correct,
-		// the low-order 32-bits traverses its full 32-bit range every 7.2 minutes, which seems to make
-		// using it as a seed superior to GetTickCount for most purposes.
-		RESEED_RANDOM_GENERATOR;
-
-		return mLineCount; // The count of runnable lines that were loaded, which might be zero.
-	}
-	else
+	if (!PreparseIfElse(mFirstLine))
 		return LOADING_FAILED; // Error was already displayed by the above calls.
+
+	// Use FindOrAdd, not Add, because the user may already have added it simply by
+	// referring to it in the script:
+	if (   !(g_ErrorLevel = FindOrAddVar("ErrorLevel"))   )
+		return LOADING_FAILED; // Error.  Above already displayed it for us.
+	// Initialize the var state to zero right before running anything in the script:
+	g_ErrorLevel->Assign(ERRORLEVEL_NONE);
+
+	// Initialize the random number generator:
+	// Note: On 32-bit hardware, the generator module uses only 2506 bytes of static
+	// data, so it doesn't seem worthwhile to put it in a class (so that the mem is
+	// only allocated on first use of the generator).  For v1.0.24, _ftime() is not
+	// used since it could be as large as 0.5 KB of non-compressed code.  A simple call to
+	// GetSystemTimeAsFileTime() seems just as good or better, since it produces
+	// a FILETIME, which is "the number of 100-nanosecond intervals since January 1, 1601."
+	// Use the low-order DWORD since the high-order one rarely changes.  If my calculations are correct,
+	// the low-order 32-bits traverses its full 32-bit range every 7.2 minutes, which seems to make
+	// using it as a seed superior to GetTickCount for most purposes.
+	RESEED_RANDOM_GENERATOR;
+
+	return mLineCount; // The count of runnable lines that were loaded, which might be zero.
 }
 
 
@@ -1018,7 +1031,7 @@ bool IsFunction(char *aBuf, bool *aPendingFunctionHasBrace = NULL)
 
 
 ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude, bool aIgnoreLoadFailure)
-// Returns the number of non-comment lines that were loaded, or LOADING_FAILED on error.
+// Returns OK or FAIL.
 // Below: Use double-colon as delimiter to set these apart from normal labels.
 // The main reason for this is that otherwise the user would have to worry
 // about a normal label being unintentionally valid as a hotkey, e.g.
@@ -1029,22 +1042,41 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 {
 	if (!aFileSpec || !*aFileSpec) return FAIL;
 
-	if (Line::nSourceFiles >= MAX_SCRIPT_FILES)
+#ifndef AUTOHOTKEYSC
+	if (Line::sSourceFileCount >= Line::sMaxSourceFiles)
 	{
-		// Only 255 because the main file uses up one slot:
-		MsgBox("The number of included files cannot exceed 255.");
-		return FAIL;
+		if (Line::sSourceFileCount >= ABSOLUTE_MAX_SOURCE_FILES)
+			return ScriptError("Too many includes."); // Short msg since so rare.
+		int new_max;
+		if (Line::sMaxSourceFiles)
+		{
+			new_max = 2*Line::sMaxSourceFiles;
+			if (new_max > ABSOLUTE_MAX_SOURCE_FILES)
+				new_max = ABSOLUTE_MAX_SOURCE_FILES;
+		}
+		else
+			new_max = 100;
+		// For simplicity and due to rarity of every needing to, expand by reallocating the array.
+		// Use a temp var. because realloc() returns NULL on failure but leaves original block allocated.
+		char **realloc_temp = (char **)realloc(Line::sSourceFile, new_max*sizeof(char *)); // If passed NULL, realloc() will do a malloc().
+		if (!realloc_temp)
+			return ScriptError(ERR_OUTOFMEM); // Short msg since so rare.
+		Line::sSourceFile = realloc_temp;
+		Line::sMaxSourceFiles = new_max;
 	}
+
+	char full_path[MAX_PATH];
+#endif
 
 	// Keep this var on the stack due to recursion, which allows newly created lines to be given the
 	// correct file number even when some #include's have been encountered in the middle of the script:
-	UCHAR source_file_number = Line::nSourceFiles;
-	char full_path[MAX_PATH];
+	int source_file_index = Line::sSourceFileCount;
 
-	if (!source_file_number)
+	if (!source_file_index)
 		// Since this is the first source file, it must be the main script file.  Just point it to the
 		// location of the filespec already dynamically allocated:
-		Line::sSourceFile[source_file_number] = mFileSpec;
+		Line::sSourceFile[source_file_index] = mFileSpec;
+#ifndef AUTOHOTKEYSC  // The "else" part below should never execute for compiled scripts since they never include anything (other than the main/combined script).
 	else
 	{
 		// Get the full path in case aFileSpec has a relative path.  This is done so that duplicates
@@ -1054,12 +1086,13 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 		// Check if this file was already included.  If so, it's not an error because we want
 		// to support automatic "include once" behavior.  So just ignore repeats:
 		if (!aAllowDuplicateInclude)
-			for (int f = 0; f < source_file_number; ++f)
+			for (int f = 0; f < source_file_index; ++f) // Here, source_file_index==Line::sSourceFileCount
 				if (!lstrcmpi(Line::sSourceFile[f], full_path)) // Case insensitive like the file system (testing shows that "Ä" == "ä" in the NTFS, which is hopefully how lstrcmpi works regardless of locale).
 					return OK;
 		// The file is added to the list further below, after the file has been opened, in case the
 		// opening fails and aIgnoreLoadFailure==true.
 	}
+#endif
 
 	UCHAR *script_buf = NULL;  // Init for the case when the buffer isn't used (non-standalone mode).
 	ULONG nDataSize = 0;
@@ -1078,7 +1111,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 		if (aIgnoreLoadFailure)
 			return OK;
 		snprintf(msg_text, sizeof(msg_text), "%s file \"%s\" cannot be opened."
-			, Line::nSourceFiles > 0 ? "#Include" : "Script", aFileSpec);
+			, Line::sSourceFileCount > 0 ? "#Include" : "Script", aFileSpec);
 		MsgBox(msg_text);
 		return FAIL;
 	}
@@ -1096,6 +1129,11 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			// The code size of rewind() has been checked and it seems very tiny.
 	}
 	//else file read error or EOF, let a later section handle it.
+
+	// This is done only after the file has been successfully opened in case aIgnoreLoadFailure==true:
+	if (source_file_index > 0)
+		Line::sSourceFile[source_file_index] = SimpleHeap::Malloc(full_path);
+	//else the first file was already taken care of by another means.
 
 #else // Stand-alone mode (there are no include files in this mode since all of them were merged into the main script at the time of compiling).
 	HS_EXEArc_Read oRead;
@@ -1132,11 +1170,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 	HS_EXEArc_Read *fp = &oRead;  // To help consolidate the code below.
 #endif
 
-	// This is done only after the file has been successfully opened in case aIgnoreLoadFailure==true:
-	if (source_file_number > 0)
-		Line::sSourceFile[source_file_number] = SimpleHeap::Malloc(full_path);
-	//else the first file was already taken care of by another means.
-	++Line::nSourceFiles;
+	++Line::sSourceFileCount;
 
 	// File is now open, read lines from it.
 
@@ -1169,7 +1203,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 	Var *func_exception_var[MAX_FUNC_VAR_EXCEPTIONS];
 
 	// Init both for main file and any included files loaded by this function:
-	mCurrFileNumber = source_file_number;  // source_file_number is kept on the stack due to recursion (from #include).
+	mCurrFileIndex = source_file_index;  // source_file_index is kept on the stack due to recursion (from #include).
 
 #ifdef AUTOHOTKEYSC
 	// -1 (MAX_UINT in this case) to compensate for the fact that there is a comment containing
@@ -2076,7 +2110,7 @@ examine_line:
 				// restore the class's values for these two, which are maintained separately
 				// like this to avoid having to specify them in various calls, especially the
 				// hundreds of calls to ScriptError() and LineError():
-				mCurrFileNumber = source_file_number;
+				mCurrFileIndex = source_file_index;
 				mCombinedLineNumber = saved_line_number;
 				goto continue_main_loop; // In lieu of "continue", for performance.
 			case FAIL: // IsDirective() already displayed the error.
@@ -2548,7 +2582,7 @@ inline ResultType Script::IsDirective(char *aBuf)
 		}
 		// Since above didn't return, it's a file (or non-existent file, in which case the below will display
 		// the error).  This will also display any other errors that occur:
-		return (LoadIncludedFile(parameter, is_include_again, ignore_load_failure) == FAIL) ? FAIL : CONDITION_TRUE;
+		return LoadIncludedFile(parameter, is_include_again, ignore_load_failure) ? CONDITION_TRUE : FAIL;
 #endif
 	}
 
@@ -3035,13 +3069,11 @@ ResultType Script::AddLabel(char *aLabelName, bool aAllowDupe)
 		return ScriptError(ERR_OUTOFMEM);
 	the_new_label->mPrevLabel = mLastLabel;  // Whether NULL or not.
 	if (mFirstLabel == NULL)
-		mFirstLabel = mLastLabel = the_new_label;
+		mFirstLabel = the_new_label;
 	else
-	{
 		mLastLabel->mNextLabel = the_new_label;
-		// This must be done after the above:
-		mLastLabel = the_new_label;
-	}
+	// This must be done after the above:
+	mLastLabel = the_new_label;
 	if (!stricmp(new_name, "OnClipboardChange"))
 		mOnClipboardChangeLabel = the_new_label;
 	return OK;
@@ -5085,7 +5117,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	// Now the above has allocated some dynamic memory, the pointers to which we turn over
 	// to Line's constructor so that they can be anchored to the new line.
 	//////////////////////////////////////////////////////////////////////////////////////
-	Line *the_new_line = new Line(mCurrFileNumber, mCombinedLineNumber, aActionType, new_arg, aArgc);
+	Line *the_new_line = new Line(mCurrFileIndex, mCombinedLineNumber, aActionType, new_arg, aArgc);
 	if (!the_new_line)
 		return ScriptError(ERR_OUTOFMEM);
 
@@ -5093,13 +5125,11 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 
 	line.mPrevLine = mLastLine;  // Whether NULL or not.
 	if (mFirstLine == NULL)
-		mFirstLine = mLastLine = the_new_line;
+		mFirstLine = the_new_line;
 	else
-	{
 		mLastLine->mNextLine = the_new_line;
-		// This must be done after the above:
-		mLastLine = the_new_line;
-	}
+	// This must be done after the above:
+	mLastLine = the_new_line;
 	mCurrLine = the_new_line;  // To help error reporting.
 
 	///////////////////////////////////////////////////////////////////
@@ -5268,7 +5298,6 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_DETECTHIDDENWINDOWS:
 	case ACT_DETECTHIDDENTEXT:
 	case ACT_SETSTORECAPSLOCKMODE:
-	case ACT_CRITICAL:
 		if (aArgc > 0 && !line.ArgHasDeref(1) && !line.ConvertOnOff(new_raw_arg1))
 			return ScriptError(ERR_ON_OFF, new_raw_arg1);
 		break;
@@ -6484,6 +6513,171 @@ ResultType Script::DefineFunc(char *aBuf, Var *aFuncExceptionVar[])
 
 
 
+#ifndef AUTOHOTKEYSC
+struct FuncLibrary
+{
+	char *path;
+	DWORD length;
+};
+
+Func *Script::FindFuncInLibrary(char *aFuncName, size_t aFuncNameLength, bool &aErrorWasShown)
+// Caller must ensure that aFuncName doesn't already exist as a defined function.
+// If aFuncNameLength is 0, the entire length of aFuncName is used.
+{
+	aErrorWasShown = false; // Set default for this output parameter.
+
+	int i;
+	char *char_after_last_backslash, *terminate_here;
+	DWORD attr;
+
+	#define FUNC_LIB_EXT ".ahk"
+	#define FUNC_LIB_EXT_LENGTH 4
+	#define FUNC_USER_LIB "\\AutoHotkey\\Lib\\" // Needs leading and trailing backslash.
+	#define FUNC_USER_LIB_LENGTH 16
+	#define FUNC_STD_LIB "Lib\\" // Needs trailing but not leading backslash.
+	#define FUNC_STD_LIB_LENGTH 4
+
+	#define FUNC_LIB_COUNT 2
+	static FuncLibrary sLib[FUNC_LIB_COUNT] = {0};
+
+	if (!sLib[0].path) // Allocate & discover paths only upon first use because many scripts won't use anything from the library. This saves a bit of memory and performance.
+	{
+		for (i = 0; i < FUNC_LIB_COUNT; ++i)
+			if (   !(sLib[i].path = SimpleHeap::Malloc(MAX_PATH))   ) // Need MAX_PATH for to allow room for appending each candidate file/function name.
+				return NULL; // Due to rarity, simply pass the failure back to caller.
+
+		// DETERMINE PATH TO "USER" LIBRARY:
+		FuncLibrary *this_lib = sLib; // For convenience and maintainability.
+		this_lib->length = BIV_MyDocuments(this_lib->path, "");
+		if (this_lib->length < MAX_PATH-FUNC_USER_LIB_LENGTH)
+		{
+			strcpy(this_lib->path + this_lib->length, FUNC_USER_LIB);
+			this_lib->length += FUNC_USER_LIB_LENGTH;
+		}
+		else // Insufficient room to build the path name.
+		{
+			*this_lib->path = '\0'; // Mark this library as disabled.
+			this_lib->length = 0;   //
+		}
+
+		// DETERMINE PATH TO "STANDARD" LIBRARY:
+		this_lib = sLib + 1; // For convenience and maintainability.
+		GetModuleFileName(NULL, this_lib->path, MAX_PATH); // The full path to the currently-running AutoHotkey.exe.
+		char_after_last_backslash = 1 + strrchr(this_lib->path, '\\'); // Should always be found, so failure isn't checked.
+		this_lib->length = (DWORD)(char_after_last_backslash - this_lib->path); // The length up to and including the last backslash.
+		if (this_lib->length < MAX_PATH-FUNC_STD_LIB_LENGTH)
+		{
+			strcpy(this_lib->path + this_lib->length, FUNC_STD_LIB);
+			this_lib->length += FUNC_STD_LIB_LENGTH;
+		}
+		else // Insufficient room to build the path name.
+		{
+			*this_lib->path = '\0'; // Mark this library as disabled.
+			this_lib->length = 0;   //
+		}
+
+		for (i = 0; i < FUNC_LIB_COUNT; ++i)
+		{
+			attr = GetFileAttributes(sLib[i].path); // Seems to accept directories that have a trailing backslash, which is good because it simplifies the code.
+			if (attr == 0xFFFFFFFF || !(attr & FILE_ATTRIBUTE_DIRECTORY)) // Directory doesn't exist or it's a file vs. directory. Relies on short-circuit boolean order.
+			{
+				*sLib[i].path = '\0'; // Mark this library as disabled.
+				sLib[i].length = 0;   //
+			}
+		}
+	}
+	// Above must ensure that all sLib[].path elements are non-NULL (but they can be "" to indicate "no library").
+
+	if (!aFuncNameLength) // Caller didn't specify, so use the entire string.
+		aFuncNameLength = strlen(aFuncName);
+
+	char *dest, *first_underscore, class_name_buf[MAX_VAR_NAME_LENGTH + 1];
+	char *naked_filename = aFuncName;               // Set up for the first iteration.
+	size_t naked_filename_length = aFuncNameLength; //
+
+	for (int second_iteration = 0; second_iteration < 2; ++second_iteration)
+	{
+		for (i = 0; i < FUNC_LIB_COUNT; ++i)
+		{
+			if (!*sLib[i].path) // Library is marked disabled, so skip it.
+				continue;
+
+			if (sLib[i].length + naked_filename_length >= MAX_PATH-FUNC_LIB_EXT_LENGTH)
+				continue; // Path too long to match in this library, but try others.
+			dest = (char *)memcpy(sLib[i].path + sLib[i].length, naked_filename, naked_filename_length); // Append the filename to the library path.
+			strcpy(dest + naked_filename_length, FUNC_LIB_EXT); // Append the file extension.
+
+			attr = GetFileAttributes(sLib[i].path); // Testing confirms that GetFileAttributes() doesn't support wildcards; which is good because we want filenames containing question marks to be "not found" rather than being treated as a match-pattern.
+			if (attr == 0xFFFFFFFF || (attr & FILE_ATTRIBUTE_DIRECTORY)) // File doesn't exist or it's a directory. Relies on short-circuit boolean order.
+				continue;
+
+			// Since above didn't "continue", a file exists whose name matches that of the requested function.
+			// Before loading/including that file, set the working directory to its folder so that if it uses
+			// #Include, it will be able to use more convenient/intuitive relative paths.  This is similar to
+			// the "#Include DirName" feature.
+			// Call SetWorkingDir() vs. SetCurrentDirectory() so that it succeeds even for a root drive like
+			// C: that lacks a backslash (see SetWorkingDir() for details).
+			terminate_here = sLib[i].path + sLib[i].length - 1; // The trailing backslash in the full-path-name to this library.
+			*terminate_here = '\0'; // Temporarily terminate it for use with SetWorkingDir().
+			SetWorkingDir(sLib[i].path); // See similar section in the #Include directive.
+			*terminate_here = '\\'; // Undo the termination.
+
+			if (!LoadIncludedFile(sLib[i].path, true, false)) // For performance, pass true for allow-dupe so that it doesn't have to check for a duplicate file (seems too rare to worry about duplicates since by definition, the function doesn't yet exist so it's file shouldn't yet be included).
+			{
+				aErrorWasShown = true; // Above has just displayed its error (e.g. syntax error in a line, failed to open the include file, etc).  So override the default set earlier.
+				return NULL;
+			}
+
+			if (mIncludeLibraryFunctionsThenExit)
+			{
+				// For each included library-file, write out two #Include lines:
+				// 1) Use #Include in its "change working directory" mode so that any explicit #include directives
+				//    or FileInstalls inside the library file itself will work consistently and properly.
+				// 2) Use #IncludeAgain (to improve performance since no dupe-checking is needed) to include
+				//    the library file itself.
+				// We don't directly append library files onto the main script here because:
+				// 1) ahk2exe needs to be able to see and act upon FileInstall and #Include lines (i.e. library files
+				//    might contain #Include even though it's rare).
+				// 2) #IncludeAgain and #Include directives that bring in fragments rather than entire functions or
+				//    subroutines wouldn't work properly if we resolved such includes in AutoHotkey.exe because they
+				//    wouldn't be properly interleaved/asynchronous, but instead brought out of their library file
+				//    and deposited separately/synchronously into the temp-include file by some new logic at the
+				//    AutoHotkey.exe's code for the #Include directive.
+				// 3) ahk2exe prefers to omit comments from included files to minimize size of compiled scripts.
+				fprintf(mIncludeLibraryFunctionsThenExit, "#Include %-0.*s\n#IncludeAgain %s\n"
+					, sLib[i].length, sLib[i].path, sLib[i].path);
+				// Now continue on normally so that our caller can continue looking for syntax errors.
+			}
+
+			// Now that a matching filename has been found, it seems best to stop searching here even if that
+			// file doesn't actually contain the requested function.  This helps library authors catch bugs/typos.
+			return FindFunc(aFuncName, aFuncNameLength);
+		} // for() each library directory.
+
+		// Now that the first iteration is done, set up for the second one that searches by class/prefix.
+		// Notes about ambiguity and naming collisions:
+		// By the time it gets to the prefix/class search, it's almost given up.  Even if it wrongly finds a
+		// match in a filename that isn't really a class, it seems inconsequential because at worst it will
+		// still not find the function and will then say "call to nonexistent function".  In addition, the
+		// ability to customize which libraries are searched is planned.  This would allow a publicly
+		// distributed script to turn off all libraries except stdlib.
+		if (   !(first_underscore = strchr(aFuncName, '_'))   ) // No second iteration needed.
+			break; // All loops are done because second iteration is the last possible attempt.
+		naked_filename_length = first_underscore - aFuncName;
+		if (naked_filename_length >= sizeof(class_name_buf)) // Class name too long (probably impossible currently).
+			break; // All loops are done because second iteration is the last possible attempt.
+		naked_filename = class_name_buf; // Point it to a buffer for use below.
+		memcpy(naked_filename, aFuncName, naked_filename_length);
+		naked_filename[naked_filename_length] = '\0';
+	} // 2-iteration for().
+
+	// Since above didn't return, no match found in any library.
+	return NULL;
+}
+#endif
+
+
+
 Func *Script::FindFunc(char *aFuncName, size_t aFuncNameLength)
 // Returns the Function whose name matches aFuncName (which caller has ensured isn't NULL).
 // If it doesn't exist, NULL is returned.
@@ -6698,11 +6892,17 @@ Func *Script::FindFunc(char *aFuncName, size_t aFuncNameLength)
 		bif = BIF_Asc;
 	else if (!stricmp(func_name, "Chr"))
 		bif = BIF_Chr;
-	//else if (!stricmp(func_name, "ExtractInteger"))
-	//{
-	//	bif = BIF_ExtractInteger;
-	//	max_params = 4;
-	//}
+	else if (!stricmp(func_name, "NumGet"))
+	{
+		bif = BIF_NumGet;
+		max_params = 3;
+	}
+	else if (!stricmp(func_name, "NumPut"))
+	{
+		bif = BIF_NumPut;
+		min_params = 2;
+		max_params = 4;
+	}
 	else if (!stricmp(func_name, "IsLabel"))
 		bif = BIF_IsLabel;
 	else if (!stricmp(func_name, "DllCall"))
@@ -6755,13 +6955,18 @@ Func *Script::FindFunc(char *aFuncName, size_t aFuncNameLength)
 	else if (!stricmp(func_name, "OnMessage"))
 	{
 		bif = BIF_OnMessage;
-		max_params = 2;  // Leave min at 1.
+		max_params = 3;  // Leave min at 1.
 		// By design, scripts that use OnMessage are persistent by default.  Doing this here
 		// also allows WinMain() to later detect whether this script should become #SingleInstance.
 		// Note: Don't directly change g_AllowOnlyOneInstance here in case the remainder of the
 		// script-loading process comes across any explicit uses of #SingleInstance, which would
 		// override the default set here.
 		g_persistent = true;
+	}
+	else if (!stricmp(func_name, "RegisterCallback"))
+	{
+		bif = BIF_RegisterCallback;
+		max_params = 4; // Leave min_params at 1.
 	}
 	else
 		return NULL; // Maint: There may be other lines above that also return NULL.
@@ -6833,14 +7038,22 @@ Func *Script::AddFunc(char *aFuncName, size_t aFuncNameLength, bool aIsBuiltIn)
 		return NULL;
 	}
 
+	// v1.0.47: The following ISN'T done because it would slow down commonly used functions. This is because
+	// commonly-called functions like InStr() tend to be added first (since they appear so often throughout
+	// the script); thus subsequent lookups are fast if they are kept at the beginning of the list rather
+	// than being displaced to the end by all other functions).
+	// NOT DONE for the reason above:
+	// Unlike most of the other link lists, attach new items at the beginning of the list because
+	// that allows the standard/user library feature to perform much better for scripts that have hundreds
+	// of functions.  This is because functions brought in dynamically from a library will then be at the
+	// beginning of the list, which allows the function lookup that immediately follows library-loading to
+	// find a match almost immediately.
 	if (!mFirstFunc) // The list is empty, so this will be the first and last item.
-		mFirstFunc = mLastFunc = the_new_func;
+		mFirstFunc = the_new_func;
 	else
-	{
 		mLastFunc->mNextFunc = the_new_func;
-		// This must be done after the above:
-		mLastFunc = the_new_func;
-	}
+	// This must be done after the above:
+	mLastFunc = the_new_func; // There's at least one spot in the code that relies on mLastFunc being the most recently added function.
 
 	return the_new_func;
 }
@@ -7714,13 +7927,11 @@ ResultType Script::AddGroup(char *aGroupName)
 	if (the_new_group == NULL)
 		return ScriptError(ERR_OUTOFMEM);
 	if (mFirstGroup == NULL)
-		mFirstGroup = mLastGroup = the_new_group;
+		mFirstGroup = the_new_group;
 	else
-	{
 		mLastGroup->mNextGroup = the_new_group;
-		// This must be done after the above:
-		mLastGroup = the_new_group;
-	}
+	// This must be done after the above:
+	mLastGroup = the_new_group;
 	return OK;
 }
 
@@ -7769,11 +7980,23 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 			{
 				if (!deref->is_function)
 					continue;
-				if (   !(deref->func = FindFunc(deref->marker, deref->length))   ) // An earlier stage has ensured that if the function exists, it's mJumpToLine is non-NULL.
+				if (   !(deref->func = FindFunc(deref->marker, deref->length))   )
 				{
-					abort = true; // So that the caller doesn't also report an error.
-					return line->PreparseError("Call to nonexistent function.", deref->marker);
+#ifndef AUTOHOTKEYSC
+					bool error_was_shown;
+					if (   !(deref->func = FindFuncInLibrary(deref->marker, deref->length, error_was_shown))   )
+					{
+						abort = true; // So that the caller doesn't also report an error.
+						// When above already displayed the proximate cause of the error, it's usually
+						// undesirable to show the cascade effects of that error in a second dialog:
+						return error_was_shown ? NULL : line->PreparseError(ERR_NONEXISTENT_FUNCTION, deref->marker);
+					}
+#else
+					abort = true;
+					return line->PreparseError(ERR_NONEXISTENT_FUNCTION, deref->marker);
+#endif
 				}
+				// An earlier stage has ensured that if the function exists, it's mJumpToLine is non-NULL.
 				Func &func = *deref->func; // For performance and convenience.
 				// Ealier stage has ensured that strchr() will always find an open-parenthesis:
 				for (deref->param_count = 0, param_start = omit_leading_whitespace(strchr(deref->marker, '(') + 1);;)
@@ -7973,8 +8196,7 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 			// Update: Increased the limit from 100 to 1000 so that large "else if" ladders
 			// can be constructed.  Going much larger than 1000 seems unwise since ExecUntil()
 			// will have to recurse for each nest-level, possibly resulting in stack overflow
-			// if things get too deep (though I think most/all(?) versions of Windows will
-			// dynamically grow the stack to try to keep up):
+			// if things get too deep:
 			if (nest_level > 1000)
 			{
 				abort = true; // So that the caller doesn't also report an error.
@@ -8343,8 +8565,13 @@ Line *Line::sLog[] = {NULL};  // Initialize all the array elements.
 DWORD Line::sLogTick[]; // No initialization needed.
 int Line::sLogNext = 0;  // Start at the first element.
 
-char *Line::sSourceFile[MAX_SCRIPT_FILES]; // No init needed.
-int Line::nSourceFiles = 0;  // Zero source files initially.  The main script will be the first.
+#ifdef AUTOHOTKEYSC  // Reduces code size to omit things that are unused, and helps catch bugs at compile-time.
+	char *Line::sSourceFile[1]; // No init needed.
+#else
+	char **Line::sSourceFile = NULL; // Init to NULL for use with realloc() and for maintainability.
+	int Line::sMaxSourceFiles = 0;
+#endif
+	int Line::sSourceFileCount = 0; // Zero source files initially.  The main script will be the first.
 
 char *Line::sDerefBuf = NULL;  // Buffer to hold the values of any args that need to be dereferenced.
 size_t Line::sDerefBufSize = 0;
@@ -8865,14 +9092,14 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 				break;
 			case ATTR_LOOP_READ_FILE:
 				FILE *read_file;
-				if (read_file = fopen(ARG2, "r"))
+				if (*ARG2 && (read_file = fopen(ARG2, "r"))) // v1.0.47: Added check for "" to avoid debug-assertion failure while in debug mode (maybe it's bad to to open file "" in release mode too).
 				{
 					result = line->PerformLoopReadFile(apReturnValue, continue_main_loop, jump_to_line, read_file, ARG3);
 					fclose(read_file);
 				}
 				else
-					// The open of a the input file failed.  So just set result to OK since no ErrorLevel
-					// setting is supported with loops (since that seems like it would be an overuse
+					// The open of a the input file failed.  So just set result to OK since setting the
+					// ErrorLevel isn't supported with loops (since that seems like it would be an overuse
 					// of ErrorLevel, perhaps changing its value too often when the user would want
 					// it saved -- in any case, changing that now might break existing scripts).
 					result = OK;
@@ -10735,7 +10962,8 @@ __forceinline ResultType Line::Perform() // __forceinline() currently boosts per
 	case ACT_CRITICAL:
 		// For code size reduction, no runtime validation is done (only load-time).  Thus, anything other
 		// than "Off" (especially NEUTRAL) is considered to be "On":
-		if (g.ThreadIsCritical = (ConvertOnOff(ARG1, NEUTRAL) != TOGGLED_OFF))
+		toggle = ConvertOnOff(ARG1, NEUTRAL);
+		if (g.ThreadIsCritical = (toggle != TOGGLED_OFF)) // Assign.
 		{
 			// v1.0.46: When the current thread is critical, have the script check messages less often to
 			// reduce situations where an OnMesage or GUI message must be discarded due to "thread already
@@ -10749,8 +10977,13 @@ __forceinline ResultType Line::Perform() // __forceinline() currently boosts per
 			// cause the script to completely hang if the critical thread never finishes, or takes a long time
 			// to finish.  A configurable limit might also allow things to work better on Win9x because it has
 			// a bigger tickcount granularity.
-			g.PeekFrequency = 16; // Some hardware has a tickcount granularity of 15 instead of 10, so this covers more variations.
+			if (!*ARG1 || toggle == TOGGLED_ON) // i.e. an omitted first arg is the same as "ON".
+				g.PeekFrequency = 16; // Some hardware has a tickcount granularity of 15 instead of 10, so this covers more variations.
+			else // ARG1 is present but it's not "On" or "Off"; so treat it as a number.
+				g.PeekFrequency = ATOU(ARG1); // For flexibility (and due to rarity), don't bother checking if too large/small (even if it is it's probably inconsequential).
 			g.AllowThreadToBeInterrupted = false;
+			g.LinesPerCycle = -1;      // v1.0.47: It seems best to ensure SetBatchLines -1 is in effect because
+			g.IntervalBeforeRest = -1; // otherwise it may check messages during the interval that it isn't supposed to.
 		}
 		else
 		{
@@ -11905,16 +12138,19 @@ ResultType Line::LineError(char *aErrorText, ResultType aErrorType, char *aExtra
 		// printf("%s (%d) : ==> %s: \n%s \n%s\n",szInclude, nAutScriptLine, szText, szScriptLine, szOutput2 );
 		// MY: Full filename is required, even if it's the main file, because some editors (EditPlus)
 		// seem to rely on that to determine which file and line number to jump to when the user double-clicks
-		// the error message in the output window:
-		printf("%s (%d): ==> %s\n", sSourceFile[mFileNumber], mLineNumber, aErrorText); // printf() does not signifantly increase the size of the EXE, probably because it shares most of the same code with sprintf(), etc.
+		// the error message in the output window.
+		// v1.0.47: Added a space before the colon as originally intended.  Toralf said, "With this minor
+		// change the error lexer of Scite recognizes this line as a Microsoft error message and it can be
+		// used to jump to that line."
+		printf("%s (%d) : ==> %s\n", sSourceFile[mFileIndex], mLineNumber, aErrorText); // printf() does not signifantly increase the size of the EXE, probably because it shares most of the same code with sprintf(), etc.
 		if (*aExtraInfo)
 			printf("     Specifically: %s\n", aExtraInfo);
 	}
 	else
 	{
 		char source_file[MAX_PATH * 2];
-		if (mFileNumber)
-			snprintf(source_file, sizeof(source_file), " in #include file \"%s\"", sSourceFile[mFileNumber]);
+		if (mFileIndex)
+			snprintf(source_file, sizeof(source_file), " in #include file \"%s\"", sSourceFile[mFileIndex]);
 		else
 			*source_file = '\0'; // Don't bother cluttering the display if it's the main script file.
 
@@ -11979,7 +12215,7 @@ ResultType Script::ScriptError(char *aErrorText, char *aExtraInfo) //, ResultTyp
 	if (g_script.mErrorStdOut && !g_script.mIsReadyToExecute) // i.e. runtime errors are always displayed via dialog.
 	{
 		// See LineError() for details.
-		printf("%s (%d): ==> %s\n", Line::sSourceFile[mCurrFileNumber], mCombinedLineNumber, aErrorText);
+		printf("%s (%d): ==> %s\n", Line::sSourceFile[mCurrFileIndex], mCombinedLineNumber, aErrorText);
 		if (*aExtraInfo)
 			printf("     Specifically: %s\n", aExtraInfo);
 	}
@@ -11991,9 +12227,9 @@ ResultType Script::ScriptError(char *aErrorText, char *aExtraInfo) //, ResultTyp
 		cp += snprintf(cp, buf_space_remaining, "Error at line %u", mCombinedLineNumber); // Don't call it "critical" because it's usually a syntax error.
 		buf_space_remaining = (int)(sizeof(buf) - (cp - buf));
 
-		if (mCurrFileNumber)
+		if (mCurrFileIndex)
 		{
-			cp += snprintf(cp, buf_space_remaining, " in #include file \"%s\"", Line::sSourceFile[mCurrFileNumber]);
+			cp += snprintf(cp, buf_space_remaining, " in #include file \"%s\"", Line::sSourceFile[mCurrFileIndex]);
 			buf_space_remaining = (int)(sizeof(buf) - (cp - buf));
 		}
 		//else don't bother cluttering the display if it's the main script file.

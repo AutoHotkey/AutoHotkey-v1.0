@@ -117,6 +117,7 @@ extern UCHAR g_SortCaseSensitive;
 extern bool g_SortNumeric;
 extern bool g_SortReverse;
 extern int g_SortColumnOffset;
+extern Func *g_SortFunc;
 
 extern char g_delimiter;
 extern char g_DerefChar;

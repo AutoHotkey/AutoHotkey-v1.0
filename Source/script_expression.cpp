@@ -998,7 +998,6 @@ end_of_infix_to_postfix:
 	size_t right_length, left_length;
 	char left_buf[MAX_FORMATTED_NUMBER_LENGTH + 1];  // BIF_OnMessage and SYM_DYNAMIC rely on this one being large enough to hold MAX_VAR_NAME_LENGTH.
 	char right_buf[MAX_FORMATTED_NUMBER_LENGTH + 1]; // Only needed for holding numbers
-	Func *prev_func;
 	char *result; // "result" is used for return values and also the final result.
 	VarSizeType result_length;
 	size_t result_size, alloca_usage = 0; // v1.0.45: Track amount of alloca mem to avoid stress on stack from extreme expressions (mostly theoretical).
@@ -1393,14 +1392,14 @@ end_of_infix_to_postfix:
 					case PARAM_DEFAULT_STR:   this_formal_param.var->Assign(this_formal_param.default_str);    break;
 					case PARAM_DEFAULT_INT:   this_formal_param.var->Assign(this_formal_param.default_int64);  break;
 					case PARAM_DEFAULT_FLOAT: this_formal_param.var->Assign(this_formal_param.default_double); break;
-					// case PARAM_DEFAULT_NONE: Not possible due to the nature of this loop and due to load-time validation.
+					//case PARAM_DEFAULT_NONE: Not possible due to the nature of this loop and due to load-time validation.
 					}
 				}
 				// Pop the actual number of params involved in this function-call off the stack.  Load-time
 				// validation has ensured that this number is always less than or equal to the number of
 				// parameters formally defined by the function.  Therefore, there should never be any leftover
 				// params on the stack after this is done.  Relies upon the value of j established above:
-				for (; j > -1; --j) // For each formal parameter (reverse order to mirror the nature of the stack).
+				for (; j > -1; --j) // For each formal parameter that has a matching actual (reverse order to mirror the nature of the stack).
 				{
 					ExprTokenType &token = *STACK_POP; // A check higher above has already ensured that this won't cause stack underflow.
 					// Below uses IS_OPERAND rather than checking for only SYM_OPERAND because the stack can contain
@@ -1433,51 +1432,14 @@ end_of_infix_to_postfix:
 					else // This parameter is passed "by value".
 						// Assign actual parameter's value to the formal parameter (which is itself a
 						// local variable in the function).  
-						// If toketoken.var's Type() is always VAR_NORMAL (e.g. never the clipboard).
+						// If token.var's Type() is always VAR_NORMAL (e.g. never the clipboard).
 						// A SYM_VAR token can still happen because the previous loop's conversion of all
 						// by-value SYM_VAR operands into SYM_OPERAND would not have happened if no
 						// backup was needed for this function.
 						func.mParam[j].var->Assign(token);
 				} // for()
 
-				result = ""; // Init to default in case function doesn't return a value or it EXITs or fails.
-
-				// Launch the function similar to Gosub (i.e. not as a new quasi-thread):
-				// The performance gain of conditionally passing NULL in place of result (when this is the
-				// outermost function call of a line consisting only of function calls, namely ACT_EXPRESSION)
-				// would not be significant because the Return command's expression (arg1) must still be evaluated
-				// in case it calls any functions that have side-effects, e.g. "return LogThisError()".
-				prev_func = g.CurrentFunc; // This will be non-NULL when a function is called from inside another function.
-				g.CurrentFunc = &func;
-				// Although a GOTO that jumps to a position outside of the function's body could be supported,
-				// it seems best not to for these reasons:
-				// 1) The extreme rarity of a legitimate desire to intentionally do so.
-				// 2) The fact that any return encountered after the Goto cannot provide a return value for
-				//    the function because load-time validation checks for this (it's preferable not to
-				//    give up this check, since it is an informative error message and might also help catch
-				//    bugs in the script).  Gosub does not suffer from this because the return that brings it
-				//    back into the function body belongs to the Gosub and not the function itself.
-				// 3) More difficult to maintain because we have handle jump_to_line the same way ExecUntil() does,
-				//    checking aResult the same way it does, then checking jump_to_line the same way it does, etc.
-				// Fix for v1.0.31.05: g.mLoopFile and the other g_script members that follow it are
-				// now passed to ExecUntil() for two reasons (update for v1.0.44.14: now they're implicitly "passed"
-				// because they're done via parameter anymore):
-				// 1) To fix the fact that any function call in one parameter of a command would reset
-				// A_Index and related variables so that if those variables are referenced in another
-				// parameter of the same command, they would be wrong.
-				// 2) So that the caller's value of A_Index and such will always be valid even inside
-				// of called functions (unless overridden/eclipsed by a loop in the body of the function),
-				// which seems to add flexibility without giving up anything.  This fix is necessary at least
-				// for a command that references A_Index in two of its args such as the following:
-				// ToolTip, O, ((cos(A_Index) * 500) + 500), A_Index
-				++func.mInstances;
-				aResult = func.mJumpToLine->ExecUntil(UNTIL_BLOCK_END, &result, NULL);
-				--func.mInstances;
-				// Restore the original value in case this function is called from inside another function.
-				// Due to the synchronous nature of recursion and recursion-collapse, this should keep
-				// g.CurrentFunc accurate, even amidst the asynchronous saving and restoring of "g" itself:
-				g.CurrentFunc = prev_func;
-
+				aResult = func.Call(result); // Call the UDF.
 				if (aResult == EARLY_EXIT || aResult == FAIL) // "Early return". See comment below.
 				{
 					// Take a shortcut because for backward compatibility, ACT_ASSIGNEXPR (and anything else
@@ -2007,7 +1969,7 @@ end_of_infix_to_postfix:
 			this_token.symbol = SYM_INTEGER; // Must be done only after its old value was used above. v1.0.36.07: Fixed to be SYM_INTEGER vs. right_is_number for SYM_BITNOT.
 			break;
 
-		default: // Non-unary operator.
+		default: // NON-UNARY OPERATOR.
 			// GET THE SECOND (LEFT-SIDE) OPERAND FOR THIS OPERATOR:
 			if (!stack_count) // Prevent stack underflow.
 				goto abnormal_end;
@@ -3234,7 +3196,7 @@ char *Line::ExpandArg(char *aBuf, int aArgIndex, Var *aArgVar) // 10/2/2006: Doe
 		{
 			// FOR EACH DEREF IN AN ARG (if we're here, there's at least one):
 			// Copy the chars that occur prior to deref->marker into the buffer:
-			for (this_marker = deref->marker; pText < this_marker; *aBuf++ = *pText++);
+			for (this_marker = deref->marker; pText < this_marker; *aBuf++ = *pText++); // memcpy() is typically slower for small copies like this, at least on some hardware.
 			// Now copy the contents of the dereferenced var.  For all cases, aBuf has already
 			// been verified to be large enough, assuming the value hasn't changed between the
 			// time we were called and the time the caller calculated the space needed.
@@ -3245,7 +3207,7 @@ char *Line::ExpandArg(char *aBuf, int aArgIndex, Var *aArgVar) // 10/2/2006: Doe
 		}
 	}
 	// Copy any chars that occur after the final deref into the buffer:
-	for (; *pText; *aBuf++ = *pText++);
+	for (; *pText; *aBuf++ = *pText++); // memcpy() is typically slower for small copies like this, at least on some hardware.
 	// Terminate the buffer, even if nothing was written into it:
 	*aBuf++ = '\0';
 	return aBuf; // Returns the position after the terminator.

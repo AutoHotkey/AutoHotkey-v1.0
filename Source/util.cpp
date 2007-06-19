@@ -1570,7 +1570,7 @@ void GetVirtualDesktopRect(RECT &aRect)
 
 
 
-DWORD GetEnvironmentVarWin9x(char *aEnvVarName, char *aBuf)
+DWORD GetEnvVarReliable(char *aEnvVarName, char *aBuf)
 // Returns the length of what has been copied into aBuf.
 // Caller has ensured that aBuf is large enough (though anything >=32767 is always large enough).
 // This function was added in v1.0.46.08 to fix a long-standing bug that was more fully revealed
@@ -1579,7 +1579,10 @@ DWORD GetEnvironmentVarWin9x(char *aEnvVarName, char *aBuf)
 // in size).  The reason for lying is that we don't know exactly how big the buffer is, but we do
 // know it's large enough. So we just pass 32767 in an attempt to make it always succeed
 // (mostly because GetEnvironmentVariable() is such a slow call, so it's best to avoid calling it
-// a second time just to get the length).  See other comments below.
+// a second time just to get the length).
+// UPDATE: This is now called for all versions of Windows to avoid any chance of crashing or misbehavior,
+// which tends to happen whenever lying to the API (even if it's for a good cause).  See similar problems
+// at ReadRegString(). See other comments below.
 {
 	// Windows 9x is apparently capable of detecting a lie about the buffer size.
 	// For example, if the memory capacity is only 16K but we pass 32767, it sometimes/always detects that
@@ -1605,16 +1608,54 @@ DWORD GetEnvironmentVarWin9x(char *aEnvVarName, char *aBuf)
 
 
 
-ResultType ReadRegString(HKEY aRootKey, char *aSubkey, char *aValueName, char *aBuf, size_t aBufSize)
+DWORD ReadRegString(HKEY aRootKey, char *aSubkey, char *aValueName, char *aBuf, size_t aBufSize)
+// Returns the length of the string (0 if empty).
+// Caller must ensure that size of aBuf is REALLY aBufSize (even when it knows aBufSize is more than
+// it needs) because the API apparently reads/writes parts of the buffer beyond the string it writes!
+// Caller must ensure that aBuf isn't NULL because it doesn't seem worth having a "give me the size only" mode.
+// This is because the API might return a size that omits the zero terminator, and the only way to find out for
+// sure is probably to actually fetch the data and check if the terminator is present.
 {
-	*aBuf = '\0'; // Set default output parameter.  Some callers rely on this being set even if failure occurs.
 	HKEY hkey;
 	if (RegOpenKeyEx(aRootKey, aSubkey, 0, KEY_QUERY_VALUE, &hkey) != ERROR_SUCCESS)
-		return FAIL;
+	{
+		*aBuf = '\0';
+		return 0;
+	}
 	DWORD buf_size = (DWORD)aBufSize; // Caller's value might be a constant memory area, so need a modifiable copy.
 	LONG result = RegQueryValueEx(hkey, aValueName, NULL, NULL, (LPBYTE)aBuf, &buf_size);
 	RegCloseKey(hkey);
-	return (result == ERROR_SUCCESS) ? OK : FAIL;
+	if (result != ERROR_SUCCESS || !buf_size) // Relies on short-circuit boolean order.
+	{
+		*aBuf = '\0'; // MSDN says the contents of the buffer is undefined after the call in some cases, so reset it.
+		return 0;
+	}
+	// Otherwise success and non-empty result.  This also means that buf_size is accurate and <= to what we sent in.
+	// Fix for v1.0.47: ENSURE PROPER STRING TERMINATION. This is suspected to be a source of crashing.
+	// MSDN: "If the data has the REG_SZ, REG_MULTI_SZ or REG_EXPAND_SZ type, the string may not have been
+	// stored with the proper null-terminating characters. Therefore, even if the function returns
+	// ERROR_SUCCESS, the application should ensure that the string is properly terminated before using
+	// it; otherwise, it may overwrite a buffer. (Note that REG_MULTI_SZ strings should have two
+	// null-terminating characters.)"
+	// MSDN: "If the data has the REG_SZ, REG_MULTI_SZ or REG_EXPAND_SZ type, this size includes any
+	// terminating null character or characters."
+	--buf_size; // Convert to the index of the last character written.  This is safe because above already checked that buf_size>0.
+	if (aBuf[buf_size] == '\0') // It wrote at least one zero terminator (it might write more than one for Unicode, or if it's simply stored with more than one in the registry).
+	{
+		while (buf_size && !aBuf[buf_size - 1]) // Scan leftward in case more than one consecutive terminator.
+			--buf_size;
+		return buf_size; // There's a tiny chance that this could the wrong length, namely when the string contains binary zero(s) to the left of non-zero characters.  But that seems too rare to be worth calling strlen() for.
+	}
+	// Otherwise, it didn't write a terminator, so provide one.
+	++buf_size; // To reflect the fact that we're about to write an extra char.
+	if (buf_size >= aBufSize) // There's no room for a terminator without truncating the data (very rare).  Seems best to indicate failure.
+	{
+		*aBuf = '\0';
+		return 0;
+	}
+	// Otherwise, there's room for the terminator.
+	aBuf[buf_size] = '\0';
+	return buf_size; // There's a tiny chance that this could the wrong length, namely when the string contains binary zero(s) to the left of non-zero characters.  But that seems too rare to be worth calling strlen() for.
 }
 
 
