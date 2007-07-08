@@ -6622,7 +6622,7 @@ GuiIndexType GuiType::FindControl(char *aControlID)
 			if (mControl[u].output_var == var)
 				return u;  // Match found.
 	}
-	if (g.CurrentFunc // v1.0.46.15: Since above failed to match: if we're in a function, search for a static or ByRef-that-points-to-a-global-or-static because both should be supported.
+	if (g.CurrentFunc // v1.0.46.15: Since above failed to match: if we're in a function (which is checked for performance reasons), search for a static or ByRef-that-points-to-a-global-or-static because both should be supported.
 		&& (var = g_script.FindVar(aControlID, 0, NULL, ALWAYS_USE_LOCAL)))
 	{
 		// No need to do "var = var->ResolveAlias()" because the line above never finds locals, only globals.

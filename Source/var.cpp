@@ -348,7 +348,7 @@ ResultType Var::AssignBinaryClip(Var &aSourceVar)
 		binary_contents = next;
 		if ((next = (char *)binary_contents + size) > binary_contents_max)
 			break;
-	    if (   !(hglobal = GlobalAlloc(GMEM_MOVEABLE, size))   ) // size==0 is okay.
+		if (   !(hglobal = GlobalAlloc(GMEM_MOVEABLE, size))   ) // size==0 is okay.
 		{
 			g_clip.Close();
 			return g_script.ScriptError(ERR_OUTOFMEM); // Short msg since so rare.

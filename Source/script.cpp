@@ -10813,8 +10813,8 @@ __forceinline ResultType Line::Perform() // __forceinline() currently boosts per
 			// This memory is freed automatically by the OS upon program termination.
 			if (   !(g_script.mRunAsUser = (WCHAR *)malloc(3 * RUNAS_SIZE_IN_BYTES))   )
 				return LineError(ERR_OUTOFMEM ERR_ABORT);
-			g_script.mRunAsPass = g_script.mRunAsUser + RUNAS_SIZE_IN_BYTES;
-			g_script.mRunAsDomain = g_script.mRunAsPass + RUNAS_SIZE_IN_BYTES;
+			g_script.mRunAsPass = g_script.mRunAsUser + RUNAS_SIZE_IN_WCHARS;   // Fixed for v1.0.47.01 to use RUNAS_SIZE_IN_WCHARS vs. RUNAS_SIZE_IN_BYTES (since pointer math adds 2 bytes not 1 due to the type of pointer).
+			g_script.mRunAsDomain = g_script.mRunAsPass + RUNAS_SIZE_IN_WCHARS; // 
 		}
 		ToWideChar(ARG1, g_script.mRunAsUser, RUNAS_SIZE_IN_WCHARS);    // Dest. size is in wchars, not bytes.
 		ToWideChar(ARG2, g_script.mRunAsPass, RUNAS_SIZE_IN_WCHARS);    //

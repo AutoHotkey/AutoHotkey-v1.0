@@ -405,7 +405,7 @@ HANDLE Clipboard::GetClipboardDataTimeout(UINT uFormat)
 	}
 
 #ifdef DEBUG_BY_LOGGING_CLIPBOARD_FORMATS
-	fprintf(fp, "%04X\t%s\n", uFormat, format_name);  // The program has to be closed to close/release the file.
+	fprintf(fp, "%04X\t%s\n", uFormat, format_name);  // Since fclose() is never called, the program has to exit to close/release the file.
 #endif
 
 	HANDLE h;

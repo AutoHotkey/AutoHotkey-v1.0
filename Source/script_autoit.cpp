@@ -1866,7 +1866,7 @@ bool Line::Util_DoesFileExist(const char *szFilename)  // Returns true if file o
 		WIN32_FIND_DATA	wfd;
 		HANDLE			hFile;
 
-	    hFile = FindFirstFile(szFilename, &wfd);
+		hFile = FindFirstFile(szFilename, &wfd);
 
 		if ( hFile == INVALID_HANDLE_VALUE )
 			return false;

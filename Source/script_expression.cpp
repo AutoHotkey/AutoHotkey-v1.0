@@ -69,7 +69,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 
 	// The following must be defined early so that mem_count is initialized and the array is guaranteed to be
 	// "in scope" in case of early "goto" (goto substantially boosts performance and reduces code size here).
-	#define MAX_EXPR_MEM_ITEMS 100 // Hard to imagine using even a few in a typical script, let alone 100.
+	#define MAX_EXPR_MEM_ITEMS 200 // v1.0.47.01: Raised from 100 because a line consisting entirely of concat operators can exceed it.  However, there's probably not much point to going much above MAX_TOKENS/2 because then it would reach the MAX_TOKENS limit first.
 	char *mem[MAX_EXPR_MEM_ITEMS]; // No init necessary.  In most cases, it will never be used.
 	int mem_count = 0; // The actual number of items in use in the above array.
 	char *result_to_return = ""; // By contrast, NULL is used to tell the caller to abort the current thread.  That isn't done for normal syntax errors, just critical conditions such as out-of-memory.
@@ -2321,7 +2321,7 @@ end_of_infix_to_postfix:
 				// It can't be SYM_STRING because in here, both right and left are known to be numbers.
 				}
 
-				result_symbol = SYM_FLOAT; // Set default.
+				result_symbol = IS_RELATIONAL_OPERATOR(this_token.symbol) ? SYM_INTEGER : SYM_FLOAT; // Set default. v1.0.47.01: Changed relational operators to yield integers vs. floats because it's more intuitive and traditional (might also make relational operators perform better).
 				switch(this_token.symbol)
 				{
 				case SYM_ADD:      this_token.value_double = left_double + right_double; break;
@@ -2342,12 +2342,12 @@ end_of_infix_to_postfix:
 					}
 					break;
 				case SYM_EQUALCASE: // Same behavior as SYM_EQUAL for numeric operands.
-				case SYM_EQUAL:    this_token.value_double = left_double == right_double; break;
-				case SYM_NOTEQUAL: this_token.value_double = left_double != right_double; break;
-				case SYM_GT:       this_token.value_double = left_double > right_double; break;
-				case SYM_LT:       this_token.value_double = left_double < right_double; break;
-				case SYM_GTOE:     this_token.value_double = left_double >= right_double; break;
-				case SYM_LTOE:     this_token.value_double = left_double <= right_double; break;
+				case SYM_EQUAL:    this_token.value_int64 = left_double == right_double; break;
+				case SYM_NOTEQUAL: this_token.value_int64 = left_double != right_double; break;
+				case SYM_GT:       this_token.value_int64 = left_double > right_double; break;
+				case SYM_LT:       this_token.value_int64 = left_double < right_double; break;
+				case SYM_GTOE:     this_token.value_int64 = left_double >= right_double; break;
+				case SYM_LTOE:     this_token.value_int64 = left_double <= right_double; break;
 				case SYM_POWER:
 					// v1.0.44.11: With Laszlo's help, negative bases are now supported as long as the exponent is not fractional.
 					// See the other SYM_POWER higher above for more details about below.

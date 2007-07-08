@@ -8941,7 +8941,7 @@ ResultType Line::ReadClipboardFromFile(HANDLE hfile)
 		if (!ReadFile(hfile, &size, sizeof(size), &bytes_read, NULL) || bytes_read < sizeof(size))
 			break; // Leave what's already on the clipboard intact since it might be better than nothing.
 
-	    if (   !(hglobal = GlobalAlloc(GMEM_MOVEABLE, size))   ) // size==0 is okay.
+		if (   !(hglobal = GlobalAlloc(GMEM_MOVEABLE, size))   ) // size==0 is okay.
 		{
 			g_clip.Close();
 			CloseHandle(hfile);
@@ -13972,8 +13972,8 @@ struct RCCallbackFunc // Used by BIF_RegisterCallback() and related.
 	ULONG data4;	//59 84 C4 nn
 	USHORT data5;	//FF E1
 	//code ends
-	UCHAR actual_param_count; // This is the actual (not formal) number of parameters passed from the caller to the callback. Kept adjacent with the USHORT above to conserve memory due to 4-byte struct alignment.
-	bool create_new_thread; // Kept adjacent with above to conserve memory due to 4-byte struct alignment.
+	UCHAR actual_param_count; // This is the actual (not formal) number of parameters passed from the caller to the callback. Kept adjacent to the USHORT above to conserve memory due to 4-byte struct alignment.
+	bool create_new_thread; // Kept adjacent to above to conserve memory due to 4-byte struct alignment.
 	DWORD event_info; // A_EventInfo
 	Func *func; // The UDF to be called whenever the callback's caller calls callfuncptr.
 };
@@ -14159,14 +14159,14 @@ void BIF_RegisterCallback(ExprTokenType &aResultToken, ExprTokenType *aParam[], 
 	cb.callfuncptr=&funcaddrptr; // xxxx: Address of C stub.
 
 	cb.data4=0xC48359 // pop ecx -- 59 ;return address... add esp, xx -- 83 C4 xx ;stack correct (add argument to add esp, nn for stack correction).
-		+ (StrChrAny(options, "Cc") ? 0 : actual_param_count<<26);
+		+ (StrChrAny(options, "Cc") ? 0 : actual_param_count<<26);  // Recognize "C" as the "CDecl" option.
 
 	cb.data5=0xE1FF; // jmp ecx -- FF E1 ;return
 
 	cb.event_info = (aParamCount < 4) ? (DWORD)(size_t)callbackfunc : (DWORD)ExprTokenToInt64(*aParam[3]);
 	cb.func = func;
 	cb.actual_param_count = actual_param_count;
-	cb.create_new_thread = !StrChrAny(options, "Ff");
+	cb.create_new_thread = !StrChrAny(options, "Ff"); // Recognize "F" as the "fast" mode that avoids creating a new thread.
 
 	aResultToken.symbol = SYM_INTEGER; // Override the default set earlier.
 	aResultToken.value_int64 = (__int64)callbackfunc; // Yield the callable address as the result.

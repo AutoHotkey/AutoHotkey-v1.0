@@ -330,7 +330,7 @@ struct ArgStruct
 	// Above are kept adjacent to each other to conserve memory (any fields that aren't an even
 	// multiple of 4, if adjacent to each other, consume less memory due to default byte alignment
 	// setting [which helps performance]).
-	WORD length; // Keep adjacent with above so that it uses no extra memory. This member was added in v1.0.44.14 to improve runtime performance.  It relies on the fact that an arg's literal text can't be longer than LINE_SIZE.
+	WORD length; // Keep adjacent to above so that it uses no extra memory. This member was added in v1.0.44.14 to improve runtime performance.  It relies on the fact that an arg's literal text can't be longer than LINE_SIZE.
 	char *text;
 	DerefType *deref;  // Will hold a NULL-terminated array of var-deref locations within <text>.
 };
