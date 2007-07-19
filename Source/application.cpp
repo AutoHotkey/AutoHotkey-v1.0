@@ -1327,8 +1327,9 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 		// End of cases that launch new threads, such as hotkeys and GUI events.
 
 		case WM_TIMER:
-			if (msg.lParam) // Since this WM_TIMER is intended for a TimerProc, dispatch the msg instead.
-				break;
+			if (msg.lParam // This WM_TIMER is intended for a TimerProc...
+				|| msg.hwnd != g_hWnd) // ...or its intended for a window other than the main window, which implies that it doesn't belong to program internals (i.e. the script is probably using it). This fix was added in v1.0.47.02 and it also fixes the ES_NUMBER balloon bug.
+				break; // Fall through to let a later section do DispatchMessage() on it.
 			// It seems best to poll the joystick for every WM_TIMER message (i.e. every 10ms or so on
 			// NT/2k/XP).  This is because if the system is under load, it might be 20ms, 40ms, or even
 			// longer before we get a timeslice again and that is a long time to be away from the poll

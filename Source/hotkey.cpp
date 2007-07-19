@@ -596,11 +596,9 @@ bool Hotkey::CriterionFiringIsCertain(HotkeyIDType &aHotkeyIDwithFlags, bool aKe
 	if (aFireWithNoSuppress // Caller has already determined its value with certainty...
 		|| (hk.mNoSuppress & NO_SUPPRESS_SUFFIX_VARIES) != NO_SUPPRESS_SUFFIX_VARIES) // ...or its value is easy to determine, so do it now (compare to itself since it's a bitwise union).
 	{
-		// Since this hotkey has variants only of one type (tilde or non-tilde), this variant must be of that type.
-		if (!aFireWithNoSuppress) // Caller hasn't yet determined its value with certainty (currently, this statement might always be true).
-			aFireWithNoSuppress = (hk.mNoSuppress & AT_LEAST_ONE_VARIANT_HAS_TILDE); // Due to other checks, this means all variants are tilde.
-		// Since aFireWithNoSuppress has not been determined, it's possible to take advantage of the following
-		// optimization, which is especially important in cases where TitleMatchMode is "slow":
+		// Since aFireWithNoSuppress can now be easily determined for the caller (or was already determined by the caller
+		// itself), it's possible to take advantage of the following optimization, which is especially important in cases
+		// where TitleMatchMode is "slow":
 		// For performance, the following returns without having called WinExist/Active if it sees that one of this
 		// hotkey's variant's will certainly fire due to the fact that it has a non-suspended global variant.
 		// This reduces the number of situations in which double the number of WinExist/Active() calls are made
@@ -608,10 +606,20 @@ bool Hotkey::CriterionFiringIsCertain(HotkeyIDType &aHotkeyIDwithFlags, bool aKe
 		// and again upon receipt of the message for reasons explained there).
 		for (HotkeyVariant *vp = hk.mFirstVariant; vp; vp = vp->mNextVariant)
 			if (!vp->mHotCriterion && vp->mEnabled && (!g_IsSuspended || vp->mJumpToLabel->IsExemptFromSuspend()))
+			{
+				// Fix for v1.0.47.02: The following section (above "return") was moved into this block
+				// from above the for() because only when this for() returns is it certain that this
+				// hk/hotkey_id is actually the right one, and thus its attributes can be used to determine
+				// aFireWithNoSuppress for the caller.
+				// Since this hotkey has variants only of one type (tilde or non-tilde), this variant must be of that type.
+				if (!aFireWithNoSuppress) // Caller hasn't yet determined its value with certainty (currently, this statement might always be true).
+					aFireWithNoSuppress = (hk.mNoSuppress & AT_LEAST_ONE_VARIANT_HAS_TILDE); // Due to other checks, this means all variants are tilde.
 				return true;
+			}
 	}
 
-	// The following section is similar to one further below, so maintain them together:
+	// Since above didn't return, a slower method is needed to find out which variant of this hotkey (if any)
+	// should fire.
 	HotkeyVariant *vp;
 	if (vp = hk.CriterionAllowsFiring())
 	{
@@ -620,9 +628,10 @@ bool Hotkey::CriterionFiringIsCertain(HotkeyIDType &aHotkeyIDwithFlags, bool aKe
 		return true; // It found an eligible variant to fire.
 	}
 
+	// Since above didn't find any variant of the hotkey than can fire, check for other eligible hotkeys.
 	if (!(hk.mModifierVK || hk.mModifierSC || hk.mHookAction)) // Rule out those that aren't susceptible to the bug due to their lack of support for wildcards.
 	{
-		// Fix for v1.0.46.13: Although the sectio higher above found no variant to fire for the
+		// Fix for v1.0.46.13: Although the section higher above found no variant to fire for the
 		// caller-specified hotkey ID, it's possible that some other hotkey (one with a wildcard) is
 		// eligible to fire due to the eclipsing behavior of wildcard hotkeys.  For example:
 		//    #IfWinNotActive Untitled

@@ -3322,8 +3322,9 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 					return ScriptError(ERR_MISSING_CLOSE_QUOTE, item);
 
 				// Above has now found the final comma of this sub-statement (or the terminator if there is no comma).
-				char orig_char = *item_end;
-				*item_end = '\0'; // Temporarily terminate (it might already be the terminator, but that's harmless).
+				char *terminate_here = omit_trailing_whitespace(item, item_end-1) + 1; // v1.0.47.02: Fix the fact that "x=5 , y=6" would preserve the whitespace at the end of "5".  It also fixes wrongly showing a syntax error for things like: static d="xyz"  , e = 5
+				char orig_char = *terminate_here;
+				*terminate_here = '\0'; // Temporarily terminate (it might already be the terminator, but that's harmless).
 
 				if (declare_type == VAR_DECLARE_STATIC) // v1.0.46: Support simple initializers for static variables.
 				{
@@ -3341,10 +3342,10 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 						// those that do exist don't have any contents yet, so it would be pointless). So it
 						// seems best to wait until full/comprehesive support for expressions is
 						// studied/designed for both statics and parameter-default-values.
-						if (*right_side_of_operator == '"' && item_end[-1] == '"') // Quoted/literal string.
+						if (*right_side_of_operator == '"' && terminate_here[-1] == '"') // Quoted/literal string.
 						{
 							++right_side_of_operator; // Omit the opening-quote from further consideration.
-							item_end[-1] = '\0'; // Remove the close-quote from further consideration.
+							terminate_here[-1] = '\0'; // Remove the close-quote from further consideration.
 							ConvertEscapeSequences(right_side_of_operator, g_EscapeChar, false); // Raw escape sequences like `n haven't been converted yet, so do it now.
 							// Convert all pairs of quotes into single literal quotes:
 							StrReplace(right_side_of_operator, "\"\"", "\"", SCS_SENSITIVE);
@@ -3387,7 +3388,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 						return FAIL; // Above already displayed the error.
 				}
 
-				*item_end = orig_char; // Undo the temporary termination.
+				*terminate_here = orig_char; // Undo the temporary termination.
 				// Set "item" for use by the next iteration:
 				item = (*item_end == ',') // i.e. it's not the terminator and thus not the final item in the list.
 					? omit_leading_whitespace(item_end + 1)
@@ -12142,7 +12143,8 @@ ResultType Line::LineError(char *aErrorText, ResultType aErrorType, char *aExtra
 		// v1.0.47: Added a space before the colon as originally intended.  Toralf said, "With this minor
 		// change the error lexer of Scite recognizes this line as a Microsoft error message and it can be
 		// used to jump to that line."
-		printf("%s (%d) : ==> %s\n", sSourceFile[mFileIndex], mLineNumber, aErrorText); // printf() does not signifantly increase the size of the EXE, probably because it shares most of the same code with sprintf(), etc.
+		#define STD_ERROR_FORMAT "%s (%d) : ==> %s\n"
+		printf(STD_ERROR_FORMAT, sSourceFile[mFileIndex], mLineNumber, aErrorText); // printf() does not signifantly increase the size of the EXE, probably because it shares most of the same code with sprintf(), etc.
 		if (*aExtraInfo)
 			printf("     Specifically: %s\n", aExtraInfo);
 	}
@@ -12215,7 +12217,7 @@ ResultType Script::ScriptError(char *aErrorText, char *aExtraInfo) //, ResultTyp
 	if (g_script.mErrorStdOut && !g_script.mIsReadyToExecute) // i.e. runtime errors are always displayed via dialog.
 	{
 		// See LineError() for details.
-		printf("%s (%d): ==> %s\n", Line::sSourceFile[mCurrFileIndex], mCombinedLineNumber, aErrorText);
+		printf(STD_ERROR_FORMAT, Line::sSourceFile[mCurrFileIndex], mCombinedLineNumber, aErrorText);
 		if (*aExtraInfo)
 			printf("     Specifically: %s\n", aExtraInfo);
 	}
