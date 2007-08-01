@@ -574,8 +574,10 @@ numeric_literal:
 					// because load-time validation would have caught them.  And any kind of unquoted alphanumeric
 					// characters (other than "NOT", which was detected above) wouldn't have reached this point
 					// because load-time pre-parsing would have marked it as a deref/var, not raw/literal text.
-					if (toupper(op_end[-1]) == 'E' // v1.0.46.11: It looks like scientific notation...
-						&& !(cp[0] == '0' && toupper(cp[1]) == 'X')) // ... and it's not a hex number (this check avoids falsely detecting hex numbers that end in 'E' as exponents). This line fixed in v1.0.46.12.
+					if (   toupper(op_end[-1]) == 'E' // v1.0.46.11: It looks like scientific notation...
+						&& !(cp[0] == '0' && toupper(cp[1]) == 'X') // ...and it's not a hex number (this check avoids falsely detecting hex numbers that end in 'E' as exponents). This line fixed in v1.0.46.12.
+						&& !(cp[0] == '-' && cp[1] == '0' && toupper(cp[2]) == 'X') // ...and it's not a negative hex number (this check avoids falsely detecting hex numbers that end in 'E' as exponents). This line added as a fix in v1.0.47.03.
+						)
 					{
 						// Since op_end[-1] is the 'E' or an exponent, the only valid things for op_end[0] to be
 						// are + or - (it can't be a digit because the loop above would never have stopped op_end

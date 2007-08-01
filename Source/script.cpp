@@ -2146,7 +2146,7 @@ examine_line:
 			action_end = buf + buf_length; // It's done this way so that ELSE can be fully handled here; i.e. that ELSE does not have to be in the list of commands recognizable by ParseAndAddLine().
 		// The following method ensures that words or variables that start with "Else", e.g. ElseAction, are not
 		// incorrectly detected as an Else command:
-		if (strlicmp(buf, "Else", (UINT)(action_end - buf))) // "Else" is used vs. g_act[ACT_ELSE].Name for performance.
+		if (strlicmp(buf, "Else", (UINT)(action_end - buf))) // It's not an ELSE. ("Else" is used vs. g_act[ACT_ELSE].Name for performance).
 		{
 			// It's not an ELSE.  Also, at this stage it can't be ACT_EXPRESSION (such as an isolated function call)
 			// because it would have been already handled higher above.
@@ -3861,7 +3861,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 		}
 		if (!aActionType) // Above still didn't find a valid action (i.e. check aActionType again in case the above changed it).
 		{
-			if (*action_args == '(' && strchr(action_args, g_delimiter)) // v1.0.46.11: Recognize as multi-statements that start with a function, like "fn(), x:=4".
+			if (*action_args == '(') // v1.0.46.11: Recognize as multi-statements that start with a function, like "fn(), x:=4".  v1.0.47.03: Removed the following check to allow a close-brace to be followed by a comma-less function-call: strchr(action_args, g_delimiter).
 			{
 				aActionType = ACT_EXPRESSION; // Mark this line as a stand-alone expression.
 				action_args = aLineText; // Since this is a function-call followed by a comma and some other expression, use the line's full text for later parsing.

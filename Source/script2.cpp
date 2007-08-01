@@ -11644,20 +11644,24 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 			return;
 		default: // SYM_VAR or SYM_OPERAND (SYM_OPERAND is typically a numeric literal, which it seems best to support since it doesn't add any code size or adversely affect performance).
 			char *param1 = (aParam[0]->symbol == SYM_VAR) ? aParam[0]->var->Contents() : aParam[0]->marker;
-			if (IsPureNumeric(param1, false, false, false))
-			{
-				__int64 temp64 = ATOI64(param1);
-				// Due to rarity, it doesn't seem worth the code size to check it (same as the other check above):
-				//if (temp64 <= 0)
-				//{
-				//	g_ErrorLevel->Assign("-1"); // Stage 1 error: Invalid first param.
-				//	return;
-				//}
-				// Otherwise, assume it's a valid address:
-				function = (void *)temp64;
-			}
-			else // Not a pure number, so fall back to normal method of considering it to be path+name.
-				function = NULL; // Indicate that no function has been specified yet.
+			function = (IsPureNumeric(param1, false, false, false))
+				? (void *)ATOI64(param1)
+				: NULL; // Not a pure number, so fall back to normal method of considering it to be path+name.
+			// Due to rarity, the following is commented out (same as the other check above) because it
+			// doesn't seem worth the code size to check it:
+			//if (IsPureNumeric(param1, false, false, false))
+			//{
+			//	__int64 temp64 = ATOI64(param1);
+			//	if (temp64 <= 0)
+			//	{
+			//		g_ErrorLevel->Assign("-1"); // Stage 1 error: Invalid first param.
+			//		return;
+			//	}
+			//	// Otherwise, assume it's a valid address:
+			//	function = (void *)temp64;
+			//}
+			//else // Not a pure number, so fall back to normal method of considering it to be path+name.
+			//	function = NULL; // Indicate that no function has been specified yet.
 	}
 
 	// Determine the type of return value.
