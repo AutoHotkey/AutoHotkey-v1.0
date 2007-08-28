@@ -912,10 +912,9 @@ LineNumberType Script::LoadFromFile(bool aScriptWasNotspecified)
 		return LOADING_FAILED;
 
 	// Load the main script file.  This will also load any files it includes with #Include.
-	if (LoadIncludedFile(mFileSpec, false, false) != OK)
-		return LOADING_FAILED;
-
-	if (!PreparseBlocks(mFirstLine)) // Must preparse the blocks before preparsing the If/Else's further below because If/Else may rely on blocks.
+	if (   LoadIncludedFile(mFileSpec, false, false) != OK
+		|| !AddLine(ACT_EXIT) // Fix for v1.0.47.04: Add an Exit because otherwise, a script that ends in an IF-statement will crash in PreparseBlocks() because PreparseBlocks() expects every IF-statements mNextLine to be non-NULL (helps loading performance too).
+		|| !PreparseBlocks(mFirstLine)   ) // Must preparse the blocks before preparsing the If/Else's further below because If/Else may rely on blocks.
 		return LOADING_FAILED; // Error was already displayed by the above calls.
 	// ABOVE: In v1.0.47, the above may have auto-included additional files from the userlib/stdlib.
 	// That's why the above is done prior to adding the EXIT lines and other things below.
@@ -1341,7 +1340,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 								// that AND/OR aren't followed immediately by something that's obviously an operator:
 								//    and := x, and = 2 (but not and += 2 since the an operand can have a unary plus/minus).
 								// This is done for backward compatibility.  Also, it's documented that
-								// AND/OR/NOT are supported as variable names inside expressions.
+								// AND/OR/NOT aren't supported as variable names inside expressions.
 								is_continuation_line = true; // Override the default set earlier.
 						}
 						break;
@@ -1368,11 +1367,19 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 						// demand for it, might be able to look at what lies to the right of the operator's operand
 						// -- though that would produce inconsisent continuation behavior since ++Var itself still
 						// could never be a continuation line due to ambiguity).
+						//
+						// The logic here isn't smart enough to differentiate between a leading ! or - that's
+						// meant as a continuation character and one that isn't. Even if it were, it would
+						// still be ambiguous in some cases because the author's intent isn't known; for example,
+						// the leading minus sign on the second line below is ambiguous, so will probably remain
+						// a continuation character in both v1 and v2:
+						//    x := y 
+						//    -z ? a:=1 : func() 
 						if ((*next_buf == ':' || *next_buf == '+' || *next_buf == '-') && next_buf[1] == *next_buf // See above.
 							|| (*next_buf == '.' || *next_buf == '?') && !IS_SPACE_OR_TAB_OR_NBSP(next_buf[1]) // The "." and "?" operators require a space or tab after them to be legitimate.  For ".", this is done in case period is ever a legal character in var names, such as struct support.  For "?", it's done for backward compatibility since variable names can contain question marks (though "?" by itself is not considered a variable in v1.0.46).
 								&& next_buf[1] != '=' // But allow ".=" (and "?=" too for code simplicity), since ".=" is the concat-assign operator.
 							|| !strchr(CONTINUATION_LINE_SYMBOLS, *next_buf)) // Line doesn't start with a continuation char.
-							break;
+							break; // Leave is_continuation_line set to its default of false.
 						// Some of the above checks must be done before the next ones.
 						if (   !(hotkey_flag = strstr(next_buf, HOTKEY_FLAG))   ) // Without any "::", it can't be a hotkey or hotstring.
 						{

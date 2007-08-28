@@ -207,9 +207,9 @@ LRESULT CALLBACK LowLevelKeybdProc(int aCode, WPARAM wParam, LPARAM lParam)
 	// since beardboy's testing shows that NT4 receives the neutral keys like Win9x does:
 	switch (vk)
 	{
-	case VK_SHIFT: vk = (sc == SC_RSHIFT) ? VK_RSHIFT : VK_LSHIFT; break;
+	case VK_SHIFT:   vk = (sc == SC_RSHIFT)   ? VK_RSHIFT   : VK_LSHIFT; break;
 	case VK_CONTROL: vk = (sc == SC_RCONTROL) ? VK_RCONTROL : VK_LCONTROL; break;
-	case VK_MENU: vk = (sc == SC_RALT) ? VK_RMENU : VK_LMENU; break;
+	case VK_MENU:    vk = (sc == SC_RALT)     ? VK_RMENU    : VK_LMENU; break;
 	}
 
 	// Now that the above has translated VK_CONTROL to VK_LCONTROL (if necessary):
@@ -409,7 +409,7 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 				// 4) But the hook is the very thing that's supposed to release the mouse button, and it can't
 				//    until a reply is received.
 				// 5) Thus, a deadlock occurs.  So after a short but noticeable delay, the OS sees the hook as
-				//    unresponsive and bypasses it, sending the click through normally which breaks the deadlock.
+				//    unresponsive and bypasses it, sending the click through normally, which breaks the deadlock.
 				// 6) A similar situation might arise when a right-click-down is sent to the title bar or
 				//    sys-menu-icon.
 				//
@@ -1626,7 +1626,7 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 				return AllowKeyToGoToSystem;
 			// Otherwise (v1.0.44): Since there is a hotkey to fire upon release (somewhat rare under these conditions),
 			// check if any of its criteria will allow it to fire, and if so whether that variant is non-suppressed.
-			// If it is, this down-even should be non-suppressed to (for symmetry).  This check isn't 100% reliable
+			// If it is, this down-even should be non-suppressed too (for symmetry).  This check isn't 100% reliable
 			// because the active/existing windows checked by the criteria might change before the user actually
 			// releases the key, but there doesn't seem any way around that.
 			Hotkey::CriterionFiringIsCertain(this_key.hotkey_to_fire_upon_release // firing_is_certain==false under these conditions, so no need to check it.

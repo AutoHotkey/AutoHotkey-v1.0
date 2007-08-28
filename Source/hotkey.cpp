@@ -676,6 +676,8 @@ bool Hotkey::CriterionFiringIsCertain(HotkeyIDType &aHotkeyIDwithFlags, bool aKe
 	}
 
 	// Otherwise, this hotkey has no variants that can fire.  Caller wants a few things updated in that case.
+	if (!aFireWithNoSuppress) // Caller hasn't yet determined its value with certainty.
+		aFireWithNoSuppress = true; // Fix for v1.0.47.04: Added this line and the one above to fix the fact that a context-sensitive hotkey like "a UP::" would block the down-event of that key even when the right window/criteria aren't met.
 	// If this is a key-down hotkey:
 	// Leave aHotkeyToFireUponRelease set to whatever it was so that the critieria are
 	// evaluated later, at the time of release.  It seems more correct that way, though the actual

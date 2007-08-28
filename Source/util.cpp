@@ -1686,8 +1686,6 @@ LPVOID AllocInterProcMem(HANDLE &aHandle, DWORD aSize, HWND aHwnd)
 			, "VirtualAllocEx");
 		// Reason for using VirtualAllocEx(): When sending LVITEM structures to a control in a remote process, the
 		// structure and its pszText buffer must both be memory inside the remote process rather than in our own.
-		// Allocate both the LVITEM struct and its internal string buffer in one go because MyVirtualAllocEx() is
-		// probably a high overhead call:
 		mem = MyVirtualAllocEx(aHandle, NULL, aSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
 	}
 	if (!mem)

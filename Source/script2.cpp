@@ -2572,7 +2572,7 @@ ResultType Line::ControlGetListView(Var &aOutputVar, HWND aHwnd, char *aOptions)
 	// ALLOCATE INTERPROCESS MEMORY FOR TEXT RETRIEVAL
 	HANDLE handle;
 	LPVOID p_remote_lvi; // Not of type LPLVITEM to help catch bugs where p_remote_lvi->member is wrongly accessed here in our process.
-	if (   !(p_remote_lvi = AllocInterProcMem(handle, LV_REMOTE_BUF_SIZE + sizeof(LVITEM), aHwnd))   ) // Allocate the right type of memory (depending on OS type).
+	if (   !(p_remote_lvi = AllocInterProcMem(handle, LV_REMOTE_BUF_SIZE + sizeof(LVITEM), aHwnd))   ) // Allocate the right type of memory (depending on OS type). Allocate both the LVITEM struct and its internal string buffer in one go because MyVirtualAllocEx() is probably a high overhead call.
 		return OK;  // Let ErrorLevel tell the story.
 	bool is_win9x = g_os.IsWin9x(); // Resolve once for possible slight perf./code size benefit.
 
@@ -13655,8 +13655,15 @@ void BIF_Round(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 		aResultToken.symbol = SYM_STRING;
 	}
 	else
+		// Fix for v1.0.47.04: See BIF_FloorCeil() for explanation of this fix.  Currently, the only known example
+		// of when the fix is necessary is the following script in release mode (not debug mode):
+		//   myNumber  := 1043.22  ; Bug also happens with -1043.22 (negative).
+		//   myRounded1 := Round( myNumber, -1 )  ; Stores 1040 (correct).
+		//   ChartModule := DllCall("LoadLibrary", "str", "rmchart.dll")
+		//   myRounded2 := Round( myNumber, -1 )  ; Stores 1039 (wrong).
+		aResultToken.value_int64 = (__int64)(aResultToken.value_double + (aResultToken.value_double > 0 ? 0.2 : -0.2));
+		// Formerly above was: aResultToken.value_int64 = (__int64)aResultToken.value_double;
 		// Caller has set aResultToken.symbol to a default of SYM_INTEGER, so no need to set it here.
-		aResultToken.value_int64 = (__int64)aResultToken.value_double;
 }
 
 
@@ -13682,7 +13689,7 @@ void BIF_FloorCeil(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 	// integer, while for others they yield one slightly to the right.  For example, Ceil(62/61) and Floor(-4/3)
 	// yield a double that would give an incorrect answer if it were simply truncated to an integer via
 	// type casting.  The below seems to fix this without breaking the answers for other inputs (which is
-	// surprisingly harder than it seemed).
+	// surprisingly harder than it seemed).  There is a similar fix in BIF_Round().
 	aResultToken.value_int64 = (__int64)(x + (x > 0 ? 0.2 : -0.2));
 	// Caller has set aResultToken.symbol to a default of SYM_INTEGER, so no need to set it here.
 }

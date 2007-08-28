@@ -1585,7 +1585,8 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		// clicked rapidly.  Update: the usefulness of double-clicking a radio button seems to
 		// outweigh the rare cosmetic deficiency of rapidly clicking a radio button, so it seems
 		// better to provide it as a default that can be overridden via explicit option.
-		opt.style_add |= BS_MULTILINE|BS_NOTIFY;  // No WS_TABSTOP here since that is applied elsewhere depending on radio group nature.
+		// v1.0.47.04: Removed BS_MULTILINE from default because it is conditionally applied later below.
+		opt.style_add |= BS_NOTIFY;  // No WS_TABSTOP here since that is applied elsewhere depending on radio group nature.
 		if (!mInRadioGroup)
 			opt.style_add |= WS_GROUP; // Tabstop must be handled later below.
 			// The mInRadioGroup flag will be changed accordingly after the control is successfully created.
@@ -1613,9 +1614,6 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 	// Some controls also have the WS_EX_CLIENTEDGE exstyle by default because they look pretty strange
 	// without them.  This seems to be the standard default used by most applications.
 	// Note: It seems that WS_BORDER is hardly ever used in practice with controls, just parent windows.
-	case GUI_CONTROL_CHECKBOX:
-		opt.style_add |= WS_TABSTOP|BS_MULTILINE;
-		break;
 	case GUI_CONTROL_DROPDOWNLIST:
 		opt.style_add |= WS_TABSTOP|WS_VSCROLL;  // CBS_DROPDOWNLIST is forcibly applied later. WS_VSCROLL is necessary.
 		break;
@@ -1688,6 +1686,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		opt.style_add |= WS_TABSTOP|DTS_SHORTDATECENTURYFORMAT;
 		break;
 	case GUI_CONTROL_BUTTON: // v1.0.45: Removed BS_MULTILINE from default because it is conditionally applied later below.
+	case GUI_CONTROL_CHECKBOX: // v1.0.47.04: Removed BS_MULTILINE from default because it is conditionally applied later below.
 	case GUI_CONTROL_HOTKEY:
 	case GUI_CONTROL_SLIDER:
 		opt.style_add |= WS_TABSTOP;
@@ -1750,6 +1749,18 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		opt.color_bk = mBackgroundColorCtl; // Use window's global custom, control background.
 	//else leave it as invalid so that ControlSetListView/TreeView/ProgressOptions() etc. won't bother changing it.
 
+	// Change for v1.0.45 (buttons) and v1.0.47.04 (checkboxes and radios): Under some desktop themes and
+	// unusual DPI settings, it has been reported that the last letter of the control's text gets truncated
+	// and/or causes an unwanted wrap that prevents proper display of the text.  To solve this, default to
+	// "wrapping enabled" only when necessary.  One case it's usually necessary is when there's an explicit
+	// width present because then the text can automatically word-wrap to the next line if it contains any
+	// spaces/tabs/dashes (this also improves backward compatibility).
+	DWORD contains_bs_multiline_if_applicable =
+		(opt.width != COORD_UNSPECIFIED || opt.height != COORD_UNSPECIFIED
+			|| opt.row_count > 1.5 || StrChrAny(aText, "\n\r")) // Both LF and CR can start new lines.
+		? (BS_MULTILINE & ~opt.style_remove) // Add BS_MULTILINE unless it was explicitly removed.
+		: 0; // Otherwise: Omit BS_MULTILINE (unless it was explicitly added [the "0" is verified correct]) because on some unsuual DPI settings (i.e. DPIs other than 96 or 120), DrawText() sometimes yields a width that is slightly too narrow, which causes unwanted wrapping in single-line checkboxes/radios/buttons.
+
 	DWORD style = opt.style_add & ~opt.style_remove;
 	DWORD exstyle = opt.exstyle_add & ~opt.exstyle_remove;
 
@@ -1769,16 +1780,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			style = (style & ~BS_TYPEMASK) | BS_DEFPUSHBUTTON; // Done to ensure the lowest four bits are pure.
 		else
 			style &= ~BS_TYPEMASK;  // Force it to be the right type of button --> BS_PUSHBUTTON == 0
-		if (opt.width != COORD_UNSPECIFIED || opt.height != COORD_UNSPECIFIED || opt.row_count > 1.5 || StrChrAny(aText, "\n\r")) // Both LF and CR can start new lines.
-		{
-			// Above: Do the following whenever there's an explicit width present because in that case,
-			// the button text can automatically word-wrap to the next line if it contains any spaces/tabs/dashes
-			// (and thus may need BS_MULTILINE).  It's also to improve backward compatibility.
-			// v1.0.45: Under some desktop themes, it has been reported that the last letter of
-			// the button text gets truncated or causes an unwanted wrap that prevents proper display
-			// of the text.  Adding the wrap property only when necessary has been known to help.
-			style |= (BS_MULTILINE & ~opt.style_remove); // Add BS_MULTILINE unless it was explicitly removed.
-		}
+		style |= contains_bs_multiline_if_applicable;
 		break;
 	case GUI_CONTROL_CHECKBOX:
 		// Note: BS_AUTO3STATE and BS_AUTOCHECKBOX are mutually exclusive due to their overlap within
@@ -1787,6 +1789,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			style = (style & ~BS_TYPEMASK) | BS_AUTO3STATE; // Done to ensure the lowest four bits are pure.
 		else
 			style = (style & ~BS_TYPEMASK) | BS_AUTOCHECKBOX;  // Force it to be the right type of button.
+		style |= contains_bs_multiline_if_applicable; // v1.0.47.04: Added to avoid unwanted wrapping on systems with unusual DPI settings (DPIs other than 96 and 120 sometimes seem to cause a roundoff problem with DrawText()).
 		break;
 	case GUI_CONTROL_RADIO:
 		style = (style & ~BS_TYPEMASK) | BS_AUTORADIOBUTTON;  // Force it to be the right type of button.
@@ -1796,6 +1799,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		if (style & WS_GROUP && !(opt.style_remove & WS_TABSTOP))
 			style |= WS_TABSTOP;
 		// Otherwise it lacks a tabstop by default.
+		style |= contains_bs_multiline_if_applicable; // v1.0.47.04: Added to avoid unwanted wrapping on systems with unusual DPI settings (DPIs other than 96 and 120 sometimes seem to cause a roundoff problem with DrawText()).
 		break;
 	case GUI_CONTROL_DROPDOWNLIST:
 		style |= CBS_DROPDOWNLIST;  // This works because CBS_DROPDOWNLIST == CBS_SIMPLE|CBS_DROPDOWN
