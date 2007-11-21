@@ -1204,7 +1204,7 @@ char *TranslateLFtoCRLF(char *aString)
 	for (cp = aString; *cp; ++cp)
 	{
 		++length;
-		if (*cp == '\n' && (cp == aString || *(cp - 1) != '\r')) // Relies on short-circuit boolean order.
+		if (*cp == '\n' && (cp == aString || cp[-1] != '\r')) // Relies on short-circuit boolean order.
 			++naked_LF_count;
 	}
 
@@ -1220,7 +1220,7 @@ char *TranslateLFtoCRLF(char *aString)
 	char *dp = buf; // Destination.
 	for (cp = aString; *cp; ++cp)
 	{
-		if (*cp == '\n' && (cp == aString || *(cp - 1) != '\r')) // Relies on short-circuit boolean order.
+		if (*cp == '\n' && (cp == aString || cp[-1] != '\r')) // Relies on short-circuit boolean order.
 			*dp++ = '\r';  // Insert an extra CR here, then insert the '\n' normally below.
 		*dp++ = *cp;
 	}

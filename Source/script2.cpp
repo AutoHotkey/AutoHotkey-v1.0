@@ -7065,11 +7065,10 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 	g_SortNumeric = false;
 	g_SortReverse = false;
 	g_SortColumnOffset = 0;
-	bool allow_last_item_to_be_blank = false, terminate_last_item_with_delimiter = false;
-	bool sort_by_naked_filename = false;
-	bool sort_random = false;
-	bool omit_dupes = false;
-	char *cp, *end;
+	bool trailing_delimiter_indicates_trailing_blank_item = false, terminate_last_item_with_delimiter = false
+		, trailing_crlf_added_temporarily = false, sort_by_naked_filename = false, sort_random = false
+		, omit_dupes = false;
+	char *cp, *cp_end;
 
 	for (cp = aOptions; *cp; ++cp)
 	{
@@ -7096,9 +7095,9 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 			// complexity of having one take precedence over the other didn't seem worth it given rarity
 			// of errors and rarity of UDF use.
 			cp = omit_leading_whitespace(cp + 1); // Point it to the function's name.
-			if (   !(end = StrChrAny(cp, " \t"))   ) // Find space or tab, if any.
-				end = cp + strlen(cp); // Point it to the terminator instead.
-			if (   !(g_SortFunc = g_script.FindFunc(cp, end - cp))   )
+			if (   !(cp_end = StrChrAny(cp, " \t"))   ) // Find space or tab, if any.
+				cp_end = cp + strlen(cp); // Point it to the terminator instead.
+			if (   !(g_SortFunc = g_script.FindFunc(cp, cp_end - cp))   )
 				goto end; // For simplicity, just abort the sort.
 			// To improve callback performance, ensure there are no ByRef parameters (for simplicity:
 			// not even ones that have default values) among the first two parameters.  This avoids the
@@ -7107,8 +7106,11 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 				|| g_SortFunc->mParamCount > 3  // Reserve 4-or-more parameters for possible future use (to avoid breaking existing scripts if such features are ever added).
 				|| g_SortFunc->mParam[0].is_byref || g_SortFunc->mParam[1].is_byref) // Relies on short-circuit boolean order.
 				goto end; // For simplicity, just abort the sort.
-			// Otherwise, the function meets the minimum contraints (though for simplicity, optional parameters / default values, if any, aren't populated).
-			cp = end; // In the next interation (which also does a ++cp), resume looking for options after the function's name.
+			// Otherwise, the function meets the minimum contraints (though for simplicity, optional parameters
+			// (default values), if any, aren't populated).
+			// Fix for v1.0.47.05: The following line now subtracts 1 in case *cp_end=='\0'; otherwise the
+			// loop's ++cp would go beyond the terminator when there are no more options.
+			cp = cp_end - 1; // In the next interation (which also does a ++cp), resume looking for options after the function's name.
 			break;
 		case 'N':
 			g_SortNumeric = true;
@@ -7137,7 +7139,7 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 		case 'Z':
 			// By setting this to true, the final item in the list, if it ends in a delimiter,
 			// is considered to be followed by a blank item:
-			allow_last_item_to_be_blank = true;
+			trailing_delimiter_indicates_trailing_blank_item = true;
 			break;
 		case '\\':
 			sort_by_naked_filename = true;
@@ -7166,13 +7168,41 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 			++item_count;
 	size_t aContents_length = cp - aContents;
 
-	// Last item is a delimiter, which means the last item is technically a blank item.
-	// However, if the options specify not to allow that, don't count that blank item as
-	// an item:
-	if (!allow_last_item_to_be_blank && cp > aContents && *(cp - 1) == delimiter)
+	// If the last character in the unsorted list is a delimiter then technically the final item
+	// in the list is a blank item.  However, if the options specify not to allow that, don't count that
+	// blank item as an actual item (i.e. omit it from the list):
+	if (!trailing_delimiter_indicates_trailing_blank_item && cp > aContents && cp[-1] == delimiter)
 	{
-		terminate_last_item_with_delimiter = true; // So don't consider it to *be* an item.
-		--item_count;
+		terminate_last_item_with_delimiter = true; // Have a later stage add the delimiter to the end of the sorted list so that the length and format of the sorted list is the same as the unsorted list.
+		--item_count; // Indicate that the blank item at the end of the list isn't being counted as an item.
+	}
+	else // The final character isn't a delimiter or it is but there's a blank item to its right.  Either way, the following is necessary (veriifed correct).
+	{
+		if (delimiter == '\n')
+		{
+			char *first_delimiter = strchr(aContents, delimiter);
+			if (first_delimiter && first_delimiter > aContents && first_delimiter[-1] == '\r')
+			{
+				// v1.0.47.05:
+				// Here the delimiter is effectively CRLF vs. LF.  Therefore, signal a later section to append
+				// an extra CRLF to simplify the code and fix bugs that existed prior to v1.0.47.05.
+				// One such bug is that sorting "x`r`nx" in unique mode would previously produce two
+				// x's rather than one because the first x is seen to have a `r to its right but the
+				// second lacks it (due to the CRLF delimiter being simulated via LF-only).
+				//
+				// OLD/OBSOLETE comment from a section that was removed because it's now handled by this section:
+				// Check if special handling is needed due to the following situation:
+				// Delimiter is LF but the contents are lines delimited by CRLF, not just LF
+				// and the original/unsorted list's last item was not terminated by an
+				// "allowed delimiter".  The symptoms of this are that after the sort, the
+				// last item will end in \r when it should end in no delimiter at all.
+				// This happens pretty often, such as when the clipboard contains files.
+				// In the future, an option letter can be added to turn off this workaround,
+				// but it seems unlikely that anyone would ever want to.
+				trailing_crlf_added_temporarily = true;
+				terminate_last_item_with_delimiter = true; // This is done to "fool" later sections into thinking the list ends in a CRLF that doesn't have a blank item to the right, which in turn simplifies the logic and/or makes it more understandable.
+			}
+		}
 	}
 
 	if (item_count == 1) // 1 item is already sorted, and no dupes are possible.
@@ -7185,25 +7215,37 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 		// text equivalent.  Var was an environment variable: the corresponding script
 		// variable should be assigned the contents, so it will basically "take over"
 		// for the environment variable.
-		result_to_return = output_var.Assign(aContents);
+		result_to_return = output_var.Assign(aContents, (VarSizeType)aContents_length);
 		goto end;
 	}
 
-	if (g_SortFunc) // Do this here rather than earlier with the options parsing in case the function-option is present twice (unlikely, but it would be a memory leak due to strdup below).  Doing it here also avoids allocating if it isn't necessary.
+	// v1.0.47.05: It simplifies the code a lot to allocate and/or improves understandability to allocate
+	// memory for trailing_crlf_added_temporarily even though technically it's done only to make room to
+	// append the extra CRLF at the end.
+	if (g_SortFunc || trailing_crlf_added_temporarily) // Do this here rather than earlier with the options parsing in case the function-option is present twice (unlikely, but it would be a memory leak due to strdup below).  Doing it here also avoids allocating if it isn't necessary.
 	{
-		// Make a copy because an earlier stage has ensured that aContents is in the deref buffer,
-		// but that deref buffer is about to be overwritten by the execution of the script's UDF body.
-		if (   !(mem_to_free = _strdup(aContents))   ) // _strdup() is very tiny and basically just calls strlen+malloc+strcpy.
+		// When g_SortFunc!=NULL, the copy of the string is needed because an earlier stage has ensured that
+		// aContents is in the deref buffer, but that deref buffer is about to be overwritten by the
+		// execution of the script's UDF body.
+		if (   !(mem_to_free = (char *)malloc(aContents_length + 3))   ) // +1 for terminator and +2 in case of trailing_crlf_added_temporarily.
 		{
 			result_to_return = LineError(ERR_OUTOFMEM);  // Short msg. since so rare.
 			goto end;
 		}
+		memcpy(mem_to_free, aContents, aContents_length + 1); // memcpy() usually benches a little faster than strcpy().
 		aContents = mem_to_free;
+		if (trailing_crlf_added_temporarily)
+		{
+			// Must be added early so that the next stage will terminate at the \n, leaving the \r as
+			// the ending character in this item.
+			strcpy(aContents + aContents_length, "\r\n");
+			aContents_length += 2;
+		}
 	}
 
 	// Create the array of pointers that points into aContents to each delimited item.
 	// Use item_count + 1 to allow space for the last (blank) item in case
-	// allow_last_item_to_be_blank is false:
+	// trailing_delimiter_indicates_trailing_blank_item is false:
 	int unit_size = sort_random ? 2 : 1;
 	size_t item_size = unit_size * sizeof(char *);
 	char **item = (char **)malloc((item_count + 1) * item_size);
@@ -7258,8 +7300,9 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 			*item_curr = cp + 1; // Make a pointer to the next item's place in aContents.
 		}
 	}
-	// Add the last item to the count only if it wasn't disqualified earlier:
-	if (!terminate_last_item_with_delimiter)
+	// The above reset the count to 0 and recounted it.  So now re-add the last item to the count unless it was
+	// disqualified earlier. Verified correct:
+	if (!terminate_last_item_with_delimiter) // i.e. either trailing_delimiter_indicates_trailing_blank_item==true OR the final character isn't a delimiter. Either way the final item needs to be added.
 	{
 		++item_count;
 		if (sort_random) // Provide a random number for the last item.
@@ -7267,7 +7310,6 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 	}
 	else // Since the final item is not included in the count, point item_curr to the one before the last, for use below.
 		item_curr -= unit_size;
-	char *original_last_item = *item_curr;  // The location of the last item before it gets sorted.
 
 	// Now aContents has been divided up based on delimiter.  Sort the array of pointers
 	// so that they indicate the correct ordering to copy aContents into output_var:
@@ -7288,7 +7330,6 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 	}
 
 	// Set default in case original last item is still the last item, or if last item was omitted due to being a dupe:
-	char *pos_of_original_last_item_in_dest = NULL;
 	size_t i, item_count_minus_1 = item_count - 1;
 	DWORD omit_dupe_count = 0;
 	bool keep_this_item;
@@ -7322,7 +7363,7 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 				// if g_SortColumnOffset is zero, fall back to the normal dupe checking in case its
 				// ever useful to anyone.  This is done because numbers in an offset column are not supported
 				// since the extra code size doensn't seem justified given the rarity of the need.
-				keep_this_item = (ATOF(*item_curr) != ATOF(item_prev));
+				keep_this_item = (ATOF(*item_curr) != ATOF(item_prev)); // ATOF() ignores any trailing \r in CRLF mode, so no extra logic is needed for that.
 			else
 				keep_this_item = strcmp2(*item_curr, item_prev, g_SortCaseSensitive); // v1.0.43.03: Added support for locale-insensitive mode.
 				// Permutations of sorting case sensitive vs. eliminating duplicates based on case sensitivity:
@@ -7338,8 +7379,6 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 		}
 		if (keep_this_item)
 		{
-			if (*item_curr == original_last_item && i < item_count_minus_1) // i.e. If last item is still last, don't update the below.
-				pos_of_original_last_item_in_dest = dest;
 			for (source = *item_curr; *source;)
 				*dest++ = *source++;
 			// If we're at the last item and the original list's last item had a terminating delimiter
@@ -7350,47 +7389,25 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 			item_prev = *item_curr; // Since the item just processed above isn't a dupe, save this item to compare against the next item.
 		}
 		else // This item is a duplicate of the previous item.
-			++omit_dupe_count;
-			// But don't change the value of item_prev.
-	}
+		{
+			++omit_dupe_count; // But don't change the value of item_prev.
+			// v1.0.47.05: The following section fixes the fact that the "unique" option would sometimes leave
+			// a trailing delimiter at the end of the sorted list.  For example, sorting "x|x" in unique mode
+			// would formerly produce "x|":
+			if (i == item_count_minus_1 && !terminate_last_item_with_delimiter) // This is the last item and its being omitted, so remove the previous item's trailing delimiter (unless a trailing delimiter is mandatory).
+				--dest; // Remove the previous item's trailing delimiter there's nothing for it to delimit due to omission of this duplicate.
+		}
+	} // for()
+	free(item); // Free the index/pointer list used for the sort.
 
-	*dest = '\0';  // Terminate the variable's contents.
-
-	// Check if special handling is needed due to the following situation:
-	// Delimiter is LF but the contents are lines delimited by CRLF, not just LF
-	// and the original/unsorted list's last item was not terminated by an
-	// "allowed delimiter".  The symptoms of this are that after the sort, the
-	// last item will end in \r when it should end in no delimiter at all.
-	// This happens pretty often, such as when the clipboard contains files.
-	// In the future, an option letter can be added to turn off this workaround,
-	// but it seems unlikely that anyone would ever want to:
-	if (delimiter == '\n' && !terminate_last_item_with_delimiter && *(dest - 1) == '\r')
+	// Terminate the variable's contents.
+	if (trailing_crlf_added_temporarily) // Remove the CRLF only after its presence was used above to simplify the code by reducing the number of types/cases.
 	{
-		if (pos_of_original_last_item_in_dest)
-		{
-			if (cp = strchr(pos_of_original_last_item_in_dest, delimiter))  // Assign
-			{
-				// Remove the offending '\r':
-				--dest;
-				*dest = '\0';
-				// And insert it where it belongs:
-				memmove(cp + 1, cp, dest - cp + 1);  // memmove() allows source & dest to overlap.
-				*cp = '\r';
-			}
-		}
-		else if (omit_dupe_count)
-		{
-			// The item that was originally last was probably omitted from the sorted list.
-			// But in that case, it seems best to remove the final \r completely, because
-			// it doesn't belong as the final character, nor is there a place to move it
-			// to because the line it belongs with doesn't exist in the string.
-			--dest;
-			*dest = '\0';
-		}
-		//else do nothing
+		dest[-2] = '\0';
+		output_var.Length() -= 2;
 	}
-
-	free(item); // Free the memory used for the sort.
+	else
+		*dest = '\0';
 
 	if (omit_dupes)
 	{
@@ -8438,7 +8455,7 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 					// for doing it this way is that SetCurrentDirectory() requires a backslash after
 					// a root folder to succeed.  This allows a script to use SetWorkingDir to change
 					// to the selected folder before operating on each of the selected/naked filenames.
-					if (cp - file_buf == 2 && *(cp - 1) == ':') // e.g. "C:"
+					if (cp - file_buf == 2 && cp[-1] == ':') // e.g. "C:"
 					{
 						memmove(cp + 1, cp, strlen(cp) + 1); // Make room to insert backslash (since only one file was selcted, the buf is large enough).
 						*cp = '\\';
@@ -11271,7 +11288,7 @@ VarSizeType BIV_TimeIdle(char *aBuf, char *aVarName) // Called by multiple calle
 	if (!aBuf) // IMPORTANT: Conservative estimate because tick might change between 1st & 2nd calls.
 		return MAX_NUMBER_LENGTH;
 	*aBuf = '\0';  // Set default.
-	if (g_os.IsWin2000orLater()) // Checked in case the function is present but "not implemented".
+	if (g_os.IsWin2000orLater()) // Checked in case the function is present in the OS but "not implemented".
 	{
 		// Must fetch it at runtime, otherwise the program can't even be launched on Win9x/NT:
 		typedef BOOL (WINAPI *MyGetLastInputInfoType)(PLASTINPUTINFO);
@@ -12379,7 +12396,7 @@ pcre *get_compiled_regex(char *aRegEx, bool &aGetPositionsNotSubstrings, pcre_ex
 	// - Above is responsible for having set insert_pos to the cache position where the new RegEx will be stored.
 
 	// The following macro is for maintainability, to enforce the definition of "default" in multiple places.
-	// PCRE_NEWLINE_CRLF is the default rather than PCRE_NEWLINE_LF because *multiline* haystacks
+	// PCRE_NEWLINE_CRLF is the default in AutoHotkey rather than PCRE_NEWLINE_LF because *multiline* haystacks
 	// that scripts will use are expected to come from:
 	// 50%: FileRead: Uses `r`n by default, for performance)
 	// 10%: Clipboard: Normally uses `r`n (includes files copied from Explorer, text data, etc.)
@@ -12397,7 +12414,7 @@ pcre *get_compiled_regex(char *aRegEx, bool &aGetPositionsNotSubstrings, pcre_ex
 
 	// SET DEFAULT OPTIONS:
 	int pcre_options;
-	bool do_study;
+	long long do_study;
 	SET_DEFAULT_PCRE_OPTIONS
 
 	// PARSE THE OPTIONS (if any).
@@ -12416,16 +12433,14 @@ pcre *get_compiled_regex(char *aRegEx, bool &aGetPositionsNotSubstrings, pcre_ex
 		case 'U': pcre_options |= PCRE_UNGREEDY;       break; //
 		case 'X': pcre_options |= PCRE_EXTRA;          break; //
 		case '\a':pcre_options = (pcre_options & ~PCRE_NEWLINE_BITS) | PCRE_NEWLINE_ANY; break; // v1.0.46.06: alert/bell (i.e. `a) is used for PCRE_NEWLINE_ANY.
-		case '\n':                                            //
-			// Could alternatively have called this option "LF" rather than or in addition to "`n", but that
+		case '\n':pcre_options = (pcre_options & ~PCRE_NEWLINE_BITS) | PCRE_NEWLINE_LF; break; // See below.
+			// Above option: Could alternatively have called it "LF" rather than or in addition to "`n", but that
 			// seems slightly less desirable due to potential overlap/conflict with future option letters,
 			// plus the fact that `n should be pretty well known to AutoHotkey users, especially advanced ones
 			// using RegEx.  Note: `n`r is NOT treated the same as `r`n because there's a slight chance PCRE
 			// will someday support `n`r for some obscure usage (or just for symmetry/completeness).
-			pcre_options &= ~PCRE_NEWLINE_BITS; // Done this way for maintainability. It removes all newline options, which causes behavior to revert to the compile-time default (which is LF).
 			// The PCRE_NEWLINE_XXX options are valid for both compile() and exec(), but specifying it for exec()
 			// would only serve to override the default stored inside the compiled pattern (seems rarely needed).
-			break;
 		case '\r':
 			if (pat[1] == '\n') // Even though `r`n is the default, it's recognized as an option for flexibility and intuitiveness.
 			{
@@ -12601,17 +12616,20 @@ void RegExReplace(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPar
 	aResultToken.symbol = SYM_STRING;
 	aResultToken.marker = aHaystack; // v1.0.46.06: aHaystack vs. "" is the new default because it seems a much safer and more convenient to return aHaystack when an unexpected PCRE-exec error occurs (such an error might otherwise cause loss of data in scripts that don't meticulously check ErrorLevel after each RegExReplace()).
 
-	// If an output variable was provided for the count, get it and initialize it in case of early return.
-	Var *output_var_count;
-	if (output_var_count = (aParamCount > 3 && aParam[3]->symbol == SYM_VAR) ? aParam[3]->var : NULL) // SYM_VAR's Type() is always VAR_NORMAL.
-		output_var_count->Assign(0); // In case of early return, set default as "zero replacements done".
+	// If an output variable was provided for the count, resolve it early in case of early goto.
+	// Fix for v1.0.47.05: In the unlikely event that output_var_count is the same script-variable as
+	// as the haystack, needle, or replacement (i.e. the same memory), don't set output_var_count until
+	// immediately prior to returning.  Otherwise, haystack, needle, or replacement would corrupted while
+	// it's still being used here.
+	Var *output_var_count = (aParamCount > 3 && aParam[3]->symbol == SYM_VAR) ? aParam[3]->var : NULL; // SYM_VAR's Type() is always VAR_NORMAL.
+	int replacement_count = 0; // This value will be stored in output_var_count, but only at the very end due to the reason above.
 
 	// Get the replacement text (if any) from the incoming parameters.  If it was omitted, treat it as "".
 	char repl_buf[MAX_FORMATTED_NUMBER_LENGTH + 1];
 	char *replacement = (aParamCount > 2) ? ExprTokenToString(*aParam[2], repl_buf) : "";
 
 	// In PCRE, lengths and such are confined to ints, so there's little reason for using unsigned for anything.
-	int captured_pattern_count, empty_string_is_not_a_match, replacement_count, match_length, ref_num
+	int captured_pattern_count, empty_string_is_not_a_match, match_length, ref_num
 		, result_size, new_result_length, haystack_portion_length, second_iteration, substring_name_length
 		, extra_offset, pcre_options;
 	char *haystack_pos, *match_pos, *src, *src_orig, *dest, *closing_brace, char_after_dollar
@@ -12643,7 +12661,7 @@ void RegExReplace(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPar
 	// that it lies within aHaystackLength.  Also, if there are no replacements yet, haystack_pos ignores
 	// aStartingOffset because otherwise, when the first replacement occurs, any part of haystack that lies
 	// to the left of a caller-specified aStartingOffset wouldn't get copied into the result.
-	for (replacement_count = 0, empty_string_is_not_a_match = 0, haystack_pos = aHaystack
+	for (empty_string_is_not_a_match = 0, haystack_pos = aHaystack
 		;; haystack_pos = aHaystack + aStartingOffset) // See comment above.
 	{
 		// Execute the expression to find the next match.
@@ -12707,8 +12725,6 @@ void RegExReplace(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPar
 				result[result_length] = '\0'; // result!=NULL when replacement_count!=0.  Also, must terminate it unconditionally because other sections usually don't do it.
 				// Set RegExMatch()'s return value to be "result":
 				aResultToken.marker = result;  // Caller will take care of freeing result's memory.
-				if (output_var_count) // Override the default output-count of zero set earlier.
-					output_var_count->Assign(replacement_count);
 			}
 			// Section below is obsolete but is retained for its comments.
 			//else // No replacements were actually done, so just return the original string to avoid malloc+memcpy
@@ -12726,14 +12742,14 @@ void RegExReplace(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPar
 			//}
 
 			g_ErrorLevel->Assign(ERRORLEVEL_NONE); // All done, indicate success via ErrorLevel.
-			return;                                //
+			goto set_count_and_return;             //
 		}
 
 		// Otherwise:
 		if (captured_pattern_count < 0) // An error other than "no match". These seem very rare, so it seems best to abort rather than yielding a partially-converted result.
 		{
 			g_ErrorLevel->Assign(captured_pattern_count); // No error text is stored; just a negative integer (since these errors are pretty rare).
-			return; // Return vs. break to leave aResultToken.marker set to aHaystack and output_var_count set to 0, and let ErrorLevel tell the story.
+			goto set_count_and_return; // Goto vs. break to leave aResultToken.marker set to aHaystack and replacement_count set to 0, and let ErrorLevel tell the story.
 		}
 
 		// Otherwise (since above didn't return, break, or continue), a match has been found (i.e. captured_pattern_count > 0;
@@ -12946,7 +12962,8 @@ void RegExReplace(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPar
 		aStartingOffset = aOffset[1]; // In either case, set starting offset to the candidate for the next search.
 	} // for()
 
-	// All paths above should return, so execution should never reach here except through goto.
+	// All paths above should return (or goto some other label), so execution should never reach here except
+	// through goto:
 out_of_mem:
 	// Due to extreme rarity and since this is a regex execution error of sorts, use PCRE's own error code.
 	g_ErrorLevel->Assign(PCRE_ERROR_NOMEMORY);
@@ -12957,6 +12974,10 @@ out_of_mem:
 		// AND LEAVE aResultToken.marker (i.e. the final result) set to aHaystack, because the altered result is
 		// indeterminate and thus discarded.
 	}
+	// Now fall through to below so that count is set even for out-of-memory error.
+set_count_and_return:
+	if (output_var_count)
+		output_var_count->Assign(replacement_count); // v1.0.47.05: Must be done last in case output_var_count shares the same memory with haystack, needle, or replacement.
 }
 
 
@@ -13046,6 +13067,7 @@ void BIF_RegEx(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 
 	// OTHERWISE, THE CALLER PROVIDED AN OUTPUT VAR/ARRAY: Store the substrings that matched the patterns.
 	Var &output_var = *aParam[2]->var; // SYM_VAR's Type() is always VAR_NORMAL.
+	char *mem_to_free = NULL; // Set default.
 
 	if (get_positions_not_substrings) // In this mode, it's done this way to avoid creating an array if there are no subpatterns; i.e. the return value is the starting position and the array name will contain the length of what was found.
 		output_var.Assign(captured_pattern_count < 0 ? 0 : offset[1] - offset[0]); // Seems better to store length of zero rather than something non-length like -1 (after all, the return value is blank in this case, which should be used as the error indicator).
@@ -13054,11 +13076,25 @@ void BIF_RegEx(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 		if (captured_pattern_count < 0) // Failed or no match.
 			output_var.Assign(); // Make the full-pattern substring blank as a further indicator, and for convenience consistency in the script.
 		else // Greater than 0 (it can't be equal to zero because offset[] was definitely large enough).
+		{
+			// Fix for v1.0.45.07: The following check allow haystack to be the same script-variable as the
+			// output-var/array.  Unless a copy of haystack is made, any subpatterns to be populated after the
+			// entire-pattern output-var below would be corrupted.  In other words, anything that refers to the
+			// contents of haystack after the output-var has been assigned would otherwise refer to the wrong
+			// string.  Note that the following isn't done for the get_positions_not_substrings mode higher above
+			// because that mode never refers to haystack when populating its subpatterns.
+			if (pattern_count > 1 && haystack == output_var.Contents()) // i.e. there are subpatterns to be output afterward, and haystack is the same variable as the output-var that's about to be overwritten below.
+				if (mem_to_free = _strdup(haystack)) // _strdup() is very tiny and basically just calls strlen+malloc+strcpy.
+					haystack = mem_to_free;
+				//else due to the extreme rarity of running out of memory AND SIMULTANEOUSLY having output-var match
+				// haystack, continue on so that at least partial success is achieved (the only thing that will
+				// be wrong in this case is the subpatterns, if any).
 			output_var.Assign(haystack + offset[0], offset[1] - offset[0]); // It shouldn't be possible for the full-pattern match's offset to be -1, since if where here, a match on the full pattern was always found.
+		}
 	}
 
 	if (pattern_count < 2) // There are no subpatterns (only the main pattern), so nothing more to do.
-		return;
+		goto free_and_return;
 
 	// OTHERWISE, CONTINUE ON TO STORE THE SUBSTRINGS THAT MATCHED THE SUBPATTERNS (EVEN IF PCRE_ERROR_NOMATCH).
 	// For lookup performance, create a table of subpattern names indexed by subpattern number.
@@ -13152,7 +13188,7 @@ void BIF_RegEx(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 					array_item->Assign(subpat_len);
 			}
 		}
-		return;
+		goto free_and_return;
 	} // if (get_positions_not_substrings)
 
 	// Otherwise, we're in get-substring mode (not offset mode), so store the substring that matches each subpattern.
@@ -13181,6 +13217,10 @@ void BIF_RegEx(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 						array_item->Assign(); // Omit all parameters to make the var empty without freeing its memory (for performance, in case this RegEx is being used many times in a loop).
 					else
 					{
+						if (p < pattern_count-1 // i.e. there's at least one more subpattern after this one (if there weren't, making a copy of haystack wouldn't be necessary because overlap can't harm this final assignment).
+							&& haystack == array_item->Contents()) // For more comments, see similar section higher above.
+							if (mem_to_free = _strdup(haystack))
+								haystack = mem_to_free;
 						array_item->Assign(haystack + this_offset[0], this_offset[1] - this_offset[0]);
 						// Fix for v1.0.45.01: When the J option (allow duplicate named subpatterns) is in effect,
 						// PCRE returns entries for all the duplicates.  But we don't want an unmatched duplicate
@@ -13209,11 +13249,21 @@ void BIF_RegEx(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 				if (subpat_not_matched)
 					array_item->Assign(); // Omit all parameters to make the var empty without freeing its memory (for performance, in case this RegEx is being used many times in a loop).
 				else
+				{
+					if (p < pattern_count-1 // i.e. there's at least one more subpattern after this one (if there weren't, making a copy of haystack wouldn't be necessary because overlap can't harm this final assignment).
+						&& haystack == array_item->Contents()) // For more comments, see similar section higher above.
+						if (mem_to_free = _strdup(haystack))
+							haystack = mem_to_free;
 					array_item->Assign(haystack + this_offset[0], this_offset[1] - this_offset[0]);
+				}
 			}
 			//else var couldn't be created: no error reporting currently, since it basically should never happen.
 		}
 	} // for() each subpattern.
+
+free_and_return:
+	if (mem_to_free)
+		free(mem_to_free);
 }
 
 

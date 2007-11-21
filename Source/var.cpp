@@ -331,8 +331,8 @@ ResultType Var::AssignBinaryClip(Var &aSourceVar)
 
 	// In case the variable contents are incomplete or corrupted (such as having been read in from a
 	// bad file with FileRead), prevent reading beyond the end of the variable:
-	LPVOID next, binary_contents = aSourceVar.mContents;
-	LPVOID binary_contents_max = (char *)binary_contents + aSourceVar.mLength + 1; // The last acessible byte, which should be the last byte of the (UINT)0 terminator.
+	LPVOID next, binary_contents = source_var.mContents; // Fix for v1.0.47.05: Changed aSourceVar to source_var in this line and the next.
+	LPVOID binary_contents_max = (char *)binary_contents + source_var.mLength + 1; // The last acessible byte, which should be the last byte of the (UINT)0 terminator.
 	HGLOBAL hglobal;
 	LPVOID hglobal_locked;
 	UINT format;
@@ -381,6 +381,13 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aExactSize, bool aO
 // If aBuf is NULL, the variable will be set up to handle a string of at least aLength
 // in length.  In addition, if the var is the clipboard, it will be prepared for writing.
 // Any existing contents of this variable will be destroyed regardless of whether aBuf is NULL.
+// Note that aBuf's memory can safely overlap with that of this->Contents() because in that case the
+// new length of the contents will always be less than or equal to the old length, and thus no
+// reallocation/expanion is needed (such an expansion would free the source before it could be
+// written to the destination).  This is because callers pass in an aBuf that is either:
+// 1) Between this->Contents() and its terminator.
+// 2) Equal to this->Contents() but with aLength passed in as shorter than this->Length().
+//
 // Caller can omit both params to set a var to be empty-string, but in that case, if the variable
 // is of large capacity, its memory will not be freed.  This is by design because it allows the
 // caller to exploit its knowledge of whether the var's large capacity is likely to be needed
@@ -479,7 +486,7 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aExactSize, bool aO
 				else
 				{
 					if (space_needed < 9)
-						new_size = 8; // v1.0.45: Increased from 7 to 8 to exploit byte alignment in SimpleHeap.
+						new_size = 8; // v1.0.45: Increased from 7 to 8 to exploit 32-bit alignment in SimpleHeap.
 					else // space_needed <= MAX_ALLOC_SIMPLE
 						new_size = MAX_ALLOC_SIMPLE;
 				}
@@ -682,7 +689,7 @@ VarSizeType Var::Get(char *aBuf)
 		}
 		else
 		{
-			CopyMemory(aBuf, mContents, mLength); // Faster for large vars, but large vars aren't typical:
+			CopyMemory(aBuf, mContents, mLength); // Faster for large vars, but large vars aren't typical.
 			aBuf[mLength] = '\0'; // This is done as a step separate from above in case mLength is inaccurate (e.g. due to script's improper use of DllCall).
 		}
 		return mLength;
@@ -901,10 +908,9 @@ void Var::AcceptNewMem(char *aNewMem, VarSizeType aLength)
 		{
 			var.mCapacity = var.mLength + 1; // This will become the new capacity.
 			// _expand() is only about 75 bytes of uncompressed code size and probably performs very quickly
-			// when shrinking.
+			// when shrinking.  Also, MSDN implies that when shrinking, failure won't happen unless something
+			// is terribly wrong (e.g. corrupted heap).  But for robustness it is checked anyway:
 			if (   !(var.mContents = (char *)_expand(var.mContents, var.mCapacity))   )
-				// MSDN implies that when shrinking, this won't happen unless something is terribly wrong
-				// (e.g. corrupted heap).  But for robustness it is checked anyway.
 			{
 				var.mLength = 0;
 				var.mCapacity = 0;

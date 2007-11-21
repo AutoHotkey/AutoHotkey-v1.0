@@ -1522,10 +1522,42 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		mControl = realloc_temp;
 		mControlCapacity += GUI_CONTROL_BLOCK_SIZE;
 	}
-	if (aControlType == GUI_CONTROL_TAB && mTabControlCount == MAX_TAB_CONTROLS)
-		return g_script.ScriptError("Too many tab controls." ERR_ABORT); // Short msg since so rare.
-	if (aControlType == GUI_CONTROL_STATUSBAR && mStatusBarHwnd)
-		return g_script.ScriptError("Too many status bars." ERR_ABORT); // Short msg since so rare.
+
+	////////////////////////////////////////////////////////////////////////////////////////
+	// Set defaults for the various options, to be overridden individually by any specified.
+	////////////////////////////////////////////////////////////////////////////////////////
+	GuiControlType &control = mControl[mControlCount];
+	ZeroMemory(&control, sizeof(GuiControlType));
+
+	if (aControlType == GUI_CONTROL_TAB2) // v1.0.47.05: Replace TAB2 with TAB at an early stage to simplify the code.  The only purpose of TAB2 is to flag this as the new type of tab that avoids redrawing issues but has a new z-order that would break some existing scripts.
+	{
+		aControlType = GUI_CONTROL_TAB;
+		control.attrib |= GUI_CONTROL_ATTRIB_ALTBEHAVIOR; // v1.0.47.05: A means for new scripts to solve redrawing problems in tab controls at the cost of putting the tab control after its controls in the z-order.
+	}
+	if (aControlType == GUI_CONTROL_TAB)
+	{
+		if (mTabControlCount == MAX_TAB_CONTROLS)
+			return g_script.ScriptError("Too many tab controls." ERR_ABORT); // Short msg since so rare.
+		// For now, don't allow a tab control to be create inside another tab control because it raises
+		// doubt and probably would create complications.  If it ever is allowed, note that
+		// control.tab_index stores this tab control's index (0 for the first tab control, 1 for the
+		// second, etc.) -- this is done for performance reasons.
+		control.tab_control_index = MAX_TAB_CONTROLS;
+		control.tab_index = mTabControlCount; // Store its control-index to help look-up performance in other sections.
+	}
+	else if (aControlType == GUI_CONTROL_STATUSBAR)
+	{
+		if (mStatusBarHwnd)
+			return g_script.ScriptError("Too many status bars." ERR_ABORT); // Short msg since so rare.
+		control.tab_control_index = MAX_TAB_CONTROLS; // Indicate that bar isn't owned by any tab control.
+		// No need to do the following because ZeroMem did it:
+		//control.tab_index = 0; // Ignored but set for maintainability/consistency.
+	}
+	else
+	{
+		control.tab_control_index = mCurrentTabControlIndex;
+		control.tab_index = mCurrentTabIndex;
+	}
 
 	// If this is the first control, set the default margin for the window based on the size
 	// of the current font, but only if the margins haven't already been set:
@@ -1538,37 +1570,11 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		mPrevX = mMarginX;  // This makes first control be positioned correctly if it lacks both X & Y coords.
 	}
 
-	////////////////////////////////////////////////////////////////////////////////////////
-	// Set defaults for the various options, to be overridden individually by any specified.
-	////////////////////////////////////////////////////////////////////////////////////////
-	GuiControlType &control = mControl[mControlCount];
-	ZeroMemory(&control, sizeof(GuiControlType));
-	control.type = aControlType; // Improves maintainability to do this early.
-
-	if (aControlType == GUI_CONTROL_TAB)
-	{
-		// For now, don't allow a tab control to be create inside another tab control because it raises
-		// doubt and probably would create complications.  If it ever is allowed, note that
-		// control.tab_index stores this tab control's index (0 for the first tab control, 1 for the
-		// second, etc.) -- this is done for performance reasons.
-		control.tab_control_index = MAX_TAB_CONTROLS;
-		control.tab_index = mTabControlCount; // Store its control-index to help look-up performance in other sections.
-	}
-	else if (aControlType == GUI_CONTROL_STATUSBAR)
-	{
-		control.tab_control_index = MAX_TAB_CONTROLS; // Indicate that bar isn't owned by any tab control.
-		// No need to do the following because ZeroMem did it:
-		//control.tab_index = 0; // Ignored but set for maintainability/consistency.
-	}
-	else
-	{
-		control.tab_control_index = mCurrentTabControlIndex;
-		control.tab_index = mCurrentTabIndex;
-	}
+	control.type = aControlType; // Improves maintainability to do this early, but must be done after TAB2 vs. TAB is resolved higher above.
 	GuiControlOptionsType opt;
 	ControlInitOptions(opt, control);
 	// aOpt.checked is already okay since BST_UNCHECKED == 0
-	// Similarly, the zero-init above also set the right values for password_char, new_section, etc.
+	// Similarly, the zero-init of "control" higher above set the right values for password_char, new_section, etc.
 
 	/////////////////////////////////////////////////
 	// Set control-specific defaults for any options.
@@ -2503,8 +2509,9 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			// top of the z-order).
 			// The below is OBSOLETE and its code further below is commented out:
 			// Facts about how overlapping controls are drawn vs. which one receives mouse clicks:
-			// 1) The first control created is at the top of the Z-order, the second is next, and so on.
-			// 2) Controls get drawn in order based on their Z-order (i.e. the first control is drawn first
+			// 1) The first control created is at the top of the Z-order (i.e. the lowest z-order number
+			//    and the first in tab navigation), the second is next, and so on.
+			// 2) Controls get drawn in ascending Z-order (i.e. the first control is drawn first
 			//    and any later controls that overlap are drawn on top of it, except for controls that
 			//    have WS_CLIPSIBLINGS).
 			// 3) When a user clicks a point that contains two overlapping controls and each control is
@@ -2519,7 +2526,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			//    flexible to allow the order in which the controls were created to determine how they
 			//    overlap and which one get the clicks.
 			//
-			// Rather push static pictures to the top in the reverse order they were created -- 
+			// Rather than push static pictures to the top in the reverse order they were created -- 
 			// which might be a little more intuitive since the ones created first would then always
 			// be "behind" ones created later -- for simplicity, we do it here at the time the control
 			// is created.  This avoids complications such as a picture being added after the
@@ -3412,9 +3419,9 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			//InvalidateRect(control.hwnd, NULL, TRUE);  // TRUE is required, at least for GUI_CONTROL_DATETIME.
 			GetWindowRect(control.hwnd, &rect);
 			MapWindowPoints(NULL, mHwnd, (LPPOINT)&rect, 2); // Convert rect to client coordinates (not the same as GetClientRect()).
-			InvalidateRect(mHwnd, &rect, FALSE); // Seems safer to use TRUE, not knowing all possible overlaps, etc.
+			InvalidateRect(mHwnd, &rect, FALSE);
 		}
-		if (owning_tab_control->attrib & GUI_CONTROL_ATTRIB_ALTBEHAVIOR)
+		if (owning_tab_control->attrib & GUI_CONTROL_ATTRIB_ALTBEHAVIOR) // Put the tab control after the newly added control. See comment higher above.
 			SetWindowPos(owning_tab_control->hwnd, control.hwnd, 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
 	}
 

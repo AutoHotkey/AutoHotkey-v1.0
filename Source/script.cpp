@@ -2911,8 +2911,8 @@ inline ResultType Script::IsDirective(char *aBuf)
 	{
 		if (parameter)
 		{
-			if (   *parameter == '#' || *parameter == g_EscapeChar || *parameter == g_delimiter || *parameter == '.'
-				|| (g_CommentFlagLength == 1 && *parameter == *g_CommentFlag)   )
+			if (   *parameter == g_EscapeChar || *parameter == g_delimiter || *parameter == '.'
+				|| (g_CommentFlagLength == 1 && *parameter == *g_CommentFlag)   ) // Fix for v1.0.47.05: Allow deref char to be # as documented.
 				return ScriptError(ERR_PARAM1_INVALID, aBuf);
 			g_DerefChar = *parameter;
 		}
@@ -6630,7 +6630,7 @@ Func *Script::FindFuncInLibrary(char *aFuncName, size_t aFuncNameLength, bool &a
 			SetWorkingDir(sLib[i].path); // See similar section in the #Include directive.
 			*terminate_here = '\\'; // Undo the termination.
 
-			if (!LoadIncludedFile(sLib[i].path, true, false)) // For performance, pass true for allow-dupe so that it doesn't have to check for a duplicate file (seems too rare to worry about duplicates since by definition, the function doesn't yet exist so it's file shouldn't yet be included).
+			if (!LoadIncludedFile(sLib[i].path, false, false)) // Fix for v1.0.47.05: Pass false for allow-dupe because otherwise, it's possible for a stdlib file to attempt to include itself (especially via the LibNamePrefix_ method) and thus give a misleading "duplicate function" vs. "func does not exist" error message.  Obsolete: For performance, pass true for allow-dupe so that it doesn't have to check for a duplicate file (seems too rare to worry about duplicates since by definition, the function doesn't yet exist so it's file shouldn't yet be included).
 			{
 				aErrorWasShown = true; // Above has just displayed its error (e.g. syntax error in a line, failed to open the include file, etc).  So override the default set earlier.
 				return NULL;

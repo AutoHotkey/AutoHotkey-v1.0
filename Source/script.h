@@ -478,7 +478,7 @@ enum GuiControlTypes {GUI_CONTROL_INVALID // GUI_CONTROL_INVALID must be zero du
 	, GUI_CONTROL_DROPDOWNLIST, GUI_CONTROL_COMBOBOX
 	, GUI_CONTROL_LISTBOX, GUI_CONTROL_LISTVIEW, GUI_CONTROL_TREEVIEW
 	, GUI_CONTROL_EDIT, GUI_CONTROL_DATETIME, GUI_CONTROL_MONTHCAL, GUI_CONTROL_HOTKEY
-	, GUI_CONTROL_UPDOWN, GUI_CONTROL_SLIDER, GUI_CONTROL_PROGRESS, GUI_CONTROL_TAB
+	, GUI_CONTROL_UPDOWN, GUI_CONTROL_SLIDER, GUI_CONTROL_PROGRESS, GUI_CONTROL_TAB, GUI_CONTROL_TAB2
 	, GUI_CONTROL_STATUSBAR}; // Kept last to reflect it being bottommost in switch()s (for perf), since not too often used.
 
 enum ThreadCommands {THREAD_CMD_INVALID, THREAD_CMD_PRIORITY, THREAD_CMD_INTERRUPT, THREAD_CMD_NOTIMERS};
@@ -1400,6 +1400,7 @@ public:
 		if (!stricmp(aBuf, "Slider")) return GUI_CONTROL_SLIDER;
 		if (!stricmp(aBuf, "Progress")) return GUI_CONTROL_PROGRESS;
 		if (!stricmp(aBuf, "Tab")) return GUI_CONTROL_TAB;
+		if (!stricmp(aBuf, "Tab2")) return GUI_CONTROL_TAB2; // v1.0.47.05: Used only temporarily: becomes TAB vs. TAB2 upon creation.
 		if (!stricmp(aBuf, "GroupBox")) return GUI_CONTROL_GROUPBOX;
 		if (!stricmp(aBuf, "Pic") || !stricmp(aBuf, "Picture")) return GUI_CONTROL_PIC;
 		if (!stricmp(aBuf, "DateTime")) return GUI_CONTROL_DATETIME;

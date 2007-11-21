@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.47.04"
+#define NAME_VERSION "1.0.47.05"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -195,7 +195,7 @@ struct ExprTokenType  // Something in the compiler hates the name TokenType, so 
 				Var *var;         // for SYM_VAR
 				char *marker;     // for SYM_STRING and SYM_OPERAND.
 			};
-			char *buf; // This doesn't increase the total size of the struct. It's Used by built-in functions and perhaps other misc. purposes.
+			char *buf; // This doesn't increase the total size of the struct. It's used by built-in functions and perhaps other misc. purposes.
 		};  
 	};
 	// Note that marker's str-length should not be stored in this struct, even though it might be readily
