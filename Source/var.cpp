@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2007 Chris Mallett (support@autohotkey.com)
+Copyright 2003-2008 Chris Mallett (support@autohotkey.com)
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -990,6 +990,7 @@ void Var::Backup(VarBkp &aVarBkp)
 	aVarBkp.mCapacity = mCapacity;
 	aVarBkp.mHowAllocated = mHowAllocated; // This might be ALLOC_SIMPLE or ALLOC_NONE if backed up variable was at the lowest layer of the call stack.
 	aVarBkp.mAttrib = mAttrib;
+	aVarBkp.mType = mType; // Fix for v1.0.47.06: Must also back up and restore mType in case an optional ByRef parameter is omitted by one call by specified by another thread that interrupts the first thread's call.
 	// Once the backup is made, Free() is not called because the whole point of the backup is to
 	// preserve the original memory/contents of each variable.  Instead, clear the variable
 	// completely and set it up to become ALLOC_MALLOC in case anything actually winds up using
@@ -1033,6 +1034,7 @@ void Var::FreeAndRestoreFunctionVars(Func &aFunc, VarBkp *&aVarBackup, int &aVar
 			var.mCapacity = bkp.mCapacity;
 			var.mHowAllocated = bkp.mHowAllocated; // This might be ALLOC_SIMPLE or ALLOC_NONE if backed up variable was at the lowest layer of the call stack.
 			var.mAttrib = bkp.mAttrib;
+			var.mType = bkp.mType;
 		}
 		free(aVarBackup);
 		aVarBackup = NULL; // Some callers want this reset; it's an indicator of whether the next function call in this expression (if any) will have a backup.

@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2007 Chris Mallett (support@autohotkey.com)
+Copyright 2003-2008 Chris Mallett (support@autohotkey.com)
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -699,6 +699,21 @@ double_deref: // Caller has set cp to be start and op_end to be the character af
 		infix[infix_count].var = (Var *)deref_alloca; // Postfix evaluation uses this to build the variable's name dynamically.
 
 		target += op_end - cp; // Must be done only after the above, since it uses the old value of target.
+		if (*op_end == '(') // i.e. dynamic function call 
+		{
+			if (infix_count > MAX_TOKENS - 2) // No room for the following symbol to be added (plus the ++infix done that will be done by the outer loop).
+				goto abnormal_end;
+			++infix_count;
+			// As a result of a prior loop, deref_start = the null-marker deref which terminates the deref list. 
+			deref_start->is_function = true;
+			// param_count was set when the derefs were parsed. 
+			deref_start->param_count = deref_alloca->param_count;
+			infix[infix_count].symbol = SYM_FUNC;
+			infix[infix_count].deref = deref_start;
+			// postfix processing of SYM_DYNAMIC will update deref->func before SYM_FUNC is processed.
+		}
+		else
+			deref_start->is_function = false;
 		*target++ = '\0'; // Terminate the name, which looks something like "Array%i%".
 		cp = op_end; // Must be done only after above is done using cp: Set things up for the next iteration.
 		// The outer loop will now do ++infix for us.
@@ -1144,6 +1159,21 @@ end_of_infix_to_postfix:
 					// Terminate the buffer, even if nothing was written into it:
 					left_buf[var_name_length] = '\0';
 
+					// As a result of a prior loop, deref = the null-marker deref which terminates the deref list.
+					// is_function is set by the infix processing code.
+					if (deref->is_function)
+					{
+						// Traditionally, expressions don't display any runtime errors.  So if the function is being
+						// called incorrectly by the script, the expression is aborted like it would be for other
+						// syntax errors.
+						if (   !(deref->func = g_script.FindFunc(left_buf, var_name_length)) // Below relies on short-circuit boolean order, with this line being executed first.
+							|| deref->param_count > deref->func->mParamCount    // param_count was set by the
+							|| deref->param_count < deref->func->mMinParams   ) // infix processing code.
+							goto abnormal_end;
+						// The SYM_FUNC following this SYM_DYNAMIC uses the same deref as above.
+						continue;
+					}
+
 					// In v1.0.31, FindOrAddVar() vs. FindVar() is called below to support the passing of non-existent
 					// array elements ByRef, e.g. Var:=MyFunc(Array%i%) where the MyFunc function's parameter is
 					// defined as ByRef, would effectively create the new element Array%i% if it doesn't already exist.
@@ -1425,9 +1455,15 @@ end_of_infix_to_postfix:
 							// (though currently, only a double deref that resolves to a built-in variable
 							// would be able to get this far to trigger this error, because something like
 							// func(Array%VarContainingSpaces%) would have been caught at an earlier stage above.
-							LineError(ERR_BYREF ERR_ABORT, FAIL, func.mParam[j].var->mName);
+							// UPDATE: In v1.0.47.06, a dynamic function call won't have validated at loadtime
+							// that its parameters are the right type (since the formal definition of the function
+							// won't be known until runtime).  So it seems best to treat this as a failed expression
+							// rather than aborting the current thread.
+							//LineError(ERR_BYREF ERR_ABORT, FAIL, func.mParam[j].var->mName);
+							//Var::FreeAndRestoreFunctionVars(func, var_backup, var_backup_count);
+							//goto abort;
 							Var::FreeAndRestoreFunctionVars(func, var_backup, var_backup_count);
-							goto abort;
+							goto abnormal_end;
 						}
 						func.mParam[j].var->UpdateAlias(token.var); // Make the formal parameter point directly to the actual parameter's contents.
 					}

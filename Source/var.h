@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2007 Chris Mallett (support@autohotkey.com)
+Copyright 2003-2008 Chris Mallett (support@autohotkey.com)
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -67,9 +67,9 @@ struct VarBkp // This should be kept in sync with any changes to the Var class. 
 	VarSizeType mCapacity;
 	AllocMethodType mHowAllocated;
 	VarAttribType mAttrib;
+	VarTypeType mType;
 	// Not needed in the backup:
 	//bool mIsLocal;
-	//VarTypeType mType;
 	//char *mName;
 };
 

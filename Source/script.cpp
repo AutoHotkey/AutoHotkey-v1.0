@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2007 Chris Mallett (support@autohotkey.com)
+Copyright 2003-2008 Chris Mallett (support@autohotkey.com)
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -427,15 +427,9 @@ ResultType Script::CreateWindows()
 	HMENU menu = GetMenu(g_hWnd);
 	// Disable the Edit menu item, since it does nothing for a compiled script:
 	EnableMenuItem(menu, ID_FILE_EDITSCRIPT, MF_DISABLED | MF_GRAYED);
-	if (!g_AllowMainWindow)
-	{
-		EnableMenuItem(menu, ID_VIEW_KEYHISTORY, MF_DISABLED | MF_GRAYED);
-		EnableMenuItem(menu, ID_VIEW_LINES, MF_DISABLED | MF_GRAYED);
-		EnableMenuItem(menu, ID_VIEW_VARIABLES, MF_DISABLED | MF_GRAYED);
-		EnableMenuItem(menu, ID_VIEW_HOTKEYS, MF_DISABLED | MF_GRAYED);
-		// But leave the ID_VIEW_REFRESH menu item enabled because if the script contains a
-		// command such as ListLines in it, Refresh can be validly used.
-	}
+	EnableOrDisableViewMenuItems(menu, MF_DISABLED | MF_GRAYED); // Fix for v1.0.47.06: No point in checking g_AllowMainWindow because the script hasn't starting running yet, so it will always be false.
+	// But leave the ID_VIEW_REFRESH menu item enabled because if the script contains a
+	// command such as ListLines in it, Refresh can be validly used.
 #endif
 
 	if (    !(g_hWndEdit = CreateWindow("edit", NULL, WS_CHILD | WS_VISIBLE | WS_BORDER
@@ -507,6 +501,16 @@ ResultType Script::CreateWindows()
 		mNextClipboardViewer = SetClipboardViewer(g_hWnd);
 
 	return OK;
+}
+
+
+
+void Script::EnableOrDisableViewMenuItems(HMENU aMenu, UINT aFlags)
+{
+	EnableMenuItem(aMenu, ID_VIEW_KEYHISTORY, aFlags);
+	EnableMenuItem(aMenu, ID_VIEW_LINES, aFlags);
+	EnableMenuItem(aMenu, ID_VIEW_VARIABLES, aFlags);
+	EnableMenuItem(aMenu, ID_VIEW_HOTKEYS, aFlags);
 }
 
 
@@ -4930,8 +4934,11 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 						// avoids the function call in those cases:
 						if (strchr(op_begin, g_DerefChar)) // This operand contains at least one double dereference.
 						{
-							if (is_function)
-								return ScriptError("Dynamic function calls are not supported.", op_begin);
+							// v1.0.47.06: Dynamic function calls are now supported.
+							//if (is_function)
+							//	return ScriptError("Dynamic function calls are not supported.", op_begin);
+							int first_deref = deref_count;
+
 							// The derefs are parsed and added to the deref array at this stage (on a
 							// per-operand basis) rather than all at once for the entire arg because
 							// the deref array must be ordered according to the physical position of
@@ -4943,6 +4950,41 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 							// And now leave this operand "raw" so that it will later be dereferenced again.
 							// In the following example, i made into a deref but the result (Array33) must be
 							// dereferenced during a second stage at runtime: if (x = Array%i%).
+
+							if (is_function)
+							{
+								int param_count = 0;
+								// Determine how many parameters there are.
+								cp = omit_leading_whitespace(op_end + 1);
+								if (*cp != ')')
+								{
+									int open_parens;
+									bool in_quote = false;
+									for (++param_count, open_parens = 1; *cp && open_parens; ++cp)
+									{
+										if (*cp == '"')
+											in_quote = !in_quote;
+										if (in_quote)
+											continue;
+										switch (*cp)
+										{
+										case '(':
+											++open_parens;
+											break;
+										case ')':
+											--open_parens;
+											break;
+										case ',':
+											if (open_parens == 1)
+												++param_count;
+											break;
+										}
+									}
+								}
+								// Store param_count in the first deref. This will be picked up by the expression
+								// infix processing code.
+								deref[first_deref].param_count = param_count;
+							}
 						}
 						else // This operand is a variable name or function name (single deref).
 						{

@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2006 Chris Mallett (support@autohotkey.com)
+Copyright 2003-2008 Chris Mallett (support@autohotkey.com)
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -46,11 +46,11 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	#ifdef _DEBUG
 		//char *script_filespec = "C:\\Util\\AutoHotkey.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\GUI Demo.ahk";
-		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\MAIN.ahk";
+		char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\MAIN.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\Expressions.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\Line Continuation.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\DllCall.ahk";
-		char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\RegExMatch & RegExReplace.ahk";
+		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\RegExMatch & RegExReplace.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\Win commands, all cases.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\GUI Date.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\GUI ListView.ahk";

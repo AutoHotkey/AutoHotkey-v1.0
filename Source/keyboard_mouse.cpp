@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2007 Chris Mallett (support@autohotkey.com)
+Copyright 2003-2008 Chris Mallett (support@autohotkey.com)
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -2685,7 +2685,7 @@ void SendEventArray(int &aFinalKeyDelay, modLR_type aModsDuringSend)
 	// Furthermore, the hook (if present) continues to operate during journal playback, so it
 	// will keep its own modifiers up-to-date if any physical or simulate keystrokes happen to
 	// come in during playback (such keystrokes arrive in the hook in real time, but they don't
-	// actually hit the active window until the playback finishes.
+	// actually hit the active window until the playback finishes).
 }
 
 

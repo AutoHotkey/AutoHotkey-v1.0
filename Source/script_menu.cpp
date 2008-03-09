@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2007 Chris Mallett (support@autohotkey.com)
+Copyright 2003-2008 Chris Mallett (support@autohotkey.com)
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -179,6 +179,7 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 		if (!g_AllowMainWindow)
 		{
 			g_AllowMainWindow = true;
+			EnableOrDisableViewMenuItems(GetMenu(g_hWnd), MF_ENABLED); // Added as a fix in v1.0.47.06.
 			// Rather than using InsertMenu() to insert the item in the right position,
 			// which makes the code rather unmaintainable, it seems best just to recreate
 			// the entire menu.  This will result in the standard menu items going back
@@ -198,6 +199,7 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 		if (g_AllowMainWindow)
 		{
 			g_AllowMainWindow = false;
+			EnableOrDisableViewMenuItems(GetMenu(g_hWnd), MF_DISABLED | MF_GRAYED); // Added as a fix in v1.0.47.06.
 			// See comments in the prior case above for why it's done this way vs. using DeleteMenu():
 			if (mTrayMenu->mIncludeStandardItems)
 				mTrayMenu->Destroy(); // It will be recreated automatically the next time the user displays it.

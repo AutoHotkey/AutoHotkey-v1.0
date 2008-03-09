@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2007 Chris Mallett (support@autohotkey.com)
+Copyright 2003-2008 Chris Mallett (support@autohotkey.com)
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -1834,7 +1834,7 @@ public:
 	// override in the script.  So mIsBuiltIn should always be used to determine whether the function
 	// is truly built-in, not its name.
 
-	ResultType Call(char *&aReturnValue) // Making this a function vs. inline doesn't measurable impact performance.
+	ResultType Call(char *&aReturnValue) // Making this a function vs. inline doesn't measurably impact performance.
 	{
 		aReturnValue = ""; // Init to default in case function doesn't return a value or it EXITs or fails.
 		// Launch the function similar to Gosub (i.e. not as a new quasi-thread):
@@ -2431,6 +2431,7 @@ public:
     
 	ResultType Init(char *aScriptFilename, bool aIsRestart);
 	ResultType CreateWindows();
+	void EnableOrDisableViewMenuItems(HMENU aMenu, UINT aFlags);
 	void CreateTrayIcon();
 	void UpdateTrayIcon(bool aForceUpdate = false);
 	ResultType AutoExecSection();

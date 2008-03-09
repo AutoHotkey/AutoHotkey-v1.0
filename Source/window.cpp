@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2007 Chris Mallett (support@autohotkey.com)
+Copyright 2003-2008 Chris Mallett (support@autohotkey.com)
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -1554,7 +1554,7 @@ ResultType WindowSearch::SetCriteria(global_struct &aSettings, char *aTitle, cha
 			// Besides, even if it's possible for a class name to start with a space, a RegEx dot or other symbol
 			// can be used to match it via SetTitleMatchMode RegEx.
 			strlcpy(mCriterionClass, omit_leading_whitespace(cp), sizeof(mCriterionClass)); // Copy all of the remaining string to simplify the below.
-			for (cp = mCriterionClass; cp = strstr(cp, "ahk_"); cp += 4)
+			for (cp = mCriterionClass; cp = strcasestr(cp, "ahk_"); cp += 4)  // Fix for v1.0.47.06: strstr() changed to strcasestr() for consistency with the other sections.
 			{
 				// This loop truncates any other criteria from the class criteria.  It's not a complete
 				// solution because it doesn't validate that what comes after the "ahk_" string is a

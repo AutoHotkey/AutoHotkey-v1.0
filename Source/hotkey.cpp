@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2007 Chris Mallett (support@autohotkey.com)
+Copyright 2003-2008 Chris Mallett (support@autohotkey.com)
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -1578,7 +1578,7 @@ char *Hotkey::TextToModifiers(char *aText, Hotkey *aThisHotkey, HotkeyProperties
 // Checks only the first char(s) for modifiers in case these characters appear elsewhere (e.g. +{+}).
 // But come to think of it, +{+} isn't valid because + itself is already shift-equals.  So += would be
 // used instead, e.g. +==action.  Similarly, all the others, except =, would be invalid as hotkeys also.
-// UPDATE: On some keyboard layouts, the + key (and various others) don't require the shift key to be
+// UPDATE: On some keyboard layouts, the + key and various others don't require the shift key to be
 // manifest.  Thus, on these systems a hotkey such as ^+:: is now supported as meaning Ctrl-Plus.
 {
 	// Init output parameter for caller if it gave one:
@@ -2001,7 +2001,7 @@ Hotkey *Hotkey::FindHotkeyByTrueNature(char *aName, bool &aSuffixHasTilde)
 // 1) Catches script bugs, such as unintended duplicates.
 // 2) Allows a script to use the Hotkey command more precisely and with greater functionality.
 // 3) Allows hotkey variants to work correctly even when the order of modifiers varies.  For example, if ^!c is a hotkey that fires
-//    only when window type 1 is active and !^c (reversed modifiers) is a hotkey that firesly only when window type 2 is active,
+//    only when window type 1 is active and !^c (reversed modifiers) is a hotkey that fires only when window type 2 is active,
 //    one of them would never fire because the hook isn't capable or storing two hotkey IDs for the same combination of
 //    modifiers+VK/SC.
 {
