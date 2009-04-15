@@ -47,7 +47,7 @@ Script::Script()
 	, mFirstTimer(NULL), mLastTimer(NULL), mTimerEnabledCount(0), mTimerCount(0)
 	, mFirstMenu(NULL), mLastMenu(NULL), mMenuCount(0)
 	, mVar(NULL), mVarCount(0), mVarCountMax(0), mLazyVar(NULL), mLazyVarCount(0)
-	, mOpenBlockCount(0), mNextLineIsFunctionBody(false)
+	, mCurrentFuncOpenBlockCount(0), mNextLineIsFunctionBody(false)
 	, mFuncExceptionVar(NULL), mFuncExceptionVarCount(0)
 	, mCurrFileIndex(0), mCombinedLineNumber(0), mNoHotkeyLabels(true), mMenuUseErrorLevel(false)
 	, mFileSpec(""), mFileDir(""), mFileName(""), mOurEXE(""), mOurEXEDir(""), mMainWindowTitle("")
@@ -1786,7 +1786,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 		// By doing the following section prior to checking for hotkey and hotstring labels, double colons do
 		// not need to be escaped inside naked function calls and function definitions such as the following:
 		// fn("::")      ; Function call.
-		// fn(Str="::")  ; Function definition with default value for its param (though technically, strings other than "" aren't yet supported).
+		// fn(Str="::")  ; Function definition with default value for its parameter.
 		if (IsFunction(buf, &pending_function_has_brace)) // If true, it's either a function definition or a function call (to be distinguished later).
 		{
 			// Defer this line until the next line comes in, which helps determine whether this line is
@@ -5179,10 +5179,10 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				if (deref_count == 1 && Var::ValidateName(this_new_arg.text, false, DISPLAY_NO_ERROR)) // Single isolated deref.
 				{
 					// ACT_WHILE performs less than 4% faster as a non-expression in these cases, and keeping
-					// it as an expression avoids an extra check in a critical spot of ExpandArgs (near
-					// mActionType <= ACT_LAST_OPTIMIZED_IF).
-					if (aActionType != ACT_WHILE)
-						this_new_arg.is_expression = false;
+					// it as an expression avoids an extra check in a performance-sensitive spot of ExpandArgs
+					// (near mActionType <= ACT_LAST_OPTIMIZED_IF).
+					if (aActionType != ACT_WHILE) // If it is ACT_WHILE, it would be something like "while x" in this case. Keep those as expressions for the reason above.
+						this_new_arg.is_expression = false; // In addition to being an optimization, doing this might also be necessary for things like "Var := ClipboardAll" to work properly.
 					// But if aActionType is ACT_ASSIGNEXPR, it's left as ACT_ASSIGNEXPR vs. ACT_ASSIGN
 					// because it might be necessary to avoid having AutoTrim take effect for := (which
 					// it never should).  In addition, ACT_ASSIGNEXPR probably performs better than
@@ -5215,9 +5215,14 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					// Also, the first deref (indeed, all of them) should point to a percent sign, since
 					// there should not be any way for non-percent derefs to get mixed in with cases
 					// 2 or 3.
-					if (!deref[0].is_function && *deref[0].marker == g_DerefChar) // This appears to be case #2 or #3.
+					if (!deref[0].is_function && *deref[0].marker == g_DerefChar // This appears to be case #2 or #3.
+						&& aActionType != ACT_WHILE) // Nearly doubles the speed of "while %x%" and "while Array%i%" to leave WHILE as an expression.  But y:=%x% and y:=Array%i% are about the same speed either way, and "if %x%" never reaches this point because for compatibility(?), it's the same as "if x".
 					{
-						// Set it up so that x:=Array%i% behaves the same as StringTrimRight, Out, Array%i%, 0.
+						// The comment below is probably obsolete -- and perhaps so is this entire optimization
+						// because expressions are faster now.  But in case it's necessary for anything related
+						// to backward compatibility, it's kept (it may also reduce memory utilization a little
+						// because it avoids making simple things into expressions, which require extra memory).
+						// OLD: Set it up so that x:=Array%i% behaves the same as StringTrimRight, Out, Array%i%, 0.
 						this_new_arg.is_expression = false;
 						this_new_arg.type = ARG_TYPE_INPUT_VAR;
 					}
@@ -5326,13 +5331,19 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				&& !((aActionType == ACT_ASSIGN || aActionType == ACT_ASSIGNEXPR) // Only these need extra checking because the display format of the number doesn't matter for ADD/SUB/IFEQUAL/IFGREATER/etc. because they treat anything that looks like a number (any format) as a pure number.
 					&& (
 							   *new_raw_arg2 == '0' || *new_raw_arg2 == '+' // Assign hex or any unusually-formatted integers the old way so that the format is retained in case its important to the operation of the script (e.g. x:="005", x:=005, x:="0x5", x:="+5", x:=+5).
-							|| new_arg[1].length > MAX_INTEGER_LENGTH // Integers that are too long are probably intended to be a series of characters/digits, so assign them the old way to keep all of the digits.
+							|| new_arg[1].length > 18 // See below.
+							// Integers that are too long are probably intended to be a series of characters/digits,
+							// so assign them the old way to keep all of the digits.  Fix for v1.0.48.01: Reduced the
+							// limit from MAX_INTEGER_LENGTH (20) to 18 so that the assignment (:= and =) of integers
+							// that are 19 or 20 digits long work as they did prior to v1.0.48 (some of such integers
+							// would overflow a signed 64-bit value, so keep all of them as strings).
+							//
 							// The following can't happen anymore because x:="string" is no longer translated
 							// into is_expression==false.  There are some reasons given in a section higher above:
 							//|| IS_SPACE_OR_TAB(new_raw_arg2[new_arg[1].length-1]) // Trailing whitespace, which can happen from something like x:="abc ".
 							//|| IS_SPACE_OR_TAB(*new_raw_arg2) // This can happen via translation of x:=" abc " to x:= abc at an earlier stage.
 							// Any LITERAL whitespace around a LITERAL number has always been ignored/omitted,
-							// so storing binary integers for things like "x = 1" and "x := 1" to should behave
+							// so storing binary integers for things like "x = 1" and "x := 1" should behave
 							// as before, with the exception of "SetFormat, Integer, Hex", which will now be obeyed
 							// by such assignments when it wasn't before.
 						))   )
@@ -6393,14 +6404,14 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	// it displays more informative error messages:
 	if (aActionType == ACT_BLOCK_BEGIN)
 	{
-		++mOpenBlockCount;
+		++mCurrentFuncOpenBlockCount; // It's okay to increment unconditionally because it is reset to zero every time a new function definition is entered.
 		// It's only necessary to check mLastFunc, not the one(s) that come before it, to see if its
 		// mJumpToLine is NULL.  This is because our caller has made it impossible for a function
 		// to ever have been defined in the first place if it lacked its opening brace.  Search on
 		// "consecutive function" for more comments.  In addition, the following does not check
-		// that mOpenBlockCount is exactly 1, because: 1) Want to be able to support function
+		// that mCurrentFuncOpenBlockCount is exactly 1, because: 1) Want to be able to support function
 		// definitions inside of other function definitions (to help script maintainability); 2) If
-		// mOpenBlockCount is 0 or negative, that will be caught as a syntax error by PreparseBlocks(),
+		// mCurrentFuncOpenBlockCount is 0 or negative, that will be caught as a syntax error by PreparseBlocks(),
 		// which yields a more informative error message that we could here.
 		if (mLastFunc && !mLastFunc->mJumpToLine) // If this stmt is true, caller has ensured that g->CurrentFunc isn't NULL.
 		{
@@ -6416,8 +6427,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	}
 	else if (aActionType == ACT_BLOCK_END)
 	{
-		--mOpenBlockCount;
-		if (g->CurrentFunc && !mOpenBlockCount) // Any negative mOpenBlockCount is caught by a different stage.
+		--mCurrentFuncOpenBlockCount; // It's okay to increment unconditionally because it is reset to zero every time a new function definition is entered.
+		if (g->CurrentFunc && !mCurrentFuncOpenBlockCount) // Any negative mCurrentFuncOpenBlockCount is caught by a different stage.
 		{
 			line.mAttribute = ATTR_TRUE;  // Flag this ACT_BLOCK_END as the ending brace of a function's body.
 			g->CurrentFunc = NULL;
@@ -6548,6 +6559,7 @@ ResultType Script::DefineFunc(char *aBuf, Var *aFuncExceptionVar[])
 		if (   !(g->CurrentFunc = AddFunc(aBuf, param_start - aBuf, false))   )
 			return FAIL; // It already displayed the error.
 
+	mCurrentFuncOpenBlockCount = 0; // v1.0.48.01: Initializing this here makes function definions work properly when they're inside a block.
 	Func &func = *g->CurrentFunc; // For performance and convenience.
 	int insert_pos;
 	size_t param_length, value_length;
@@ -9981,16 +9993,19 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 		// be run so that the time it takes to run will be reflected in the ListLines log.
         g_script.mCurrLine = line;  // Simplifies error reporting when we get deep into function calls.
 
-		// Maintain a circular queue of the lines most recently executed:
-		sLog[sLogNext] = line; // The code actually runs faster this way than if this were combined with the above.
-		// Get a fresh tick in case tick_now is out of date.  Strangely, it makes benchmarks 3% faster
-		// on my system with this line than without it, but that's probably just a quirk of the build
-		// or the CPU's caching.  It was already shown previously that the released version of 1.0.09
-		// was almost 2% faster than an early version of this version (yet even now, that prior version
-		// benchmarks slower than this one, which I can't explain).
-		sLogTick[sLogNext++] = GetTickCount();  // Incrementing here vs. separately benches a little faster.
-		if (sLogNext >= LINE_LOG_SIZE)
-			sLogNext = 0;
+		if (g.ListLinesIsEnabled)
+		{
+			// Maintain a circular queue of the lines most recently executed:
+			sLog[sLogNext] = line; // The code actually runs faster this way than if this were combined with the above.
+			// Get a fresh tick in case tick_now is out of date.  Strangely, it makes benchmarks 3% faster
+			// on my system with this line than without it, but that's probably just a quirk of the build
+			// or the CPU's caching.  It was already shown previously that the released version of 1.0.09
+			// was almost 2% faster than an early version of this version (yet even now, that prior version
+			// benchmarks slower than this one, which I can't explain).
+			sLogTick[sLogNext++] = GetTickCount();  // Incrementing here vs. separately benches a little faster.
+			if (sLogNext >= LINE_LOG_SIZE)
+				sLogNext = 0;
+		}
 
 		// Do this only after the opportunity to Sleep (above) has passed, because during
 		// that sleep, a new subroutine might be launched which would likely overwrite the
@@ -10654,8 +10669,7 @@ ResultType Line::EvaluateCondition() // __forceinline on this reduces benchmarks
 	case ACT_IFEXPR: // Listed first for performance.
 		// The following is ordered for short-circuit performance. No need to check if it's g_ErrorLevel
 		// (like ArgMustBeDereferenced() does) because ACT_IFEXPR doesn't internally change ErrorLevel.
-		// Also, RAW is safe because loadtime validation ensured there is at least 1 arg. (There is a
-		// section similar to the below in PerformLoopWhile(), so maintain them together.)
+		// Also, RAW is safe because loadtime validation ensured there is at least 1 arg.
 		if_condition = (ARGVARRAW1 && !*ARG1 && ARGVARRAW1->Type() == VAR_NORMAL)
 			? LegacyVarToBOOL(*ARGVARRAW1) // 30% faster than having ExpandArgs() resolve ARG1 even when it's a naked variable.
 			: LegacyResultToBOOL(ARG1); // CAN'T simply check *ARG1=='1' because the loadtime routine has various ways of setting if_expresion to false for things that are normally expressions.
@@ -11013,10 +11027,13 @@ ResultType Line::PerformLoop(char **apReturnValue, bool &aContinueMainLoop, Line
 		{
 			// Simple loops are about 6% faster by omitting the open-brace from ListLines, so
 			// it seems worth it:
-			//sLog[sLogNext] = mNextLine; // See comments in ExecUntil() about this section.
-			//sLogTick[sLogNext++] = GetTickCount();
-			//if (sLogNext >= LINE_LOG_SIZE)
-			//	sLogNext = 0;
+			//if (g.ListLinesIsEnabled)
+			//{
+			//	sLog[sLogNext] = mNextLine; // See comments in ExecUntil() about this section.
+			//	sLogTick[sLogNext++] = GetTickCount();
+			//	if (sLogNext >= LINE_LOG_SIZE)
+			//		sLogNext = 0;
+			//}
 
 			// If this loop has a block under it rather than just a single line, take a shortcut
 			// and directly execute the block.  This avoids one recursive call to ExecUntil()
@@ -11081,17 +11098,12 @@ ResultType Line::PerformLoopWhile(char **apReturnValue, bool &aContinueMainLoop,
 		if (result != OK)
 			return result;
 
-		// The following section is similar to the one at ACT_IFEXPR in EvaluateCondition(), so maintain
-		// them together (for consistency, it seems best to use the same legacy boolean methods as
-		// "if (expression)"):
-		if (ARGVARRAW1 && !*ARG1 && ARGVARRAW1->Type() == VAR_NORMAL)
-		{
-			if (!LegacyVarToBOOL(*ARGVARRAW1))
-				break;
-		}
-		else
-			if (!LegacyResultToBOOL(ARG1))
-				break;
+		// Unlike if(expression), performance isn't significantly improved to make cases like
+		// "while x" and "while %x%" into non-expressions (the latter actually performs much
+		// better as an expression).  That is why the following check is much simpler than the
+		// one used at at ACT_IFEXPR in EvaluateCondition():
+		if (!LegacyResultToBOOL(ARG1))
+			break;
 
 		// CONCERNING ALL THE REST OF THIS FUNCTION: See comments in PerformLoop() for details.
 		if (mNextLine->mActionType == ACT_BLOCK_BEGIN)
@@ -12752,7 +12764,22 @@ __forceinline ResultType Line::Perform() // As of 2/9/2009, __forceinline() redu
 		// Otherwise:
 		return ShowMainWindow(MAIN_MODE_KEYHISTORY, false); // Pass "unrestricted" when the command is explicitly used in the script.
 	case ACT_LISTLINES:
-		return ShowMainWindow(MAIN_MODE_LINES, false); // Pass "unrestricted" when the command is explicitly used in the script.
+		if (   (toggle = ConvertOnOff(ARG1, NEUTRAL)) == NEUTRAL   )
+			return ShowMainWindow(MAIN_MODE_LINES, false); // Pass "unrestricted" when the command is explicitly used in the script.
+		// Otherwise:
+		if (g.ListLinesIsEnabled != (toggle == TOGGLED_ON)) // It's not already set to the specified value.
+		{
+			g.ListLinesIsEnabled = (toggle == TOGGLED_ON);
+			// Remove "ListLines On/Off" from the line history to avoid cluttering it, especially in cases
+			// where a timer fires frequently (even if such a timer used "ListLines Off" as its top line,
+			// that line iself would appear very frequently in the line history).
+			if (sLogNext > 0)
+				--sLogNext;
+			else
+				sLogNext = LINE_LOG_SIZE - 1;
+			sLog[sLogNext] = NULL; // Without this, one of the lines in the history would be invalid due to the circular nature of the line history array, which would also cause the line history to show the wrong chronlogical order in some cases.
+		}
+		return OK;
 	case ACT_LISTVARS:
 		return ShowMainWindow(MAIN_MODE_VARS, false); // Pass "unrestricted" when the command is explicitly used in the script.
 	case ACT_LISTHOTKEYS:
@@ -13315,7 +13342,7 @@ char *Line::LogToText(char *aBuf, int aBufSize) // aBufSize should be an int to 
 			if (line_index >= LINE_LOG_SIZE) // wrap around, because sLog is a circular queue
 				line_index -= LINE_LOG_SIZE; // Don't just reset it to zero because an offset larger than one may have been added to it.
 			if (!sLog[line_index]) // No line has yet been logged in this slot.
-				continue;
+				continue; // ACT_LISTLINES and other things might rely on "continue" isntead of halting the loop here.
 			this_item_is_special = next_item_is_special;
 			next_item_is_special = false;  // Set default.
 			if (i + 1 < lines_to_show)  // There are still more lines to be processed

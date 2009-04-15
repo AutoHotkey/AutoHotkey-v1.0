@@ -2346,7 +2346,7 @@ private:
 	Var **mVar, **mLazyVar; // Array of pointers-to-variable, allocated upon first use and later expanded as needed.
 	int mVarCount, mVarCountMax, mLazyVarCount; // Count of items in the above array as well as the maximum capacity.
 	WinGroup *mFirstGroup, *mLastGroup;  // The first and last variables in the linked list.
-	int mOpenBlockCount; // How many blocks are currently open.
+	int mCurrentFuncOpenBlockCount; // While loading the script, this is how many blocks are currently open in the current function's body.
 	bool mNextLineIsFunctionBody; // Whether the very next line to be added will be the first one of the body.
 	Var **mFuncExceptionVar;   // A list of variables declared explicitly local or global.
 	int mFuncExceptionVarCount; // The number of items in the array.

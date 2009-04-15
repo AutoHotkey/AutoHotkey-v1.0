@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.48.00"
+#define NAME_VERSION "1.0.48.01"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -582,6 +582,7 @@ struct global_struct
 	bool FormatIntAsHex;
 	bool MsgBoxTimedOut; // Doesn't require initialization.
 	bool IsPaused; // The latter supports better toggling via "Pause" or "Pause Toggle".
+	bool ListLinesIsEnabled;
 };
 
 inline void global_maximize_interruptibility(global_struct &g)
@@ -672,6 +673,7 @@ inline void global_init(global_struct &g)
 	g.AutoTrim = true;  // AutoIt2's default, and overall the best default in most cases.
 	strcpy(g.FormatFloat, "%0.6f");
 	g.FormatIntAsHex = false;
+	g.ListLinesIsEnabled = true;
 	// For FormatFloat:
 	// I considered storing more than 6 digits to the right of the decimal point (which is the default
 	// for most Unices and MSVC++ it seems).  But going beyond that makes things a little weird for many
