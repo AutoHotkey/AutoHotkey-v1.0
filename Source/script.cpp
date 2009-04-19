@@ -6454,7 +6454,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	{
 		for (Label *label = mLastLabel; label != NULL && label->mJumpToLine == NULL; label = label->mPrevLabel)
 		{
-			if (line.mActionType == ACT_BLOCK_BEGIN && line.mAttribute) // Non-zero mAttribute signfies the open-brace of a function body.
+			if (line.mActionType == ACT_BLOCK_BEGIN && line.mAttribute == ATTR_TRUE) // Non-zero mAttribute signfies the open-brace of a function body.
 				return ScriptError("A label must not point to a function.");
 			if (line.mActionType == ACT_ELSE)
 				return ScriptError("A label must not point to an ELSE.");
@@ -8454,9 +8454,7 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 		if (ACT_IS_IF_OR_ELSE_OR_LOOP(line->mActionType) || line->mActionType == ACT_REPEAT)
 		{
 			// In this case, the loader should have already ensured that line->mNextLine is not NULL.
-
-			line->mNextLine->mParentLine = line;
-			if (line->mNextLine->mActionType == ACT_BLOCK_BEGIN && line->mNextLine->mAttribute)
+			if (line->mNextLine->mActionType == ACT_BLOCK_BEGIN && line->mNextLine->mAttribute == ATTR_TRUE)
 			{
 				abort = true; // So that the caller doesn't also report an error.
 				return line->PreparseError("Improper line below this."); // Short message since so rare. A function must not be defined directly below an IF/ELSE/LOOP because runtime evaluation won't handle it properly.
@@ -8567,12 +8565,14 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 // only when aStartingLine's ActionType is something recursable such
 // as IF and BEGIN_BLOCK.  Otherwise, it won't return after only one line.
 {
+	static BOOL sInFunctionBody = FALSE; // Improves loadtime performance by allowing IsOutsideAnyFunctionBody() to be called only when necessary.
 	// Don't check aStartingLine here at top: only do it at the bottom
 	// for it's differing return values.
 	Line *line_temp;
 	// Although rare, a statement can be enclosed in more than one type of special loop,
 	// e.g. both a file-loop and a reg-loop:
 	AttributeType loop_type_file, loop_type_reg, loop_type_read, loop_type_parse;
+
 	for (Line *line = aStartingLine; line != NULL;)
 	{
 		if (   ACT_IS_IF(line->mActionType)
@@ -8743,6 +8743,8 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 		switch (line->mActionType)
 		{
 		case ACT_BLOCK_BEGIN:
+			if (line->mAttribute == ATTR_TRUE) // This is the opening brace of a function definition.
+				sInFunctionBody = TRUE; // Must be set only for the above condition because functions can of course contain types of blocks other than the function's own block.
 			line = PreparseIfElse(line->mNextLine, UNTIL_BLOCK_END, aLoopTypeFile, aLoopTypeReg, aLoopTypeRead
 				, aLoopTypeParse);
 			// "line" is now either NULL due to an error, or the location of the END_BLOCK itself.
@@ -8750,6 +8752,8 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 				return NULL; // Error.
 			break;
 		case ACT_BLOCK_END:
+			if (line->mAttribute == ATTR_TRUE) // This is the closing brace of a function definition.
+				sInFunctionBody = FALSE; // Must be set only for the above condition because functions can of course contain types of blocks other than the function's own block.
 			if (aMode == ONLY_ONE_LINE)
 				 // Syntax error.  The caller would never expect this single-line to be an
 				 // end-block.  UPDATE: I think this is impossible because callers only use
@@ -8770,14 +8774,23 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 				return line->PreparseError("Break/Continue must be enclosed by a Loop.");
 			break;
 
-		case ACT_GOTO:  // These two must be done here (i.e. *after* all the script lines have been added),
-		case ACT_GOSUB: // so that labels both above and below each Gosub/Goto can be resolved.
+		case ACT_GOSUB: // These two must be done here (i.e. *after* all the script lines have been added),
+		case ACT_GOTO:  // so that labels both above and below each Gosub/Goto can be resolved.
 			if (line->ArgHasDeref(1))
 				// Since the jump-point contains a deref, it must be resolved at runtime:
 				line->mRelatedLine = NULL;
 			else
+			{
 				if (!line->GetJumpTarget(false))
 					return NULL; // Error was already displayed by called function.
+				if (   line->mActionType == ACT_GOSUB && sInFunctionBody
+					&& ((Label *)(line->mRelatedLine))->mJumpToLine->IsOutsideAnyFunctionBody()   ) // Relies on above call to GetJumpTarget() having set line->mRelatedLine.
+					// Since this Gosub and its target line are both inside a function, they must both
+					// be in the same function because otherwise GetJumpTarget() would have reported
+					// the target as invalid.
+					line->mAttribute = ATTR_TRUE; // v1.0.48.02: To improve runtime performance, mark this Gosub as having a target that is outside of any function body.
+				//else leave above at its line-constructor default of ATTR_NONE.
+			}
 			break;
 
 		// These next 4 must also be done here (i.e. *after* all the script lines have been added),
@@ -9915,6 +9928,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 
 	Line *jump_to_line; // Don't use *apJumpToLine because it might not exist.
 	Label *jump_to_label;  // For use with Gosub & Goto & GroupActivate.
+	BOOL jumping_from_inside_function_to_outside;
 	ResultType if_condition, result;
 	LONG_OPERATION_INIT
 	global_struct &g = *::g; // Reduces code size and may improve performance. Eclipsing ::g with local g makes compiler remind/enforce the use of the right one.
@@ -10168,17 +10182,39 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 			// A single gosub can cause an infinite loop if misused (i.e. recusive gosubs),
 			// so be sure to do this to prevent the program from hanging:
 			++g_script.mLinesExecutedThisCycle;
-			if (   !(jump_to_label = (Label *)line->mRelatedLine)   )
+			if (line->mRelatedLine)
+			{
+				jump_to_label = (Label *)line->mRelatedLine;
+				jumping_from_inside_function_to_outside = (line->mAttribute == ATTR_TRUE); // ATTR_TRUE was set by loadtime routines for any ACT_GOSUB that needs it.
+			}
+			else
+			{
 				// The label is a dereference, otherwise it would have been resolved at load-time.
-				// So send true because we don't want to update its mRelatedLine.  This is because
-				// we want to resolve the label every time through the loop in case the variable
-				// that contains the label changes, e.g. Gosub, %MyLabel%
+				// So pass "true" below because don't want to update its mRelatedLine.  This is because
+				// the label should be resolved every time through the loop in case the variable that
+				// contains the label changes, e.g. Gosub, %MyLabel%
 				if (   !(jump_to_label = line->GetJumpTarget(true))   )
 					return FAIL; // Error was already displayed by called function.
-			// I'm pretty sure it's not valid for this call to ExecUntil() to tell us to jump
-			// somewhere, because the called function, or a layer even deeper, should handle
-			// the goto prior to returning to us?  So the last parameter is omitted:
+				// Below is ordered for short-circuit performance.
+				jumping_from_inside_function_to_outside = g.CurrentFunc && jump_to_label->mJumpToLine->IsOutsideAnyFunctionBody();
+			}
+
+			// v1.0.48.02: When a Gosub that lies inside a function body jumps outside of the function,
+			// any references to dynamic variables should resolve to globals not locals. In addition,
+			// GUI commands that lie inside such an external subroutine (such as GuiControl and
+			// GuiControlGet) should behave as though they are not inside the function.
+			if (jumping_from_inside_function_to_outside)
+			{
+				g.CurrentFuncGosub = g.CurrentFunc;
+				g.CurrentFunc = NULL;
+			}
 			result = jump_to_label->Execute();
+			if (jumping_from_inside_function_to_outside)
+			{
+				g.CurrentFunc = g.CurrentFuncGosub;
+				g.CurrentFuncGosub = NULL; // Seems more maintainable to do it here vs. when the UDF returns, but debatable which is better overall for performance.
+			}
+
 			// Must do these return conditions in this specific order:
 			if (result == FAIL || result == EARLY_EXIT)
 				return result;
@@ -10232,13 +10268,22 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 				group->Activate(*ARG2 && !stricmp(ARG2, "R"), NULL, &jump_to_label);
 				if (jump_to_label)
 				{
-					if (!line->IsJumpValid(*jump_to_label))
-						// This check probably isn't necessary since IsJumpValid() is mostly
-						// for Goto's.  But just in case the gosub's target label is some
-						// crazy place:
+					if (!line->IsJumpValid(*jump_to_label)) // Should be checked here rather than at the time that GroupAdd specified the label because it's from HERE that the jump will actually be done.
 						return FAIL;
-					// This section is just like the Gosub code above, so maintain them together.
+
+					// The section below is just like the Gosub code above, so maintain them together.
+					jumping_from_inside_function_to_outside = g.CurrentFunc && jump_to_label->mJumpToLine->IsOutsideAnyFunctionBody();
+					if (jumping_from_inside_function_to_outside)
+					{
+						g.CurrentFuncGosub = g.CurrentFunc;
+						g.CurrentFunc = NULL;
+					}
 					result = jump_to_label->Execute();
+					if (jumping_from_inside_function_to_outside)
+					{
+						g.CurrentFunc = g.CurrentFuncGosub;
+						g.CurrentFuncGosub = NULL; // Seems more maintainable to do it here vs. when the UDF returns, but debatable which is better overall for performance.
+					}
 					if (result == FAIL || result == EARLY_EXIT)
 						return result;
 				}
@@ -10527,7 +10572,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 			return g_script.ExitApp(EXIT_EXIT, NULL, (int)line->ArgIndexToInt64(0));
 
 		case ACT_BLOCK_BEGIN:
-			if (line->mAttribute) // This is the ACT_BLOCK_BEGIN that starts a function's body.
+			if (line->mAttribute == ATTR_TRUE) // This is the ACT_BLOCK_BEGIN that starts a function's body.
 			{
 				// Anytime this happens at runtime it means a function has been defined inside the
 				// auto-execute section, a block, or other place the flow of execution can reach
@@ -13785,13 +13830,14 @@ char *Script::ListVars(char *aBuf, int aBufSize) // aBufSize should be an int to
 // into aBuf and returning the position in aBuf of its new string terminator.
 {
 	char *aBuf_orig = aBuf;
-	if (g->CurrentFunc)
+	Func *current_func = g->CurrentFunc ? g->CurrentFunc : g->CurrentFuncGosub;
+	if (current_func)
 	{
 		// This definition might help compiler string pooling by ensuring it stays the same for both usages:
 		#define LIST_VARS_UNDERLINE "\r\n--------------------------------------------------\r\n"
 		// Start at the oldest and continue up through the newest:
-		aBuf += snprintf(aBuf, BUF_SPACE_REMAINING, "Local Variables for %s()%s", g->CurrentFunc->mName, LIST_VARS_UNDERLINE);
-		Func &func = *g->CurrentFunc; // For performance.
+		aBuf += snprintf(aBuf, BUF_SPACE_REMAINING, "Local Variables for %s()%s", current_func->mName, LIST_VARS_UNDERLINE);
+		Func &func = *current_func; // For performance.
 		for (int i = 0; i < func.mVarCount; ++i)
 			if (func.mVar[i]->Type() == VAR_NORMAL) // Don't bother showing clipboard and other built-in vars.
 				aBuf = func.mVar[i]->ToText(aBuf, BUF_SPACE_REMAINING, true);
@@ -13801,7 +13847,7 @@ char *Script::ListVars(char *aBuf, int aBufSize) // aBufSize should be an int to
 	// However, 99.9% of scripts do not use the lazy list, so it seems too rare to worry about other
 	// than document it in the ListVars command in the help file:
 	aBuf += snprintf(aBuf, BUF_SPACE_REMAINING, "%sGlobal Variables (alphabetical)%s"
-		, g->CurrentFunc ? "\r\n\r\n" : "", LIST_VARS_UNDERLINE);
+		, current_func ? "\r\n\r\n" : "", LIST_VARS_UNDERLINE);
 	// Start at the oldest and continue up through the newest:
 	for (int i = 0; i < mVarCount; ++i)
 		if (mVar[i]->Type() == VAR_NORMAL) // Don't bother showing clipboard and other built-in vars.

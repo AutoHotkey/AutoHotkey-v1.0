@@ -140,20 +140,54 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 				{
 					// Check if it's a normal variable rather than a built-in or environment variable.
 					// This happens when g_NoEnv==FALSE.
-					if (this_token.var->Type() == VAR_NORMAL && this_token.var->HasContents()) // v1.0.46.07: It's not a built-in or environment variable.
+					switch (this_token.var->Type())
 					{
-						this_token.symbol = SYM_VAR; // The fact that a SYM_VAR operand is always VAR_NORMAL (with one limited exception) is relied upon in several places such as built-in functions.
-						goto push_this_token;
+					case VAR_NORMAL:
+						if (this_token.var->HasContents()) // v1.0.46.07: It's not an environment variable.
+						{
+							this_token.symbol = SYM_VAR; // The fact that a SYM_VAR operand is always VAR_NORMAL (with one limited exception) is relied upon in several places such as built-in functions.
+							goto push_this_token;
+						}
+						break;
+					case VAR_BUILTIN: // v1.0.48.02: Ensure it's VAR_BUILTIN prior to below because mBIV is a union with mCapacity.
+						if (this_token.var->mBIV == BIV_LoopIndex) // v1.0.48.01: Improve performance of A_Index by treating it as an integer rather than a string in expressions (avoids conversions to/from strings).
+						{
+							this_token.value_int64 = g->mLoopIteration;
+							this_token.symbol = SYM_INTEGER;
+							goto push_this_token;
+						}
+						if (this_token.var->mBIV == BIV_True_False) // v1.0.48.02: True/False often used with function calls, so seems worthwhile for performance.
+						{
+							this_token.value_int64 = (this_token.var->mName[4] == '\0'); // True's 5th character is the string terminator, unlike Fals[e].
+							this_token.symbol = SYM_INTEGER;
+							goto push_this_token;
+						}
+						if (this_token.var->mBIV == BIV_EventInfo) // v1.0.48.02: A_EventInfo is used often enough in performance-sensitive numeric contexts to seem worth special treatment like A_Index; e.g. LV_GetText(RowText, A_EventInfo) or RegisterCallback()'s A_EventInfo.
+						{
+							this_token.value_int64 = g->EventInfo;
+							this_token.symbol = SYM_INTEGER;
+							goto push_this_token;
+						}
+						// ABOVE: Goto's and simple assignments (like the SYM_INTEGER ones above) are only a few
+						// bytes in code size, so it would probably cost more than it's worth in performance
+						// and code size to merge them into a code section shared by all of the above.  Although
+						// each comparison "this_token.var->mBIV == BIV_xxx" is surprisingly large in OBJ size,
+						// the resulting EXE does not reflect this: even 27 such comparisons and sections (all
+						// to a different BIV) don't increase the uncompressed EXE size.
+						//
+						// OTHER CANDIDATES FOR THE ABOVE:
+						// A_TickCount: Usually not performance-critical.
+						// A_GuiWidth/Height: Maybe not used in expressions often enough.
+						// A_GuiX/Y: Not performance-critical and/or too rare: Popup menu, DropFiles, PostMessage's coords.
+						// A_Gui: Hard to say.
+						// A_LastError: Seems too rare to justify the code size and loss of performance here.
+						// A_Msec: Would help but it's probably rarely used; probably has poor granularity, not likely to be better than A_TickCount.
+						// A_TimeIdle/Physical: These are seldom performance-critical.
+						break; // case VAR_BUILTIN
 					}
 					// Otherwise, it's an environment variable, built-in variable, or normal variable of zero-length
 					// (and it is also known now that g_NoEnv==FALSE because otherwise the loadtime
 					// ExpressionToPostfix() would never have made this item into SYM_DYNAMIC under these conditions).
-					if (this_token.var->mBIV == BIV_LoopIndex) // v1.0.48.01: Improve performance of A_Index by treating it as an integer rather than a string in expressions (avoids conversions to/from strings).
-					{
-						this_token.symbol = SYM_INTEGER;
-						this_token.value_int64 = g->mLoopIteration;
-						goto push_this_token;
-					}
 					result_size = this_token.var->Get() + 1; // Get() is used even for environment vars because it has a cache that improves their performance.
 					if (result_size == 1)
 					{

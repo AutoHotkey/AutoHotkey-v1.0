@@ -9990,7 +9990,16 @@ Label *Line::IsJumpValid(Label &aTargetLabel)
 	LineError("A Goto/Gosub must not jump into a block that doesn't enclose it."); // Omit GroupActivate from the error msg since that is rare enough to justify the increase in common-case clarify.
 	return NULL;
 	// Above currently doesn't attempt to detect runtime vs. load-time for the purpose of appending
-	// ERR_ABORT.
+	// ERR_ABORT (currently this function is called only during runtime).
+}
+
+
+BOOL Line::IsOutsideAnyFunctionBody() // v1.0.48.02
+{
+	for (Line *ancestor = mParentLine; ancestor != NULL; ancestor = ancestor->mParentLine)
+		if (ancestor->mAttribute == ATTR_TRUE && ancestor->mActionType == ACT_BLOCK_BEGIN) // Ordered for short-circuit performance.
+			return FALSE; // ATTR_TRUE marks an open-brace as belonging to a function's body, so indicate this this line is inside a function.
+	return TRUE; // Indicate that this line is not inside any function body.
 }
 
 
@@ -11136,7 +11145,13 @@ VarSizeType BIV_LoopIndex(char *aBuf, char *aVarName)
 
 VarSizeType BIV_ThisFunc(char *aBuf, char *aVarName)
 {
-	char *name = g->CurrentFunc ? g->CurrentFunc->mName : "";
+	char *name;
+	if (g->CurrentFunc)
+		name = g->CurrentFunc->mName;
+	else if (g->CurrentFuncGosub) // v1.0.48.02: For flexibility and backward compatibility, support A_ThisFunc even when a function Gosubs an external subroutine.
+		name = g->CurrentFuncGosub->mName;
+	else
+		name = "";
 	if (aBuf)
 		strcpy(aBuf, name);
 	return (VarSizeType)strlen(name);

@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.48.01"
+#define NAME_VERSION "1.0.48.02"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -555,6 +555,7 @@ struct global_struct
 	int MouseDelayPlay; //
 	char FormatFloat[32];
 	Func *CurrentFunc; // v1.0.46.16: The function whose body is currently being processed at load-time, or being run at runtime (if any).
+	Func *CurrentFuncGosub; // v1.0.48.02: Allows A_ThisFunc to work even when a function Gosubs an external subroutine.
 	Label *CurrentLabel; // The label that is currently awaiting its matching "return" (if any).
 	HWND hWndLastUsed;  // In many cases, it's better to use GetValidLastUsedWindow() when referring to this.
 	//HWND hWndToRestore;
@@ -601,6 +602,7 @@ inline void global_clear_state(global_struct &g)
 // future threads if it occurs in the auto-execute section, but ErrorLevel shouldn't).
 {
 	g.CurrentFunc = NULL;
+	g.CurrentFuncGosub = NULL;
 	g.CurrentLabel = NULL;
 	g.hWndLastUsed = NULL;
 	//g.hWndToRestore = NULL;
