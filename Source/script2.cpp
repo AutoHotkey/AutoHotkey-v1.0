@@ -2808,18 +2808,17 @@ ResultType Line::ScriptPostSendMessage(bool aUseSend)
 	// v1.0.43.06: If either wParam or lParam contained the address of a variable, update the mLength
 	// member after sending the message in case the receiver of the message wrote something to the buffer.
 	// This is similar to the way "Str" parameters work in DllCall.
-	Var *var_to_update[2];
+	Var *var_to_update[2] = {NULL}; // v1.0.48.05: Fixed to initialize to NULL, which prevents crash when wParam and/or lParam is omitted.
 	int i;
 	for (i = 1; i < 3; ++i) // Two iterations: wParam and lParam.
 	{
 		if (mArgc > i) // The arg exists.
 		{
 			ArgStruct &this_arg = mArg[i];
-			var_to_update[i-1] = this_arg.text[0] == '&'  // Must start with '&', so things like 5+&MyVar aren't supported.
+			if (   this_arg.text[0] == '&'  // Must start with '&', so things like 5+&MyVar aren't supported.
 				&& this_arg.deref && !this_arg.deref->is_function
-				&& this_arg.deref->var->Type() == VAR_NORMAL // Check VAR_NORMAL to be extra-certain it can't be the clipboard or a built-in variable (ExpandExpression() probably prevents taking the address of such a variable, but might not stop it from being in the deref array that way).
-				? this_arg.deref->var
-				: NULL;
+				&& this_arg.deref->var->Type() == VAR_NORMAL   )
+				var_to_update[i-1] = this_arg.deref->var;  // Check VAR_NORMAL to be extra-certain it can't be the clipboard or a built-in variable (ExpandExpression() probably prevents taking the address of such a variable, but might not stop it from being in the deref array that way).
 		}
 	}
 
